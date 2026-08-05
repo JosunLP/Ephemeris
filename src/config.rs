@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 TPMPlaner contributors
 //! Konfiguration in `%APPDATA%\TPMPlaner\config.json`.
 //!
 //! Wird beim Start gelesen und bei Positionsaenderungen zurueckgeschrieben.
@@ -21,6 +23,12 @@ pub struct Config {
     /// Sync-Intervall in Minuten.
     pub sync_minutes: u32,
 
+    /// Configured accounts. An empty list is treated as a single Google
+    /// account, which is what every installation before multi-account support
+    /// had — nobody has to edit a file to keep working.
+    #[serde(default)]
+    pub accounts: Vec<crate::provider::AccountConfig>,
+
     /// Leere Liste = alle Kalender bzw. alle Aufgabenlisten des Kontos.
     pub calendar_ids: Vec<String>,
     pub tasklist_ids: Vec<String>,
@@ -34,8 +42,10 @@ pub struct Config {
 
     /// Deckkraft des Panels (0.0 - 1.0).
     pub opacity: f32,
-    /// `"acrylic"` = dokumentierte DWM-Systembackdrop (Win11 22621+),
-    /// alles andere = nur der eigene Verlauf.
+    /// `"none"` (Vorgabe) = eigener Verlauf mit selbstgezeichnetem Schatten
+    /// und runden Ecken. `"acrylic"` = Windows-Systembackdrop; dabei entfaellt
+    /// der Schattenrand und DWM rundet die Ecken, sonst legt die Backdrop
+    /// einen eckigen Kasten um das Panel.
     pub backdrop: String,
     /// Schriftgroessen-/Layoutskalierung zusaetzlich zur Monitor-DPI.
     pub scale: f32,
@@ -49,6 +59,14 @@ pub struct Config {
     pub theme: String,
     /// `"system"` uebernimmt die Windows-Akzentfarbe, sonst `"#RRGGBB"`.
     pub accent: String,
+    /// Tastenkombination, die das Widget kurz in den Vordergrund holt.
+    /// Format: Modifizierer plus Taste, z. B. `"Ctrl+Alt+K"`, `"Ctrl+Shift+P"`.
+    /// `Win+...` moeglichst meiden — Windows 11 hat sich davon sehr viel
+    /// selbst reserviert (Win+Alt+K ist z. B. die Mikrofonstummschaltung).
+    /// Leer schaltet die Funktion ab.
+    pub peek_hotkey: String,
+    /// Wie lange das Widget nach der Tastenkombination vorne bleibt.
+    pub peek_seconds: u32,
     /// Bedenkzeit in Sekunden, bevor ein Abhaken an Google gesendet wird.
     /// `0` schaltet die Rueckgaengig-Moeglichkeit ab.
     pub undo_seconds: u32,
@@ -62,17 +80,20 @@ impl Default for Config {
             width: 380.0,
             height: 620.0,
             sync_minutes: 30,
+            accounts: Vec::new(),
             calendar_ids: Vec::new(),
             tasklist_ids: Vec::new(),
             show_undated_tasks: false,
             show_past_events: true,
             hide_declined: true,
             opacity: 0.82,
-            backdrop: "acrylic".into(),
+            backdrop: "none".into(),
             scale: 1.0,
             language: "system".into(),
             theme: "system".into(),
             accent: "system".into(),
+            peek_hotkey: "Ctrl+Alt+Shift+K".into(),
+            peek_seconds: 5,
             undo_seconds: 4,
         }
     }
@@ -119,7 +140,27 @@ impl Config {
         self.scale = self.scale.clamp(0.6, 3.0);
         self.sync_minutes = self.sync_minutes.clamp(1, 24 * 60);
         self.undo_seconds = self.undo_seconds.min(30);
+        self.peek_seconds = self.peek_seconds.clamp(1, 60);
         self
+    }
+
+    /// The accounts to actually query, with the legacy single-Google setup
+    /// filled in.
+    pub fn effective_accounts(&self) -> Vec<crate::provider::AccountConfig> {
+        use crate::provider::{AccountConfig, Kind};
+        if self.accounts.is_empty() {
+            return vec![AccountConfig {
+                kind: Kind::Google,
+                id: "google".into(),
+                label: "Google".into(),
+                enabled: true,
+            }];
+        }
+        self.accounts
+            .iter()
+            .filter(|a| a.enabled)
+            .cloned()
+            .collect()
     }
 
     pub fn save(&self) {

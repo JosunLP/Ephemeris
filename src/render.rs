@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 TPMPlaner contributors
 //! Direct2D-Renderer auf einer DirectComposition-Oberflaeche.
 //!
 //! Aufbau der Kette:
@@ -766,24 +768,47 @@ impl Renderer {
     fn draw_day_rail(&self, x0: f32, x1: f32, y: f32, frame: &Frame) -> Result<()> {
         let m = self.metrics;
         let p = &self.pal;
-        // Fenster des Arbeitstags. Alles davor oder danach wird an den Rand
-        // geklemmt, statt die Schiene auf 24 Stunden zu strecken — dann waere
-        // der interessante Bereich nur noch halb so breit.
-        const DAY_FROM: f32 = 6.0 * 60.0;
-        const DAY_SPAN: f32 = 16.0 * 60.0;
+        let now_min = frame.now.hour() as f32 * 60.0 + frame.now.minute() as f32;
+
+        // Standardfenster ist der Arbeitstag; es dehnt sich aber auf alles aus,
+        // was tatsaechlich ansteht. Ein festes 06:00-22:00 klemmt sonst den
+        // Fruehflug um 05:00 und den Abendtermin um 23:00 beide an den Rand —
+        // genau die Ausreisser, die man sehen will.
+        let (mut lo, mut hi) = (6.0 * 60.0_f32, 22.0 * 60.0_f32);
+        for ev in &frame.agenda.events {
+            if ev.all_day {
+                continue;
+            }
+            if let Some(start) = ev.start {
+                let s_min = start.hour() as f32 * 60.0 + start.minute() as f32;
+                lo = lo.min(s_min);
+                hi = hi.max(end_minutes(ev, s_min));
+            }
+        }
+        lo = lo.min(now_min).max(0.0);
+        hi = hi.max(now_min).min(24.0 * 60.0);
+        // Bei einem sehr leeren Tag wuerde die Spanne sonst entarten.
+        if hi - lo < 240.0 {
+            hi = (lo + 240.0).min(24.0 * 60.0);
+            lo = (hi - 240.0).max(0.0);
+        }
+        let span = hi - lo;
+
         let width = x1 - x0;
-        let pos = |minutes: f32| x0 + width * ((minutes - DAY_FROM) / DAY_SPAN).clamp(0.0, 1.0);
+        let pos = |minutes: f32| x0 + width * ((minutes - lo) / span).clamp(0.0, 1.0);
 
         let track = rect(x0, y, x1, y + m.rail_h);
         let radius = m.rail_h * 0.5;
         self.fill_round(track, radius, p.rule, p.rule_alpha * 0.9)?;
 
-        let now_min = frame.now.hour() as f32 * 60.0 + frame.now.minute() as f32;
         let now_x = pos(now_min);
 
-        // Verstrichener Teil des Tages.
+        // Verstrichener Teil des Tages. Bewusst sehr zurueckhaltend: die
+        // Schiene soll nebenbei lesbar sein, nicht wie ein Fortschrittsbalken
+        // um Aufmerksamkeit buhlen — bei einer kraeftigen Akzentfarbe faellt
+        // sonst ein breiter farbiger Streifen ins Auge.
         if now_x > x0 + 0.5 {
-            self.fill_round(rect(x0, y, now_x, y + m.rail_h), radius, p.accent, 0.14)?;
+            self.fill_round(rect(x0, y, now_x, y + m.rail_h), radius, p.accent, 0.09)?;
         }
 
         for ev in &frame.agenda.events {
@@ -792,17 +817,7 @@ impl Renderer {
             }
             let Some(start) = ev.start else { continue };
             let start_min = start.hour() as f32 * 60.0 + start.minute() as f32;
-            let end_min = ev
-                .end
-                .map(|e| {
-                    // Ein Termin ueber Mitternacht hinaus wuerde sonst
-                    // rueckwaerts laufen.
-                    let v = e.hour() as f32 * 60.0 + e.minute() as f32;
-                    if v <= start_min { DAY_FROM + DAY_SPAN } else { v }
-                })
-                .unwrap_or(start_min + 60.0);
-
-            let (sx, ex) = (pos(start_min), pos(end_min));
+            let (sx, ex) = (pos(start_min), pos(end_minutes(ev, start_min)));
             // Kurze Termine bleiben sonst unsichtbar.
             let ex = ex.max(sx + 2.5);
             let running = ev.is_now(frame.now);
@@ -822,7 +837,7 @@ impl Renderer {
         }
 
         // Jetzt-Marke ueber allem, damit sie nie von einem Segment verdeckt wird.
-        if (0.0..=1.0).contains(&((now_min - DAY_FROM) / DAY_SPAN)) {
+        if (lo..=hi).contains(&now_min) {
             self.line(
                 now_x,
                 y - 2.0,
@@ -2044,6 +2059,20 @@ pub fn is_device_lost(code: HRESULT) -> bool {
             | DXGI_ERROR_DEVICE_RESET
             | DXGI_ERROR_DRIVER_INTERNAL_ERROR
     )
+}
+
+/// Endzeit eines Termins in Minuten seit Mitternacht.
+///
+/// Ohne Endzeit gilt eine Stunde; laeuft der Termin ueber Mitternacht, wuerde
+/// die rohe Uhrzeit rueckwaerts zeigen und wird deshalb auf Tagesende gesetzt.
+fn end_minutes(ev: &Event, start_min: f32) -> f32 {
+    match ev.end {
+        Some(e) => {
+            let v = e.hour() as f32 * 60.0 + e.minute() as f32;
+            if v <= start_min { 24.0 * 60.0 } else { v }
+        }
+        None => start_min + 60.0,
+    }
 }
 
 /// Laufender Termin, sonst der naechste noch kommende.

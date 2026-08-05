@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 TPMPlaner contributors
 //! Farbpalette, Masse und deutsche Datumsformate.
 //!
 //! Optisch an die Aero-Gadgets von Vista angelehnt. Drei Zutaten machen dort
@@ -431,9 +433,16 @@ pub struct Metrics {
 
 impl Metrics {
     pub fn new(scale: f32) -> Self {
+        Self::with_shadow(scale, true)
+    }
+
+    /// `shadow = false` fuer den Acryl-Modus: dort fuellt der Desktopfenster-
+    /// Manager das ganze Fensterrechteck, ein freier Rand wuerde als eckiger
+    /// Kasten um das Panel sichtbar.
+    pub fn with_shadow(scale: f32, shadow: bool) -> Self {
         let s = |v: f32| v * scale;
         Self {
-            shadow: s(14.0),
+            shadow: if shadow { s(14.0) } else { 0.0 },
             pad: s(15.0),
             corner: s(11.0),
 
@@ -531,7 +540,7 @@ mod tests {
 
     #[test]
     fn overdue_is_left_alone_when_the_accent_is_blue() {
-        let blue = readable_accent(0x0078_D4, false);
+        let blue = readable_accent(0x00_78D4, false);
         let base = Palette::dark().overdue;
         assert_eq!(distinct_from(base, blue), base);
     }

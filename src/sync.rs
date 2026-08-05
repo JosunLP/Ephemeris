@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 TPMPlaner contributors
 //! Hintergrund-Sync in einem eigenen Thread.
 //!
 //! Der UI-Thread besitzt die gesamte Zeitplanung (WM_TIMER) und schickt
@@ -6,14 +8,15 @@
 //! blockiert kein Netzwerkaufruf jemals das Zeichnen.
 
 use crate::config::{self, Config};
-use crate::google::calendar::CalendarRef;
-use crate::google::tasks::TaskListRef;
-use crate::google::{self, Error, auth::Auth};
 use crate::log;
 use crate::model::{
     Agenda, Event, Task, filter_tasks_for_today, local_day_start, sort_events, sort_tasks,
 };
+use crate::provider::{
+    self, AccountConfig, CalendarProvider, CalendarRef, Error, FetchRequest, Kind, TaskListRef,
+};
 use chrono::{Duration as ChronoDuration, Local};
+use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -46,6 +49,10 @@ pub struct Shared {
     pub config: Config,
     /// Syntaxfehler in `config.json`, falls vorhanden.
     pub config_error: Option<String>,
+    /// Verfuegbare Kalender als `(id, Name)` — Grundlage fuer die Auswahl im
+    /// Kontextmenue. Vorher musste man die IDs von Hand in die JSON eintragen.
+    pub calendars: Vec<(String, String)>,
+    pub tasklists: Vec<(String, String)>,
 }
 
 /// Sperrt den geteilten Zustand und ueberlebt eine Vergiftung.
@@ -56,21 +63,111 @@ pub struct Shared {
 /// Inhalt ist hier reine Anzeigedaten; im schlimmsten Fall ist ein Feld
 /// halb geschrieben, was der naechste Abgleich ohnehin korrigiert.
 pub fn lock(shared: &Mutex<Shared>) -> MutexGuard<'_, Shared> {
-    shared.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    shared
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// Zwischengespeichertes Kalender-/Listenverzeichnis.
+/// Cached directory of calendars and task lists, per account.
 struct Meta {
-    calendars: Vec<CalendarRef>,
-    lists: Vec<TaskListRef>,
+    by_account: HashMap<String, provider::Directory>,
     at: Instant,
+}
+
+impl Meta {
+    fn fresh(&self) -> bool {
+        self.at.elapsed() < META_TTL
+    }
+
+    /// Merged view for the context menu, in configured account order.
+    fn merged(&self, order: &[String]) -> (Vec<CalendarRef>, Vec<TaskListRef>) {
+        let mut calendars = Vec::new();
+        let mut lists = Vec::new();
+        for id in order {
+            if let Some(d) = self.by_account.get(id) {
+                calendars.extend(d.calendars.iter().cloned());
+                lists.extend(d.task_lists.iter().cloned());
+            }
+        }
+        (calendars, lists)
+    }
+}
+
+/// Builds the provider objects for the configured accounts.
+///
+/// A provider that cannot even be constructed — missing credentials file, for
+/// instance — is not dropped silently: it becomes a provider that fails with
+/// that very message, so the reason reaches the status bar instead of the
+/// account merely disappearing.
+fn build_providers(accounts: &[AccountConfig]) -> Vec<Box<dyn CalendarProvider>> {
+    accounts
+        .iter()
+        .map(|account| -> Box<dyn CalendarProvider> {
+            let built: provider::Result<Box<dyn CalendarProvider>> = match account.kind {
+                Kind::Google => {
+                    provider::google::GoogleProvider::new(&account.id, account.display())
+                        .map(|p| Box::new(p) as Box<dyn CalendarProvider>)
+                }
+                Kind::Microsoft => provider::graph::GraphProvider::new(
+                    &account.id,
+                    account.display(),
+                    &config::data_dir().join("microsoft_client.json"),
+                    config::data_dir().join(format!("token-{}.bin", account.id)),
+                )
+                .map(|p| Box::new(p) as Box<dyn CalendarProvider>),
+            };
+            match built {
+                Ok(p) => p,
+                Err(e) => Box::new(BrokenProvider {
+                    id: account.id.clone(),
+                    name: account.display().to_string(),
+                    error: e,
+                }),
+            }
+        })
+        .collect()
+}
+
+/// Stand-in for an account that could not be set up.
+struct BrokenProvider {
+    id: String,
+    name: String,
+    error: Error,
+}
+
+impl CalendarProvider for BrokenProvider {
+    fn account_id(&self) -> &str {
+        &self.id
+    }
+    fn display_name(&self) -> &str {
+        &self.name
+    }
+    fn ensure_authorized(&mut self) -> provider::Result<()> {
+        Err(self.error.clone())
+    }
+    fn forget(&mut self) {}
+    fn calendars(&mut self) -> provider::Result<Vec<CalendarRef>> {
+        Err(self.error.clone())
+    }
+    fn events(
+        &mut self,
+        _c: &CalendarRef,
+        _f: chrono::DateTime<Local>,
+        _t: chrono::DateTime<Local>,
+        _d: bool,
+    ) -> provider::Result<Vec<crate::model::Event>> {
+        Err(self.error.clone())
+    }
 }
 
 pub enum Command {
     /// Regulaerer Abgleich (Timer, Aufwachen, manueller Klick).
     Sync,
-    /// Aufgabe abhaken; wird optimistisch sofort ausgeblendet.
+    /// Complete a task; hidden optimistically before the call goes out.
     CompleteTask {
+        /// Which account owns it. Empty means "the only one", which is what a
+        /// single-account setup produces.
+        account_id: String,
         tasklist_id: String,
         task_id: String,
     },
@@ -102,7 +199,7 @@ pub fn spawn(shared: Arc<Mutex<Shared>>, hwnd: isize) -> SyncHandle {
 }
 
 fn worker(shared: Arc<Mutex<Shared>>, hwnd: isize, rx: Receiver<Command>) {
-    let mut auth: Option<Auth> = None;
+    let mut providers = build_providers(&snapshot_config(&shared).effective_accounts());
     let mut meta: Option<Meta> = None;
 
     while let Ok(first) = rx.recv() {
@@ -112,45 +209,59 @@ fn worker(shared: Arc<Mutex<Shared>>, hwnd: isize, rx: Receiver<Command>) {
 
                 Command::Sync => {
                     set_status(&shared, hwnd, Status::Syncing);
-                    let result = ensure_auth(&mut auth)
-                        .and_then(|a| run_sync(a, snapshot_config(&shared), &mut meta));
+                    let cfg = snapshot_config(&shared);
+                    // Accounts can be added or removed while running; rebuild
+                    // when the configured set no longer matches.
+                    let wanted = cfg.effective_accounts();
+                    if !same_accounts(&providers, &wanted) {
+                        log::info("Account list changed — rebuilding providers");
+                        providers = build_providers(&wanted);
+                        meta = None;
+                    }
+                    let result = run_sync(&mut providers, cfg, &mut meta);
+                    publish_sources(&shared, &meta);
                     apply_sync_result(&shared, hwnd, result);
                 }
 
                 Command::Relogin => {
-                    log::info("Neuanmeldung angefordert");
+                    log::info("Re-authorization requested");
                     set_status(&shared, hwnd, Status::Syncing);
-                    if let Some(a) = auth.as_mut() {
-                        a.forget();
+                    for p in providers.iter_mut() {
+                        p.forget();
                     }
-                    auth = None;
-                    // Das Verzeichnis gehoert zum alten Konto.
+                    let cfg = snapshot_config(&shared);
+                    providers = build_providers(&cfg.effective_accounts());
+                    // The directory belonged to the previous sign-in.
                     meta = None;
-                    let result = ensure_auth(&mut auth)
-                        .and_then(|a| a.interactive_login().map(|_| a))
-                        .and_then(|a| run_sync(a, snapshot_config(&shared), &mut meta));
+                    let result = run_sync(&mut providers, cfg, &mut meta);
+                    publish_sources(&shared, &meta);
                     apply_sync_result(&shared, hwnd, result);
                 }
 
                 Command::CompleteTask {
+                    account_id,
                     tasklist_id,
                     task_id,
                 } => {
-                    let outcome = ensure_auth(&mut auth)
-                        .and_then(|a| google::tasks::complete_task(a, &tasklist_id, &task_id));
+                    let outcome = match providers
+                        .iter_mut()
+                        .find(|p| account_id.is_empty() || p.account_id() == account_id)
+                    {
+                        Some(p) => p.complete_task(&tasklist_id, &task_id),
+                        None => Err(Error::Other(format!("Unknown account '{account_id}'"))),
+                    };
 
                     let mut guard = lock(&shared);
                     match outcome {
                         Ok(()) => {
-                            // Endgueltig aus der Anzeige nehmen; der naechste
-                            // regulaere Sync bestaetigt es ohnehin.
+                            // Remove for good; the next regular sync confirms it.
                             guard.agenda.tasks.retain(|t| t.id != task_id);
                             guard.status = Status::Idle;
                             write_cache(&guard.agenda);
                         }
                         Err(e) => {
-                            log::error(&format!("Abhaken fehlgeschlagen: {e}"));
-                            // Optimistisches Ausblenden zuruecknehmen.
+                            log::error(&format!("Completing task failed: {e}"));
+                            // Undo the optimistic hide.
                             if let Some(t) = guard.agenda.tasks.iter_mut().find(|t| t.id == task_id)
                             {
                                 t.completing = false;
@@ -164,6 +275,30 @@ fn worker(shared: Arc<Mutex<Shared>>, hwnd: isize, rx: Receiver<Command>) {
             }
         }
     }
+}
+
+/// Do the live providers still match the configured accounts?
+fn same_accounts(providers: &[Box<dyn CalendarProvider>], wanted: &[AccountConfig]) -> bool {
+    providers.len() == wanted.len()
+        && providers
+            .iter()
+            .zip(wanted)
+            .all(|(p, a)| p.account_id() == a.id)
+}
+
+/// Reicht das Kalender-/Listenverzeichnis an die Oberflaeche weiter.
+fn publish_sources(shared: &Arc<Mutex<Shared>>, meta: &Option<Meta>) {
+    let Some(m) = meta else { return };
+    let mut guard = lock(shared);
+    let order: Vec<String> = guard
+        .config
+        .effective_accounts()
+        .iter()
+        .map(|a| a.id.clone())
+        .collect();
+    let (calendars, lists) = m.merged(&order);
+    guard.calendars = calendars.into_iter().map(|c| (c.id, c.name)).collect();
+    guard.tasklists = lists.into_iter().map(|l| (l.id, l.name)).collect();
 }
 
 /// Fasst aufgestaute Befehle zusammen.
@@ -198,107 +333,109 @@ fn coalesce(first: Command, rx: &Receiver<Command>) -> Vec<Command> {
     kept
 }
 
-/// Beim ersten Bedarf laden. Fehlt `client_secret.json`, meldet das die
-/// Statuszeile — ein erneuter Versuch beim naechsten Sync kostet nichts.
-fn ensure_auth(slot: &mut Option<Auth>) -> google::Result<&mut Auth> {
-    if slot.is_none() {
-        *slot = Some(Auth::load()?);
-    }
-    Ok(slot.as_mut().unwrap())
-}
-
 fn snapshot_config(shared: &Arc<Mutex<Shared>>) -> Config {
-    lock(&shared).config.clone()
+    lock(shared).config.clone()
 }
 
-fn run_sync(auth: &mut Auth, cfg: Config, meta: &mut Option<Meta>) -> google::Result<Agenda> {
-    // Ohne gespeicherten Zugang zuerst einmalig den Browser-Flow durchlaufen.
-    if !auth.has_refresh_token() {
-        auth.interactive_login()?;
-    }
-
+fn run_sync(
+    providers: &mut [Box<dyn CalendarProvider>],
+    cfg: Config,
+    meta: &mut Option<Meta>,
+) -> std::result::Result<Agenda, Error> {
     let started = Instant::now();
     let today = Local::now().date_naive();
     let tomorrow = today + ChronoDuration::days(1);
     let day_start = local_day_start(today);
     let midnight = local_day_start(tomorrow);
-    // Zwei Tage in einem Abruf: derselbe Request liefert die Morgen-Vorschau
-    // gratis mit, ein zweiter waere reine Verschwendung.
+    // Two days in one request: the same call yields the tomorrow preview for
+    // free, a second one would be pure waste.
     let window_end = local_day_start(today + ChronoDuration::days(2));
 
-    // Verzeichnis nur holen, wenn der Cache abgelaufen ist.
-    let fresh = meta.as_ref().is_some_and(|m| m.at.elapsed() < META_TTL);
-    if !fresh {
-        *meta = Some(Meta {
-            calendars: google::calendar::list_calendars(auth)?,
-            lists: google::tasks::list_tasklists(auth)?,
-            at: Instant::now(),
-        });
-    }
-    let cached = meta.as_ref().expect("Verzeichnis wurde gerade gefuellt");
+    let request = FetchRequest {
+        from: day_start,
+        to: window_end,
+        today,
+        hide_declined: cfg.hide_declined,
+        include_undated_tasks: cfg.show_undated_tasks,
+        calendar_ids: cfg.calendar_ids.clone(),
+        tasklist_ids: cfg.tasklist_ids.clone(),
+        cached_directory: match meta.as_ref() {
+            Some(m) if m.fresh() => m.by_account.clone(),
+            _ => HashMap::new(),
+        },
+    };
 
-    // --- Kalender ---
-    let calendars: Vec<_> = cached
-        .calendars
-        .iter()
-        .filter(|c| cfg.calendar_ids.is_empty() || cfg.calendar_ids.contains(&c.id))
-        .collect();
+    // All accounts at once. One slow mailbox must not delay the others.
+    let results = provider::fetch_all(providers, &request);
 
+    // Every account that answered contributes, whatever the others did.
     let mut events = Vec::new();
-    for cal in &calendars {
-        events.extend(google::calendar::list_events(
-            auth,
-            cal,
-            day_start,
-            window_end,
-            cfg.hide_declined,
-        )?);
+    let mut tasks: Vec<Task> = Vec::new();
+    let mut directory: HashMap<String, provider::Directory> = HashMap::new();
+    for account in &results {
+        if let Some(e) = &account.error {
+            log::warn(&format!("Account '{}': {e}", account.display_name));
+            continue;
+        }
+        events.extend(account.events.iter().cloned());
+        directory.insert(
+            account.account_id.clone(),
+            provider::Directory {
+                calendars: account.calendars.clone(),
+                task_lists: account.task_lists.clone(),
+            },
+        );
+        for task in &account.tasks {
+            let mut task = task.clone();
+            // Stamp the origin so completing routes back to the right account.
+            task.account_id = account.account_id.clone();
+            tasks.push(task);
+        }
     }
 
-    // Nach Tagen trennen. Ganztagestermine haben keine Startzeit; sie stammen
-    // aus der Abfrage fuer heute, weil `list_events` sie nur im Fenster des
-    // jeweiligen Tages liefert — sie bleiben daher bei den heutigen.
+    let succeeded = results.iter().filter(|r| r.error.is_none()).count();
+    if succeeded == 0 && !results.is_empty() {
+        // Nothing came back at all — report the most actionable reason rather
+        // than replacing the display with an empty day.
+        return Err(provider::worst_error(&results)
+            .cloned()
+            .unwrap_or_else(|| Error::Other("No account returned data".into())));
+    }
+
+    // Keep the previous entry for an account that failed this round, so a
+    // single hiccup does not force a full rediscovery next time.
+    let reused = meta.as_ref().filter(|m| m.fresh());
+    if let Some(old) = reused {
+        for (id, dir) in &old.by_account {
+            directory.entry(id.clone()).or_insert_with(|| dir.clone());
+        }
+    }
+    let keep_timestamp = reused.map(|m| m.at);
+    *meta = Some(Meta {
+        by_account: directory,
+        at: keep_timestamp.unwrap_or_else(Instant::now),
+    });
+
+    // Split by day. All-day events have no start time and stay with today.
     let (mut events, mut next_day): (Vec<Event>, Vec<Event>) = events
         .into_iter()
         .partition(|e| e.start.map(|s| s < midnight).unwrap_or(true));
     sort_events(&mut events);
     sort_events(&mut next_day);
 
-    // --- Aufgaben ---
-    let lists: Vec<_> = cached
-        .lists
-        .iter()
-        .filter(|l| cfg.tasklist_ids.is_empty() || cfg.tasklist_ids.contains(&l.id))
-        .collect();
-
-    let mut tasks: Vec<Task> = Vec::new();
-    for list in &lists {
-        tasks.extend(google::tasks::list_tasks(
-            auth,
-            list,
-            today,
-            cfg.show_undated_tasks,
-        )?);
-    }
-
-    // Serverseitig gefiltert wurde nur bei `dueMax`; hier faellt in jedem Fall
-    // alles Zukuenftige heraus.
+    // Server side filtering only happened where the API supports it; this
+    // drops everything still in the future for every provider alike.
     let mut tasks = filter_tasks_for_today(tasks, today, cfg.show_undated_tasks);
     sort_tasks(&mut tasks);
 
     log::info(&format!(
-        "Sync ok: {} events today (+{} tomorrow) from {} calendar(s), {} tasks from {} list(s), {} ms{}",
+        "Sync ok: {} events today (+{} tomorrow), {} tasks, {}/{} accounts, {} ms",
         events.len(),
         next_day.len(),
-        calendars.len(),
         tasks.len(),
-        lists.len(),
+        succeeded,
+        results.len(),
         started.elapsed().as_millis(),
-        if fresh {
-            " (Verzeichnis aus Cache)"
-        } else {
-            ""
-        },
     ));
 
     Ok(Agenda {
@@ -307,13 +444,18 @@ fn run_sync(auth: &mut Auth, cfg: Config, meta: &mut Option<Meta>) -> google::Re
         tomorrow: next_day,
         tasks,
         fetched_at: Some(Local::now()),
-        last_error: None,
+        // Partial failure is worth showing, but not worth blanking the widget.
+        last_error: provider::summarize_errors(&results),
     })
 }
 
-fn apply_sync_result(shared: &Arc<Mutex<Shared>>, hwnd: isize, result: google::Result<Agenda>) {
+fn apply_sync_result(
+    shared: &Arc<Mutex<Shared>>,
+    hwnd: isize,
+    result: std::result::Result<Agenda, Error>,
+) {
     {
-        let mut guard = lock(&shared);
+        let mut guard = lock(shared);
         match result {
             Ok(agenda) => {
                 write_cache(&agenda);
@@ -343,7 +485,7 @@ fn status_for(e: &Error) -> Status {
 }
 
 fn set_status(shared: &Arc<Mutex<Shared>>, hwnd: isize, status: Status) {
-    lock(&shared).status = status;
+    lock(shared).status = status;
     notify(hwnd, WM_APP_STATUS);
 }
 

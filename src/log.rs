@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 TPMPlaner contributors
 //! Schlankes Dateiprotokoll.
 //!
 //! Die Statuszeile im Widget hat Platz fuer rund 56 Zeichen — fuer eine
@@ -94,7 +96,9 @@ pub fn install_panic_hook() {
             .name()
             .unwrap_or("unbenannt")
             .to_string();
-        error(&format!("PANIK in Thread '{thread}' bei {location}: {payload}"));
+        error(&format!(
+            "PANIK in Thread '{thread}' bei {location}: {payload}"
+        ));
         previous(info);
     }));
 }

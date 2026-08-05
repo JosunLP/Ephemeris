@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 TPMPlaner contributors
 //! TPMPlaner — Desktop-Widget fuer Google Kalender und Google Tasks.
 //!
 //! Kein Konsolenfenster: das Widget ist eine reine GUI-Anwendung.
@@ -11,6 +13,7 @@ mod i18n;
 mod log;
 mod model;
 mod platform;
+mod provider;
 mod render;
 mod secure;
 mod sync;

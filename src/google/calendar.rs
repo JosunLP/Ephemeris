@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 TPMPlaner contributors
 //! Google Calendar API v3 — nur die Termine des laufenden Tages.
 
 use super::auth::Auth;
@@ -163,6 +165,7 @@ pub fn list_events(
                 all_day,
                 location: item.location.filter(|s| !s.trim().is_empty()),
                 html_link: item.html_link,
+                join_url: None,
                 color: cal.color,
                 calendar_name: cal.name.clone(),
             });

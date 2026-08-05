@@ -2,6 +2,11 @@
 name = "tpmplaner"
 version = "0.1.0"
 edition = "2024"
+license = "GPL-3.0-or-later"
+description = "A desktop widget showing today's calendar events and due tasks"
+repository = "https://github.com/JosunLP/TPMPlaner"
+readme = "README.md"
+rust-version = "1.90"
 
 [dependencies]
 base64 = "0.23.1"
@@ -38,6 +43,8 @@ windows = { version = "0.62.2", features = [
     "Win32_UI_Shell",
     "Win32_System_LibraryLoader",
     "Win32_System_Memory",
+    "Win32_System_DataExchange",
+    "Win32_System_Ole",
     "Win32_System_Com",
     "Win32_Security_Cryptography",
     "Win32_System_Registry",

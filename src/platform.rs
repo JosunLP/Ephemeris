@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 TPMPlaner contributors
 //! Kleine Windows-Helfer: Browser oeffnen, Autostart, Speicher trimmen.
 
 use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError, HWND, RECT};
@@ -251,6 +253,88 @@ pub fn sys_color(index: windows::Win32::Graphics::Gdi::SYS_COLOR_INDEX) -> u32 {
     (r << 16) | (g << 8) | b
 }
 
+/// Legt Text als Unicode in die Zwischenablage.
+///
+/// Damit laesst sich der Tagesplan in eine Mail, ein Ticket oder einen
+/// Vorleser uebernehmen — das Widget selbst ist als nicht aktivierbares
+/// Werkzeugfenster fuer Bildschirmleser praktisch unerreichbar.
+pub fn set_clipboard_text(text: &str) -> bool {
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::DataExchange::{
+        CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
+    };
+    use windows::Win32::System::Memory::{GHND, GlobalAlloc, GlobalLock, GlobalUnlock};
+    use windows::Win32::System::Ole::CF_UNICODETEXT;
+
+    let wide_text = wide(text);
+    let bytes = wide_text.len() * std::mem::size_of::<u16>();
+
+    unsafe {
+        if OpenClipboard(None).is_err() {
+            return false;
+        }
+        let result = (|| {
+            EmptyClipboard().ok()?;
+            // Die Zwischenablage uebernimmt den Speicher; er darf deshalb
+            // nicht wieder freigegeben werden.
+            let handle = GlobalAlloc(GHND, bytes).ok()?;
+            let target = GlobalLock(handle);
+            if target.is_null() {
+                return None;
+            }
+            std::ptr::copy_nonoverlapping(wide_text.as_ptr(), target as *mut u16, wide_text.len());
+            let _ = GlobalUnlock(handle);
+            SetClipboardData(CF_UNICODETEXT.0 as u32, Some(HANDLE(handle.0))).ok()?;
+            Some(())
+        })();
+        let _ = CloseClipboard();
+        result.is_some()
+    }
+}
+
+/// Zerlegt `"Win+Alt+K"` in Modifizierer und virtuellen Tastencode.
+///
+/// Bewusst genuegsam: Buchstaben, Ziffern und F1-F12 decken ab, was jemand
+/// realistisch als Kurzbefehl waehlt.
+pub fn parse_hotkey(spec: &str) -> Option<(u32, u32)> {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN};
+    let mut modifiers = 0u32;
+    let mut key = None;
+
+    for part in spec.split('+').map(str::trim).filter(|p| !p.is_empty()) {
+        match part.to_ascii_lowercase().as_str() {
+            "win" | "windows" => modifiers |= MOD_WIN.0,
+            "alt" => modifiers |= MOD_ALT.0,
+            "ctrl" | "control" | "strg" => modifiers |= MOD_CONTROL.0,
+            "shift" | "umschalt" => modifiers |= MOD_SHIFT.0,
+            other => {
+                let bytes = other.as_bytes();
+                key = if bytes.len() == 1 && bytes[0].is_ascii_alphanumeric() {
+                    // Virtuelle Tastencodes fuer A-Z und 0-9 entsprechen den
+                    // ASCII-Werten der Grossbuchstaben bzw. Ziffern.
+                    Some(bytes[0].to_ascii_uppercase() as u32)
+                } else if let Some(number) = other.strip_prefix('f') {
+                    // F1 bis F12 liegen ab VK_F1 (0x70) fortlaufend.
+                    number
+                        .parse::<u32>()
+                        .ok()
+                        .filter(|n| (1..=12).contains(n))
+                        .map(|n| 0x6F + n)
+                } else {
+                    None
+                };
+            }
+        }
+    }
+    // Ohne Modifizierer waere es eine globale Einzeltaste — die wuerde sie
+    // jeder anderen Anwendung wegnehmen.
+    match (modifiers, key) {
+        (0, _) => None,
+        (_, Some(k)) => Some((modifiers, k)),
+        _ => None,
+    }
+}
+
 /// Belegt die Einzelinstanz-Sperre. `false` = es laeuft bereits ein Widget.
 ///
 /// Ohne diese Sperre legt ein zweiter Start ein deckungsgleiches Fenster auf
@@ -321,5 +405,46 @@ pub fn primary_work_area() -> Option<RECT> {
 pub fn trim_working_set() {
     unsafe {
         let _ = SetProcessWorkingSetSize(GetCurrentProcess(), usize::MAX, usize::MAX);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_hotkey;
+
+    /// Virtuelle Tastencodes: 'K' = 0x4B, F5 = 0x74.
+    #[test]
+    fn common_combinations_parse() {
+        let (m, k) = parse_hotkey("Win+Alt+K").unwrap();
+        assert_eq!(k, 0x4B);
+        assert_ne!(m, 0);
+
+        assert_eq!(parse_hotkey("Ctrl+Shift+F5").unwrap().1, 0x74);
+        assert_eq!(parse_hotkey("strg+umschalt+7").unwrap().1, 0x37);
+    }
+
+    #[test]
+    fn spelling_and_spacing_are_forgiving() {
+        assert_eq!(parse_hotkey("win + alt + k"), parse_hotkey("WIN+ALT+K"));
+        assert_eq!(
+            parse_hotkey("Control+Shift+P"),
+            parse_hotkey("ctrl+shift+p")
+        );
+    }
+
+    #[test]
+    fn a_bare_key_is_rejected() {
+        // Ohne Modifizierer wuerde die Taste global belegt und stuende keiner
+        // anderen Anwendung mehr zur Verfuegung.
+        assert_eq!(parse_hotkey("K"), None);
+        assert_eq!(parse_hotkey("F5"), None);
+    }
+
+    #[test]
+    fn nonsense_is_rejected_instead_of_guessed() {
+        assert_eq!(parse_hotkey(""), None);
+        assert_eq!(parse_hotkey("Win+Alt"), None);
+        assert_eq!(parse_hotkey("Win+Alt+F13"), None);
+        assert_eq!(parse_hotkey("Win+Alt+Ente"), None);
     }
 }

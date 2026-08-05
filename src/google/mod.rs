@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 TPMPlaner contributors
 //! Google-API-Anbindung: OAuth, Kalender, Tasks.
 //!
 //! Alles synchron/blockierend — laeuft ausschliesslich im Sync-Thread. Kein

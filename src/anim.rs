@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 TPMPlaner contributors
 //! Animationszustand.
 //!
 //! Bewusst ohne Render-Schleife: der Fenster-Code startet einen 16-ms-Timer

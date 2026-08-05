@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 TPMPlaner contributors
 //! Domaenenmodell des Widgets: das, was tatsaechlich gezeichnet wird.
 //!
 //! Bewusst entkoppelt von den Google-JSON-Strukturen, damit der Renderer
@@ -15,8 +17,15 @@ pub struct Event {
     pub end: Option<DateTime<Local>>,
     pub all_day: bool,
     pub location: Option<String>,
-    /// Link in den Google-Kalender, wird beim Klick geoeffnet.
+    /// Link in den Kalender, wird beim Klick geoeffnet.
     pub html_link: Option<String>,
+    /// Beitrittslink einer Online-Besprechung (Teams, Meet, Zoom).
+    ///
+    /// Bei einer laufenden Besprechung ist "beitreten" die eigentlich
+    /// gewuenschte Aktion — ein Klick auf die Zeile nimmt deshalb diesen Link,
+    /// wenn es einen gibt, und faellt sonst auf `html_link` zurueck.
+    #[serde(default)]
+    pub join_url: Option<String>,
     /// Farbe des Quellkalenders als 0xRRGGBB.
     pub color: u32,
     pub calendar_name: String,
@@ -66,6 +75,10 @@ pub struct Task {
     /// Verschachtelungstiefe (Unteraufgaben werden eingerueckt).
     pub depth: u8,
     pub tasklist_name: String,
+    /// Which account this came from. Needed to route the completion call back
+    /// to the right provider when several accounts are configured.
+    #[serde(default)]
+    pub account_id: String,
     /// Lokal gesetzt, solange das Abhaken noch zum Server unterwegs ist.
     /// Rein transient, gehoert nicht in den Cache.
     #[serde(skip)]
@@ -220,6 +233,7 @@ mod tests {
             notes: None,
             depth: 0,
             tasklist_name: "Liste".into(),
+            account_id: String::new(),
             completing: false,
         }
     }
@@ -258,6 +272,7 @@ mod tests {
             all_day: false,
             location: None,
             html_link: None,
+            join_url: None,
             color: 0,
             calendar_name: "K".into(),
         }

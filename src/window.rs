@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 TPMPlaner contributors
 //! Das Widget-Fenster.
 //!
 //! Verhalten wie ein Vista-Gadget:
@@ -32,8 +34,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{
-    DWMSBT_TRANSIENTWINDOW, DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE,
-    DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND, DwmSetWindowAttribute,
+    DWMSBT_NONE, DWMSBT_TRANSIENTWINDOW, DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE,
+    DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND, DWMWCP_ROUND, DwmSetWindowAttribute,
 };
 use windows::Win32::Graphics::Gdi::{HBRUSH, ValidateRect};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -42,7 +44,8 @@ use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForWindow, SetProcessDpiAwarenessContext,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    ReleaseCapture, SetCapture, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
+    RegisterHotKey, ReleaseCapture, SetCapture, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
+    UnregisterHotKey,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{PCWSTR, Result, w};
@@ -50,6 +53,9 @@ use windows::core::{PCWSTR, Result, w};
 const TIMER_TICK: usize = 1;
 const TIMER_ANIM: usize = 2;
 const TIMER_UNDO: usize = 3;
+const TIMER_PEEK: usize = 4;
+/// Kennung der globalen Tastenkombination.
+const HOTKEY_PEEK: i32 = 1;
 /// ~60 Hz. Laeuft ausschliesslich, solange etwas in Bewegung ist.
 const ANIM_INTERVAL_MS: u32 = 16;
 /// Zehn Schritte pro Sekunde reichen fuer einen Ablaufbalken voellig.
@@ -66,7 +72,11 @@ const CMD_FOLDER: usize = 1004;
 const CMD_LOG: usize = 1005;
 const CMD_RELOGIN: usize = 1006;
 const CMD_RESET_POS: usize = 1007;
-const CMD_QUIT: usize = 1008;
+const CMD_COPY: usize = 1009;
+const CMD_QUIT: usize = 1010;
+/// Kennungsbereiche fuer die dynamisch erzeugten Quellen-Eintraege.
+const CMD_CALENDAR_BASE: usize = 2000;
+const CMD_TASKLIST_BASE: usize = 3000;
 
 /// Kante(n) des Glaskoerpers unter dem Mauszeiger.
 ///
@@ -117,6 +127,7 @@ const MIN_PANEL: (f32, f32) = (240.0, 180.0);
 /// mal versehentlich. Ohne Bedenkzeit waere die Aufgabe sofort und ohne
 /// Rueckweg erledigt — deshalb wandert sie erst nach Ablauf zur API.
 struct Pending {
+    account_id: String,
     task_id: String,
     tasklist_id: String,
     started: Instant,
@@ -147,6 +158,8 @@ struct State {
     viewport_height: f32,
 
     pending: Option<Pending>,
+    /// Laeuft gerade ein "Kurz zeigen"? Solange bleibt das Fenster oben.
+    peeking: bool,
 
     next_sync_at: DateTime<Local>,
     consecutive_failures: u32,
@@ -174,7 +187,7 @@ pub fn run() -> Result<()> {
         if let Some(e) = &config_error {
             log::warn(e);
         }
-        let metrics = Metrics::new(cfg.scale);
+        let metrics = metrics_for(&cfg);
         let loc = Locale::resolve(&cfg.language);
         // Sync-Thread und Notausgang haben keinen Zugriff auf diese Instanz
         // und greifen deshalb auf den globalen Katalog zu.
@@ -225,6 +238,8 @@ pub fn run() -> Result<()> {
                 status: if demo { Status::Idle } else { Status::Syncing },
                 config: cfg.clone(),
                 config_error,
+                calendars: Vec::new(),
+                tasklists: Vec::new(),
             })),
             sync: None,
             renderer: None,
@@ -240,6 +255,7 @@ pub fn run() -> Result<()> {
             content_height: 0.0,
             viewport_height: 0.0,
             pending: None,
+            peeking: false,
             next_sync_at: Local::now(),
             consecutive_failures: 0,
             last_minute: u32::MAX,
@@ -313,6 +329,7 @@ pub fn run() -> Result<()> {
             st.anim.reveal.jump(1.0);
         }
 
+        register_peek_hotkey(hwnd, &cfg);
         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
         arm_tick(hwnd);
         kick(st);
@@ -325,6 +342,11 @@ pub fn run() -> Result<()> {
         }
         Ok(())
     }
+}
+
+/// Masse zur Konfiguration: im Acryl-Modus ohne Schattenrand.
+fn metrics_for(cfg: &Config) -> Metrics {
+    Metrics::with_shadow(cfg.scale, cfg.backdrop != "acrylic")
 }
 
 /// Fensterposition und -groesse in physischen Pixeln.
@@ -355,11 +377,18 @@ fn target_geometry(cfg: &Config, m: Metrics, dpi: f32) -> (i32, i32, i32, i32) {
     (px, py, pw, ph)
 }
 
-/// Windows-11-Acryl hinter dem Fenster.
+/// Fensterattribute des Desktopfenster-Managers.
 ///
-/// Rein additiv: Der eigene Verlauf im Renderer sieht auch dann korrekt aus,
-/// wenn das System die Backdrop nicht liefert (aeltere Builds, deaktivierte
-/// Transparenzeffekte). Deshalb werden Fehler hier bewusst geschluckt.
+/// **Wichtig:** `DWMWA_SYSTEMBACKDROP_TYPE` faerbt das *gesamte*
+/// Fensterrechteck. Dieses Fenster ist rundum um den Schattenrand groesser
+/// als der sichtbare Glaskoerper, und die Ecken laesst es sich selbst zeichnen
+/// — eine Systembackdrop legt deshalb einen deckenden, *eckigen* Kasten um
+/// das runde Panel. Genau das war sichtbar, solange hier Acryl gesetzt wurde.
+///
+/// Der Normalfall ist daher `DWMSBT_NONE`, explizit gesetzt statt nur
+/// weggelassen: die Vorgabe `DWMSBT_AUTO` ueberlaesst die Entscheidung dem
+/// System und kann dasselbe Ergebnis liefern. Das Glas zeichnet der Renderer
+/// ohnehin selbst.
 fn apply_backdrop(hwnd: HWND, cfg: &Config, dark: bool) {
     unsafe {
         let dark_flag: i32 = dark as i32;
@@ -370,9 +399,15 @@ fn apply_backdrop(hwnd: HWND, cfg: &Config, dark: bool) {
             4,
         );
 
-        // Die Ecken zeichnet der Renderer selbst mit Per-Pixel-Alpha; DWM darf
-        // nicht zusaetzlich runden, sonst entsteht ein doppelter Radius.
-        let corner = DWMWCP_DONOTROUND.0;
+        // Ohne Systembackdrop zeichnet der Renderer die Ecken selbst mit
+        // Per-Pixel-Alpha; DWM darf dann nicht zusaetzlich runden, sonst
+        // entsteht ein doppelter Radius. Mit Acryl ist es umgekehrt: dort
+        // muss DWM runden, weil es die Flaeche fuellt.
+        let corner = if cfg.backdrop == "acrylic" {
+            DWMWCP_ROUND.0
+        } else {
+            DWMWCP_DONOTROUND.0
+        };
         let _ = DwmSetWindowAttribute(
             hwnd,
             DWMWA_WINDOW_CORNER_PREFERENCE,
@@ -380,15 +415,20 @@ fn apply_backdrop(hwnd: HWND, cfg: &Config, dark: bool) {
             4,
         );
 
-        if cfg.backdrop == "acrylic" {
-            let backdrop = DWMSBT_TRANSIENTWINDOW.0;
-            let _ = DwmSetWindowAttribute(
-                hwnd,
-                DWMWA_SYSTEMBACKDROP_TYPE,
-                &backdrop as *const i32 as *const _,
-                4,
-            );
-        }
+        // Acryl nur, wenn ausdruecklich gewuenscht — und dann ohne
+        // Schattenrand, sonst entsteht der Kasten erneut. Siehe
+        // `Metrics::new`, wo der Rand in diesem Fall auf null geht.
+        let backdrop = if cfg.backdrop == "acrylic" {
+            DWMSBT_TRANSIENTWINDOW.0
+        } else {
+            DWMSBT_NONE.0
+        };
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_SYSTEMBACKDROP_TYPE,
+            &backdrop as *const i32 as *const _,
+            4,
+        );
     }
 }
 
@@ -446,9 +486,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         match msg {
             WM_WINDOWPOSCHANGING => {
                 let wp = &mut *(lparam.0 as *mut WINDOWPOS);
-                // Immer ganz nach hinten. `SWP_NOZORDER` muss dafuer weg,
-                // sonst ignoriert Windows `hwndInsertAfter`.
-                wp.hwndInsertAfter = HWND_BOTTOM;
+                // Normalerweise immer ganz nach hinten. `SWP_NOZORDER` muss
+                // dafuer weg, sonst ignoriert Windows `hwndInsertAfter`.
+                // Waehrend eines Peeks gilt das Gegenteil, sonst faellt das
+                // Fenster sofort wieder hinter alles zurueck.
+                wp.hwndInsertAfter = if st.peeking {
+                    HWND_TOPMOST
+                } else {
+                    HWND_BOTTOM
+                };
                 wp.flags &= !SWP_NOZORDER;
                 // "Desktop anzeigen" (Win+D) versucht das Fenster zu
                 // verstecken — wir bestehen darauf, sichtbar zu bleiben.
@@ -536,6 +582,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 
             WM_TIMER if wparam.0 == TIMER_ANIM => {
                 pump(st);
+                LRESULT(0)
+            }
+
+            WM_HOTKEY if wparam.0 as i32 == HOTKEY_PEEK => {
+                begin_peek(st);
+                LRESULT(0)
+            }
+
+            WM_TIMER if wparam.0 == TIMER_PEEK => {
+                end_peek(st);
                 LRESULT(0)
             }
 
@@ -646,6 +702,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 KillTimer(Some(hwnd), TIMER_TICK).ok();
                 KillTimer(Some(hwnd), TIMER_ANIM).ok();
                 KillTimer(Some(hwnd), TIMER_UNDO).ok();
+                KillTimer(Some(hwnd), TIMER_PEEK).ok();
+                let _ = UnregisterHotKey(Some(hwnd), HOTKEY_PEEK);
                 log::info("Beendet");
                 PostQuitMessage(0);
                 LRESULT(0)
@@ -671,20 +729,21 @@ fn begin_pending(st: &mut State, idx: usize) {
             // Sofort optisch quittieren, damit der Klick sich unmittelbar
             // anfuehlt.
             t.completing = true;
-            (t.tasklist_id.clone(), t.id.clone())
+            (t.account_id.clone(), t.tasklist_id.clone(), t.id.clone())
         })
     };
-    let Some((tasklist_id, task_id)) = ids else {
+    let Some((account_id, tasklist_id, task_id)) = ids else {
         return;
     };
 
     if seconds == 0 {
-        send_completion(st, &tasklist_id, &task_id);
+        send_completion(st, &account_id, &tasklist_id, &task_id);
         redraw(st);
         return;
     }
 
     st.pending = Some(Pending {
+        account_id,
         task_id,
         tasklist_id,
         started: Instant::now(),
@@ -712,7 +771,7 @@ fn on_undo_tick(st: &mut State) {
 fn commit_pending(st: &mut State) {
     let Some(p) = st.pending.take() else { return };
     stop_undo_timer(st);
-    send_completion(st, &p.tasklist_id, &p.task_id);
+    send_completion(st, &p.account_id, &p.tasklist_id, &p.task_id);
 }
 
 /// Nimmt die Erledigung zurueck — es wurde nie etwas an Google gesendet.
@@ -734,13 +793,251 @@ fn stop_undo_timer(st: &State) {
     }
 }
 
-fn send_completion(st: &State, tasklist_id: &str, task_id: &str) {
+fn send_completion(st: &State, account_id: &str, tasklist_id: &str, task_id: &str) {
     if let Some(s) = st.sync.as_ref() {
         s.send(Command::CompleteTask {
+            account_id: account_id.to_owned(),
             tasklist_id: tasklist_id.to_owned(),
             task_id: task_id.to_owned(),
         });
     }
+}
+
+/// Schaltet einen Kalender bzw. eine Aufgabenliste an oder ab.
+///
+/// Eine leere Liste in der Konfiguration bedeutet "alle". Wird aus diesem
+/// Zustand heraus eine Quelle abgewaehlt, muss die Auswahl erst ausgeschrieben
+/// werden — sonst waere das Ergebnis wieder "alle". Umgekehrt wird eine
+/// vollstaendige Auswahl zurueck auf "leer" normalisiert, damit ein spaeter
+/// hinzugefuegter Kalender automatisch mitkommt.
+fn toggle_source(st: &mut State, is_calendar: bool, index: usize) {
+    {
+        let mut guard = sync::lock(&st.shared);
+        let all: Vec<String> = if is_calendar {
+            guard.calendars.iter().map(|(id, _)| id.clone()).collect()
+        } else {
+            guard.tasklists.iter().map(|(id, _)| id.clone()).collect()
+        };
+        let Some(id) = all.get(index).cloned() else {
+            return;
+        };
+
+        let selected = if is_calendar {
+            &mut guard.config.calendar_ids
+        } else {
+            &mut guard.config.tasklist_ids
+        };
+
+        if selected.is_empty() {
+            *selected = all.iter().filter(|i| **i != id).cloned().collect();
+        } else if selected.contains(&id) {
+            // Die letzte Quelle darf nicht verschwinden: eine leere Auswahl
+            // hiesse wieder "alle", also genau das Gegenteil.
+            if selected.len() > 1 {
+                selected.retain(|i| *i != id);
+            }
+        } else {
+            selected.push(id);
+        }
+
+        if selected.len() == all.len() {
+            selected.clear();
+        }
+        guard.config.save();
+    }
+    st.config_mtime = config_mtime();
+    request_sync(st);
+}
+
+/// Legt den Tagesplan als Text in die Zwischenablage.
+fn copy_agenda(st: &mut State) {
+    let guard = sync::lock(&st.shared);
+    let loc = &st.loc;
+    let today = guard
+        .agenda
+        .day
+        .unwrap_or_else(|| Local::now().date_naive());
+    let mut out = format!(
+        "{} — {}
+",
+        loc.weekday(today),
+        loc.date_line(today)
+    );
+
+    out.push_str(&format!(
+        "
+{}
+",
+        loc.cat.section_events
+    ));
+    if guard.agenda.events.is_empty() {
+        out.push_str(&format!(
+            "  {}
+",
+            loc.cat.no_events
+        ));
+    }
+    for ev in &guard.agenda.events {
+        let when = if ev.all_day {
+            loc.cat.all_day.to_string()
+        } else {
+            match (ev.start, ev.end) {
+                (Some(s), Some(e)) => format!("{}-{}", loc.time(s), loc.time(e)),
+                (Some(s), None) => loc.time(s),
+                _ => String::new(),
+            }
+        };
+        match &ev.location {
+            Some(place) => out.push_str(&format!(
+                "  {when}  {}  ({place})
+",
+                ev.title
+            )),
+            None => out.push_str(&format!(
+                "  {when}  {}
+",
+                ev.title
+            )),
+        }
+    }
+
+    out.push_str(&format!(
+        "
+{}
+",
+        loc.cat.section_tasks
+    ));
+    if guard.agenda.tasks.is_empty() {
+        out.push_str(&format!(
+            "  {}
+",
+            loc.cat.no_tasks
+        ));
+    }
+    for task in &guard.agenda.tasks {
+        let due = match task.due {
+            Some(d) if d == today => loc.cat.today.to_string(),
+            Some(d) => loc.day_month(d),
+            None => "-".into(),
+        };
+        // Unteraufgaben eingerueckt, wie in der Anzeige.
+        let indent = "  ".repeat(task.depth as usize + 1);
+        out.push_str(&format!(
+            "{indent}[ ] {due}  {}
+",
+            task.title
+        ));
+    }
+    drop(guard);
+
+    if platform::set_clipboard_text(&out) {
+        log::info("Agenda in die Zwischenablage kopiert");
+    } else {
+        log::warn("Zwischenablage nicht verfuegbar");
+    }
+}
+
+/// Combinations tried when the configured one is already taken.
+///
+/// Measured on a normal Windows 11 desktop: `Ctrl+Alt+K` and `Win+Alt+K` are
+/// both refused with `ERROR_HOTKEY_ALREADY_REGISTERED`. Silently doing
+/// nothing would leave a documented feature dead, so the widget falls back and
+/// records which combination it ended up with.
+const PEEK_FALLBACKS: &[&str] = &["Ctrl+Alt+Shift+K", "Ctrl+Shift+F12", "Ctrl+Alt+Y"];
+
+/// Registers the global "peek" hotkey.
+fn register_peek_hotkey(hwnd: HWND, cfg: &Config) {
+    unsafe {
+        let _ = UnregisterHotKey(Some(hwnd), HOTKEY_PEEK);
+    }
+    if cfg.peek_hotkey.trim().is_empty() {
+        return;
+    }
+
+    let mut candidates: Vec<&str> = vec![cfg.peek_hotkey.as_str()];
+    candidates.extend(
+        PEEK_FALLBACKS
+            .iter()
+            .copied()
+            .filter(|f| !f.eq_ignore_ascii_case(cfg.peek_hotkey.trim())),
+    );
+
+    for spec in &candidates {
+        let Some((modifiers, key)) = platform::parse_hotkey(spec) else {
+            log::warn(&format!("peek_hotkey '{spec}' is not a usable combination"));
+            continue;
+        };
+        if try_register(hwnd, modifiers, key) {
+            if *spec == cfg.peek_hotkey {
+                log::info(&format!("Peek hotkey: {spec}"));
+            } else {
+                log::warn(&format!(
+                    "peek_hotkey '{}' is taken by another application; using {spec} instead",
+                    cfg.peek_hotkey
+                ));
+            }
+            return;
+        }
+    }
+
+    log::warn("No peek hotkey could be registered; set peek_hotkey in config.json");
+}
+
+fn try_register(hwnd: HWND, modifiers: u32, key: u32) -> bool {
+    use windows::Win32::UI::Input::KeyboardAndMouse::HOT_KEY_MODIFIERS;
+    // Held keys must not repeat-fire.
+    const MOD_NOREPEAT: u32 = 0x4000;
+    unsafe {
+        RegisterHotKey(
+            Some(hwnd),
+            HOTKEY_PEEK,
+            HOT_KEY_MODIFIERS(modifiers | MOD_NOREPEAT),
+            key,
+        )
+        .is_ok()
+    }
+}
+
+/// Holt das Widget fuer ein paar Sekunden nach vorn.
+///
+/// Das ist der Ausgleich fuer die Bottom-Most-Lage: das Widget stoert nie,
+/// ist dadurch aber beim Arbeiten auch nie zu sehen. Ein Tastendruck genuegt,
+/// danach sinkt es von selbst zurueck — ohne Klick, ohne Fokuswechsel.
+fn begin_peek(st: &mut State) {
+    let seconds = sync::lock(&st.shared).config.peek_seconds.max(1);
+    st.peeking = true;
+    unsafe {
+        let _ = SetWindowPos(
+            st.hwnd,
+            Some(HWND_TOPMOST),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER,
+        );
+        SetTimer(Some(st.hwnd), TIMER_PEEK, seconds * 1000, None);
+    }
+    // Aufblenden wie bei neuen Daten: der Blick soll gefuehrt werden.
+    st.anim.restart_reveal();
+    kick(st);
+}
+
+fn end_peek(st: &mut State) {
+    st.peeking = false;
+    unsafe {
+        KillTimer(Some(st.hwnd), TIMER_PEEK).ok();
+        let _ = SetWindowPos(
+            st.hwnd,
+            Some(HWND_BOTTOM),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER,
+        );
+    }
+    redraw(st);
 }
 
 // --- Zeitplanung ------------------------------------------------------------
@@ -842,7 +1139,7 @@ fn reload_config_if_changed(st: &mut State) {
     }
 
     let scale_changed = (cfg.scale - st.scale).abs() > f32::EPSILON;
-    let (px, py, pw, ph) = target_geometry(&cfg, Metrics::new(cfg.scale), st.dpi);
+    let (px, py, pw, ph) = target_geometry(&cfg, metrics_for(&cfg), st.dpi);
     let palette = Palette::resolve(ThemePref::parse(&cfg.theme), &cfg.accent, st.visuals);
     st.anim.enabled = palette.animations;
 
@@ -855,13 +1152,14 @@ fn reload_config_if_changed(st: &mut State) {
     st.loc = new_loc;
 
     st.scale = cfg.scale;
-    st.metrics = Metrics::new(cfg.scale);
+    st.metrics = metrics_for(&cfg);
     {
         let mut guard = sync::lock(&st.shared);
         guard.config = cfg.clone();
         guard.config_error = error;
     }
     apply_backdrop(st.hwnd, &cfg, palette.dark);
+    register_peek_hotkey(st.hwnd, &cfg);
 
     unsafe {
         let _ = SetWindowPos(
@@ -1346,7 +1644,64 @@ fn show_menu(st: &mut State) {
             CMD_AUTOSTART,
             c.menu_autostart,
         );
+        // Quellen direkt im Menue an- und abwaehlen. Die IDs sind lange
+        // E-Mail-aehnliche Zeichenketten; sie von Hand in die JSON zu
+        // uebertragen war die unangenehmste Stelle der Einrichtung.
+        let (calendars, tasklists, selected_cal, selected_list) = {
+            let g = sync::lock(&st.shared);
+            (
+                g.calendars.clone(),
+                g.tasklists.clone(),
+                g.config.calendar_ids.clone(),
+                g.config.tasklist_ids.clone(),
+            )
+        };
+        let mut sources = Vec::new();
+        if !calendars.is_empty() {
+            sources.push((
+                c.menu_calendars,
+                &calendars,
+                &selected_cal,
+                CMD_CALENDAR_BASE,
+            ));
+        }
+        if !tasklists.is_empty() {
+            sources.push((
+                c.menu_tasklists,
+                &tasklists,
+                &selected_list,
+                CMD_TASKLIST_BASE,
+            ));
+        }
+        if !sources.is_empty() {
+            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+        }
+        // Untermenues muessen leben, bis `TrackPopupMenu` zurueckkehrt.
+        let mut submenus = Vec::new();
+        for (label, entries, selected, base) in sources {
+            let Ok(sub) = CreatePopupMenu() else { continue };
+            for (i, (id, name)) in entries.iter().enumerate() {
+                // Leere Auswahl bedeutet "alle" — dann sind alle angehakt.
+                let checked = selected.is_empty() || selected.contains(id);
+                let text = platform::wide(name);
+                let _ = AppendMenuW(
+                    sub,
+                    if checked {
+                        MF_STRING | MF_CHECKED
+                    } else {
+                        MF_STRING
+                    },
+                    base + i,
+                    PCWSTR(text.as_ptr()),
+                );
+            }
+            let text = platform::wide(label);
+            let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, PCWSTR(text.as_ptr()));
+            submenus.push(sub);
+        }
+
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+        item(MF_STRING, CMD_COPY, c.menu_copy);
         item(MF_STRING, CMD_CONFIG, c.menu_config);
         item(MF_STRING, CMD_RESET_POS, c.menu_reset_pos);
         item(MF_STRING, CMD_LOG, c.menu_log);
@@ -1379,6 +1734,9 @@ fn show_menu(st: &mut State) {
             None,
         );
         let _ = PostMessageW(Some(st.hwnd), WM_NULL, WPARAM(0), LPARAM(0));
+        for sub in submenus {
+            let _ = DestroyMenu(sub);
+        }
         let _ = DestroyMenu(menu);
 
         match choice.0 as usize {
@@ -1418,7 +1776,14 @@ fn show_menu(st: &mut State) {
                     SWP_NOACTIVATE | SWP_NOOWNERZORDER,
                 );
             }
+            CMD_COPY => copy_agenda(st),
             CMD_LOG => platform::open_path(&log::file_path()),
+            id if (CMD_CALENDAR_BASE..CMD_CALENDAR_BASE + calendars.len()).contains(&id) => {
+                toggle_source(st, true, id - CMD_CALENDAR_BASE);
+            }
+            id if (CMD_TASKLIST_BASE..CMD_TASKLIST_BASE + tasklists.len()).contains(&id) => {
+                toggle_source(st, false, id - CMD_TASKLIST_BASE);
+            }
             CMD_FOLDER => platform::open_path(&config::data_dir()),
             CMD_RELOGIN => {
                 if let Some(s) = st.sync.as_ref() {

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 TPMPlaner contributors
 //! Windows-DPAPI-Wrapper fuer den Refresh-Token.
 //!
 //! Der Token ist ein Dauerzugang zum Google-Konto und hat als Klartext auf der
@@ -12,9 +14,16 @@ use windows::Win32::Security::Cryptography::{
 };
 use windows::core::PCWSTR;
 
-/// Zusaetzliche Entropie: verhindert, dass eine mit derselben DPAPI-Identitaet
-/// erzeugte Datei aus einem anderen Programm entschluesselt werden kann.
-const ENTROPY: &[u8] = b"TPMPlaner/v1/google-token";
+/// Base entropy. The per-account tag is appended so one account's stored
+/// token cannot be decrypted in the context of another, and so a file copied
+/// from a different program is useless here.
+const ENTROPY_BASE: &[u8] = b"TPMPlaner/v1/";
+
+fn entropy_for(tag: &[u8]) -> Vec<u8> {
+    let mut buf = ENTROPY_BASE.to_vec();
+    buf.extend_from_slice(tag);
+    buf
+}
 
 fn blob(data: &[u8]) -> CRYPT_INTEGER_BLOB {
     CRYPT_INTEGER_BLOB {
@@ -36,10 +45,11 @@ unsafe fn take_blob(out: CRYPT_INTEGER_BLOB) -> Vec<u8> {
     v
 }
 
-pub fn protect(plain: &[u8]) -> Option<Vec<u8>> {
+pub fn protect(plain: &[u8], tag: &[u8]) -> Option<Vec<u8>> {
     unsafe {
+        let salt = entropy_for(tag);
         let input = blob(plain);
-        let entropy = blob(ENTROPY);
+        let entropy = blob(&salt);
         let mut out = CRYPT_INTEGER_BLOB::default();
         CryptProtectData(
             &input,
@@ -55,10 +65,11 @@ pub fn protect(plain: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
-pub fn unprotect(cipher: &[u8]) -> Option<Vec<u8>> {
+pub fn unprotect(cipher: &[u8], tag: &[u8]) -> Option<Vec<u8>> {
     unsafe {
+        let salt = entropy_for(tag);
         let input = blob(cipher);
-        let entropy = blob(ENTROPY);
+        let entropy = blob(&salt);
         let mut out = CRYPT_INTEGER_BLOB::default();
         CryptUnprotectData(&input, None, Some(&entropy), None, None, 0, &mut out).ok()?;
         Some(take_blob(out))

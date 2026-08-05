@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 TPMPlaner contributors
 //! Google Tasks API v1.
 //!
 //! Zwei Eigenheiten der API, die das Widget beruecksichtigen muss:
@@ -148,6 +150,7 @@ pub fn list_tasks(
             notes: t.notes.clone().filter(|n| !n.trim().is_empty()),
             depth: depth_of(t, &by_id),
             tasklist_name: list.name.clone(),
+            account_id: String::new(),
             completing: false,
         })
         .collect();

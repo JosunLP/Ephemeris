@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    # The windows crate moves fast and its releases regularly rename APIs;
+    # grouping keeps those upgrades in one reviewable pull request.
+    groups:
+      windows:
+        patterns:
+          - windows
+          - windows-*
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

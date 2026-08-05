@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 TPMPlaner contributors
 //! Internationalisierung.
 //!
 //! Zwei getrennte Zustaendigkeiten, und die Trennung ist der Kern des Ganzen:
@@ -88,6 +90,9 @@ pub struct Catalog {
     pub menu_reset_pos: &'static str,
     pub menu_log: &'static str,
     pub menu_folder: &'static str,
+    pub menu_calendars: &'static str,
+    pub menu_tasklists: &'static str,
+    pub menu_copy: &'static str,
     pub menu_relogin: &'static str,
     pub menu_quit: &'static str,
 
@@ -142,6 +147,9 @@ pub const EN: Catalog = Catalog {
     menu_reset_pos: "Reset position",
     menu_log: "Open log",
     menu_folder: "Open data folder",
+    menu_calendars: "Calendars",
+    menu_tasklists: "Task lists",
+    menu_copy: "Copy agenda",
     menu_relogin: "Sign in to Google again",
     menu_quit: "Exit",
     auth_connected_title: "TPMPlaner is connected.",
@@ -194,6 +202,9 @@ pub const DE: Catalog = Catalog {
     menu_reset_pos: "Position zurücksetzen",
     menu_log: "Protokoll öffnen",
     menu_folder: "Datenordner öffnen",
+    menu_calendars: "Kalender",
+    menu_tasklists: "Aufgabenlisten",
+    menu_copy: "Agenda kopieren",
     menu_relogin: "Neu bei Google anmelden",
     menu_quit: "Beenden",
     auth_connected_title: "TPMPlaner ist verbunden.",
@@ -246,6 +257,9 @@ pub const FR: Catalog = Catalog {
     menu_reset_pos: "Réinitialiser la position",
     menu_log: "Ouvrir le journal",
     menu_folder: "Ouvrir le dossier de données",
+    menu_calendars: "Agendas",
+    menu_tasklists: "Listes de tâches",
+    menu_copy: "Copier l'agenda",
     menu_relogin: "Se reconnecter à Google",
     menu_quit: "Quitter",
     auth_connected_title: "TPMPlaner est connecté.",
@@ -298,6 +312,9 @@ pub const ES: Catalog = Catalog {
     menu_reset_pos: "Restablecer posición",
     menu_log: "Abrir registro",
     menu_folder: "Abrir carpeta de datos",
+    menu_calendars: "Calendarios",
+    menu_tasklists: "Listas de tareas",
+    menu_copy: "Copiar agenda",
     menu_relogin: "Volver a iniciar sesión en Google",
     menu_quit: "Salir",
     auth_connected_title: "TPMPlaner está conectado.",
@@ -350,6 +367,9 @@ pub const IT: Catalog = Catalog {
     menu_reset_pos: "Reimposta posizione",
     menu_log: "Apri registro",
     menu_folder: "Apri cartella dati",
+    menu_calendars: "Calendari",
+    menu_tasklists: "Elenchi attività",
+    menu_copy: "Copia agenda",
     menu_relogin: "Accedi di nuovo a Google",
     menu_quit: "Esci",
     auth_connected_title: "TPMPlaner è connesso.",

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 TPMPlaner contributors
 //! OAuth 2.0 fuer installierte Anwendungen: Loopback-Redirect mit PKCE.
 //!
 //! Der frueher uebliche `urn:ietf:wg:oauth:2.0:oob`-Flow ist von Google
@@ -81,7 +83,7 @@ impl Auth {
 
         let refresh_token = std::fs::read(config::token_path())
             .ok()
-            .and_then(|enc| secure::unprotect(&enc))
+            .and_then(|enc| secure::unprotect(&enc, b"google-token"))
             .and_then(|plain| serde_json::from_slice::<StoredToken>(&plain).ok())
             .map(|t| t.refresh_token);
 
@@ -219,7 +221,7 @@ fn persist_refresh_token(refresh: &str) {
         refresh_token: refresh.to_owned(),
     });
     if let Ok(bytes) = payload
-        && let Some(enc) = secure::protect(&bytes)
+        && let Some(enc) = secure::protect(&bytes, b"google-token")
     {
         let _ = std::fs::write(config::token_path(), enc);
     }

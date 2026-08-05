@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 TPMPlaner contributors
 //! Vorschaumodus mit Beispieldaten.
 //!
 //! Aktiv, wenn die Umgebungsvariable `TPMPLANER_DEMO` gesetzt ist. Gedacht
@@ -23,6 +25,7 @@ pub fn agenda() -> Agenda {
         all_day: false,
         location: loc.map(str::to_owned),
         html_link: None,
+        join_url: None,
         color,
         calendar_name: "Beispiel".into(),
     };
@@ -42,6 +45,7 @@ pub fn agenda() -> Agenda {
             all_day: false,
             location: loc.map(str::to_owned),
             html_link: None,
+            join_url: None,
             color,
             calendar_name: "Beispiel".into(),
         };
@@ -54,6 +58,7 @@ pub fn agenda() -> Agenda {
         notes: None,
         depth,
         tasklist_name: "Beispiel".into(),
+        account_id: String::new(),
         completing: false,
     };
 
@@ -67,6 +72,7 @@ pub fn agenda() -> Agenda {
                 all_day: true,
                 location: None,
                 html_link: None,
+                join_url: None,
                 color: 0x9B_8AFB,
                 calendar_name: "Firma".into(),
             },
