@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 TPMPlaner contributors
-//! Vorschaumodus mit Beispieldaten.
+//! Preview mode with sample data.
 //!
-//! Aktiv, wenn die Umgebungsvariable `TPMPLANER_DEMO` gesetzt ist. Gedacht
-//! zum Ansehen und Einrichten des Layouts (Groesse, Skalierung, Deckkraft),
-//! bevor der Google-Zugang steht. Es wird dabei nichts synchronisiert.
+//! Active when the `TPMPLANER_DEMO` environment variable is set. Intended for
+//! looking at and adjusting the layout — size, scaling, opacity — before any
+//! calendar account is connected. Nothing is synchronised in this mode.
 
 use crate::model::{Agenda, Event, Task};
 use chrono::{Duration, Local};
@@ -30,8 +30,8 @@ pub fn agenda() -> Agenda {
         calendar_name: "Beispiel".into(),
     };
 
-    // Morgen zu einer festen Uhrzeit — nicht relativ zu jetzt, sonst landen
-    // die Eintraege je nach Startzeit des Widgets noch im heutigen Tag.
+    // Tomorrow at a fixed time, not relative to now: otherwise the entries
+    // would land in today depending on when the widget was started.
     let tomorrow_at = |h: u32, m: u32| {
         crate::model::local_day_start(today + Duration::days(1))
             + Duration::hours(h as i64)
@@ -76,9 +76,9 @@ pub fn agenda() -> Agenda {
                 color: 0x9B_8AFB,
                 calendar_name: "Firma".into(),
             },
-            // Bereits vorbei — wird gedimmt gezeichnet.
+            // Already over, so drawn dimmed.
             event("Daily Standup", -260, -245, 0x4C_8DF6, None),
-            // Bewusst zu lang fuer die Zeile: zeigt Kuerzung und Tooltip.
+            // Deliberately too long for the row: shows truncation and the tooltip.
             event(
                 "Abstimmung Rollout Zahlungsmodul mit Fachbereich und externem Dienstleister",
                 -120,
@@ -86,10 +86,10 @@ pub fn agenda() -> Agenda {
                 0x4C_8DF6,
                 None,
             ),
-            // Laeuft gerade — landet in der Hero-Karte.
+            // Running right now, so it lands in the hero card.
             event("Sprint Review", -12, 33, 0x33_B679, Some("Raum Nord")),
             event("1:1 mit Anna", 88, 118, 0xF6_BF26, None),
-            // Ueberschneidung mit dem 1:1 — zeigt die Konflikterkennung.
+            // Overlaps the one-to-one, which shows the conflict detection.
             event("Deployment-Fenster Produktion", 100, 175, 0xE6_7C73, None),
         ],
         tomorrow: vec![

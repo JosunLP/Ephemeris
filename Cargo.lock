@@ -734,7 +734,7 @@ dependencies = [
 
 [[package]]
 name = "tpmplaner"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -750,7 +750,7 @@ dependencies = [
 
 [[package]]
 name = "tpmplaner-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "base64 0.23.1",
  "chrono",

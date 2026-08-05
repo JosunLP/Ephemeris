@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 TPMPlaner contributors
-//! Domaenenmodell des Widgets: das, was tatsaechlich gezeichnet wird.
+//! The widget's domain model: what actually gets drawn.
 //!
-//! Bewusst entkoppelt von den Google-JSON-Strukturen, damit der Renderer
-//! nichts ueber die API weiss und die Filter-/Sortierlogik testbar bleibt.
+//! Deliberately decoupled from any provider's JSON shapes, so the renderer
+//! knows nothing about an API and the filtering and sorting stay testable.
 
 use chrono::{DateTime, Local, NaiveDate, NaiveTime};
 use serde::{Deserialize, Serialize};
@@ -17,22 +17,22 @@ pub struct Event {
     pub end: Option<DateTime<Local>>,
     pub all_day: bool,
     pub location: Option<String>,
-    /// Link in den Kalender, wird beim Klick geoeffnet.
+    /// Link into the web calendar, opened on click.
     pub html_link: Option<String>,
     /// Beitrittslink einer Online-Besprechung (Teams, Meet, Zoom).
     ///
-    /// Bei einer laufenden Besprechung ist "beitreten" die eigentlich
-    /// gewuenschte Aktion — ein Klick auf die Zeile nimmt deshalb diesen Link,
-    /// wenn es einen gibt, und faellt sonst auf `html_link` zurueck.
+    /// For a meeting that is running, "join" is the action actually wanted,
+    /// so a click on the row takes this link when there is one and falls back
+    /// to `html_link` otherwise.
     #[serde(default)]
     pub join_url: Option<String>,
-    /// Farbe des Quellkalenders als 0xRRGGBB.
+    /// Colour of the source calendar as `0xRRGGBB`.
     pub color: u32,
     pub calendar_name: String,
 }
 
 impl Event {
-    /// Laeuft der Termin gerade?
+    /// Is the event running right now?
     pub fn is_now(&self, now: DateTime<Local>) -> bool {
         match (self.start, self.end) {
             (Some(s), Some(e)) => s <= now && now < e,
@@ -41,7 +41,7 @@ impl Event {
         }
     }
 
-    /// Ist der Termin bereits vorbei? Ganztagestermine nie.
+    /// Is the event already over? Never true for all-day events.
     pub fn is_past(&self, now: DateTime<Local>) -> bool {
         if self.all_day {
             return false;
@@ -52,7 +52,7 @@ impl Event {
         }
     }
 
-    /// Sortierschluessel: Ganztagestermine zuerst, danach nach Startzeit.
+    /// Sort key: all-day events first, then by start time.
     fn sort_key(&self) -> (u8, i64) {
         if self.all_day {
             (0, 0)
@@ -65,22 +65,22 @@ impl Event {
 /// Eine Aufgabe aus Google Tasks.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
-    /// Fuer das Abhaken via API benoetigt.
+    /// Needed to complete the task through the API.
     pub id: String,
     pub tasklist_id: String,
     pub title: String,
-    /// Reines Kalenderdatum. Siehe [`parse_task_due`] fuer den Grund.
+    /// A plain calendar date. See [`parse_task_due`] for why.
     pub due: Option<NaiveDate>,
     pub notes: Option<String>,
-    /// Verschachtelungstiefe (Unteraufgaben werden eingerueckt).
+    /// Nesting depth; subtasks are indented by it.
     pub depth: u8,
     pub tasklist_name: String,
     /// Which account this came from. Needed to route the completion call back
     /// to the right provider when several accounts are configured.
     #[serde(default)]
     pub account_id: String,
-    /// Lokal gesetzt, solange das Abhaken noch zum Server unterwegs ist.
-    /// Rein transient, gehoert nicht in den Cache.
+    /// Set locally while the completion is still on its way to the server.
+    /// Purely transient and has no business in the cache.
     #[serde(skip)]
     pub completing: bool,
 }
@@ -97,36 +97,35 @@ impl Task {
 pub struct Agenda {
     pub day: Option<NaiveDate>,
     pub events: Vec<Event>,
-    /// Termine von morgen. Ab dem spaeten Nachmittag ist die Liste fuer heute
-    /// leer und das Widget waere sonst eine leere Flaeche — dabei ist genau
-    /// dann die Frage "was kommt morgen als Erstes?" die interessante.
+    /// Tomorrow's events. From late afternoon on, today's list is empty and
+    /// the widget would otherwise be a blank panel — which is exactly when
+    /// "what is first tomorrow?" becomes the interesting question.
     pub tomorrow: Vec<Event>,
     pub tasks: Vec<Task>,
     pub fetched_at: Option<DateTime<Local>>,
-    /// Fehlertext des letzten Versuchs; die alten Daten bleiben sichtbar.
-    /// Wird nicht gecacht — beim Start gilt zunaechst "unbekannt".
+    /// Error text of the last attempt; the previous data stays visible.
+    /// Not cached — at start-up the state is simply "unknown".
     #[serde(skip)]
     pub last_error: Option<String>,
 }
 
-/// Google Tasks liefert `due` als RFC-3339-Zeitstempel, aber die Uhrzeit ist
-/// **bedeutungslos** — die API normalisiert jedes Faelligkeitsdatum auf
-/// `YYYY-MM-DDT00:00:00.000Z`. Wer den Wert als echten UTC-Zeitpunkt parst und
-/// in die lokale Zone konvertiert, landet in jeder Zone oestlich von UTC einen
-/// Tag zu frueh (in UTC-Zonen einen Tag zu spaet).
+/// Google Tasks and Microsoft To Do both return `due` as an RFC 3339
+/// timestamp, but the time of day is **meaningless**: the API normalises every
+/// due date to `YYYY-MM-DDT00:00:00.000Z`. Parsing that as a real UTC instant
+/// and converting it to the local zone lands a day early in every zone east of
+/// UTC — "due today" silently becomes "due yesterday".
 ///
-/// Deshalb: ausschliesslich die ersten zehn Zeichen auswerten, niemals
-/// zeitzonenkonvertieren.
+/// Hence: read the first ten characters only, and never convert time zones.
 pub fn parse_task_due(raw: &str) -> Option<NaiveDate> {
     let date_part = raw.get(..10)?;
     NaiveDate::parse_from_str(date_part, "%Y-%m-%d").ok()
 }
 
-/// Behaelt Aufgaben, die **heute oder frueher** faellig sind.
+/// Keeps the tasks due **today or earlier**.
 ///
-/// Aufgaben ohne Faelligkeitsdatum fliegen raus (Konfiguration: `show_undated`),
-/// ebenso alles, was erst in Zukunft faellig wird — das war die urspruengliche
-/// Beschwerde: Google Tasks liefert per Default die komplette Liste.
+/// Tasks without a due date drop out unless `show_undated` says otherwise, and
+/// so does everything only due in the future — which was the original
+/// complaint: the task APIs return the whole list by default.
 pub fn filter_tasks_for_today(tasks: Vec<Task>, today: NaiveDate, show_undated: bool) -> Vec<Task> {
     tasks
         .into_iter()
@@ -137,9 +136,8 @@ pub fn filter_tasks_for_today(tasks: Vec<Task>, today: NaiveDate, show_undated: 
         .collect()
 }
 
-/// Sortierung: zuerst nach Faelligkeit (aelteste zuerst, undatiert ans Ende),
-/// bei Gleichstand alphabetisch, damit die Reihenfolge zwischen zwei Syncs
-/// stabil bleibt und nicht springt.
+/// Sorted by due date, oldest first, undated last; ties broken alphabetically
+/// so the order stays stable between two syncs instead of jumping around.
 pub fn sort_tasks(tasks: &mut [Task]) {
     tasks.sort_by(|a, b| {
         let ka = a.due.map(|d| (0u8, d)).unwrap_or((1, NaiveDate::MAX));
@@ -153,14 +151,15 @@ pub fn sort_events(events: &mut [Event]) {
     events.sort_by_key(|e| e.sort_key());
 }
 
-/// Markiert Termine, die sich zeitlich mit einem anderen ueberschneiden.
+/// Flags events that overlap another one in time.
 ///
-/// Doppelbuchungen sind beim Ueberfliegen einer Liste kaum zu erkennen — man
-/// muesste Ende und Anfang zweier Zeilen im Kopf vergleichen. Das Ergebnis
-/// steht deshalb in der Abschnittszeile und faerbt die betroffenen Uhrzeiten.
+/// Double bookings are near impossible to spot while skimming a list — it
+/// means comparing the end of one row against the start of another in your
+/// head. The result therefore appears in the section header and tints the
+/// affected times.
 ///
-/// Ganztagestermine zaehlen nicht mit: sie ueberschneiden sich definitionsgemaess
-/// mit allem und waeren als Warnung wertlos.
+/// All-day events do not count: they overlap everything by definition and
+/// would be worthless as a warning.
 pub fn mark_overlaps(events: &[Event]) -> Vec<bool> {
     let mut flags = vec![false; events.len()];
     for i in 0..events.len() {
@@ -181,20 +180,20 @@ fn overlaps(a: &Event, b: &Event) -> bool {
     let (Some(a_start), Some(b_start)) = (a.start, b.start) else {
         return false;
     };
-    // Ohne Endzeit gilt die Google-Vorgabe von einer Stunde, wie auch in
+    // Without an end time the one hour default applies, as in
     // `Event::is_now`.
     let a_end = a.end.unwrap_or(a_start + chrono::Duration::hours(1));
     let b_end = b.end.unwrap_or(b_start + chrono::Duration::hours(1));
-    // Beruehrung an der Grenze ist keine Ueberschneidung: 09:00–10:00 und
-    // 10:00–11:00 sind zwei aufeinanderfolgende Termine, kein Konflikt.
+    // Touching at the boundary is not an overlap: 09:00-10:00 and 10:00-11:00
+    // are two consecutive meetings, not a conflict.
     a_start < b_end && b_start < a_end
 }
 
-/// Beginn des lokalen Tages als `DateTime<Local>`.
+/// Start of the local day as a `DateTime<Local>`.
 ///
-/// An Tagen mit Zeitumstellung kann Mitternacht mehrdeutig oder nicht
-/// existent sein; wir nehmen dann den fruehesten gueltigen Zeitpunkt bzw.
-/// weichen auf 01:00 aus, statt zu panicken.
+/// On daylight saving transition days midnight can be ambiguous or simply not
+/// exist; this takes the earliest valid instant, or falls back to 01:00,
+/// rather than panicking.
 pub fn local_day_start(day: NaiveDate) -> DateTime<Local> {
     use chrono::TimeZone;
     let midnight = day.and_time(NaiveTime::MIN);
@@ -213,7 +212,7 @@ mod tests {
 
     #[test]
     fn due_date_is_not_timezone_shifted() {
-        // Genau der Fall, der bei naivem Parsen in UTC+2 auf den 3.8. rutscht.
+        // Exactly the case that slips to the 3rd when parsed naively in UTC+2.
         let d = parse_task_due("2026-08-04T00:00:00.000Z").unwrap();
         assert_eq!(d, NaiveDate::from_ymd_opt(2026, 8, 4).unwrap());
     }
@@ -280,7 +279,7 @@ mod tests {
 
     #[test]
     fn back_to_back_events_are_not_a_conflict() {
-        // 09:00-10:00 und 10:00-11:00 beruehren sich nur.
+        // 09:00-10:00 and 10:00-11:00 merely touch.
         let events = vec![timed("a", (9, 0), (10, 0)), timed("b", (10, 0), (11, 0))];
         assert_eq!(mark_overlaps(&events), vec![false, false]);
     }

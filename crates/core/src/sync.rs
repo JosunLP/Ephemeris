@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 TPMPlaner contributors
-//! Hintergrund-Sync in einem eigenen Thread.
+//! Background synchronisation on a thread of its own.
 //!
-//! Der UI-Thread besitzt die gesamte Zeitplanung (WM_TIMER) und schickt
-//! Befehle herein; dieser Thread fuehrt sie aus, schreibt das Ergebnis in den
-//! gemeinsamen Zustand und weckt das Fenster per `PostMessage`. Damit
-//! blockiert kein Netzwerkaufruf jemals das Zeichnen.
+//! The user interface owns all the scheduling and sends commands in; this
+//! thread carries them out, writes the result into the shared state and wakes
+//! the interface through a [`Waker`]. No network call ever blocks drawing.
 
 use crate::config::{self, Config};
 use crate::host::Waker;
@@ -22,9 +21,9 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-/// Kalender- und Aufgabenlistenverzeichnis aendern sich hoechstens ein paarmal
-/// im Jahr. Sie bei jedem Lauf neu zu holen kostet zwei von rund zehn
-/// Anfragen pro Sync, ohne je etwas Neues zu liefern.
+/// Calendar and task list directories change a handful of times a year.
+/// Re-fetching them on every run costs two of roughly ten requests per sync
+/// and never returns anything new.
 const META_TTL: Duration = Duration::from_secs(6 * 60 * 60);
 
 /// Why the user interface is being woken.
@@ -44,35 +43,35 @@ pub enum Wake {
 pub enum Status {
     Idle,
     Syncing,
-    /// Einmalige Einrichtung noetig (client_secret.json).
+    /// One-time setup missing, such as a credentials file.
     NeedsSetup(String),
-    /// Anmeldung noetig oder abgelaufen.
+    /// Sign-in required or expired.
     NeedsLogin(String),
     Error(String),
 }
 
-/// Von UI- und Sync-Thread geteilter Zustand.
+/// State shared between the interface and the sync thread.
 pub struct Shared {
     pub agenda: Agenda,
     pub status: Status,
     pub config: Config,
     /// Syntaxfehler in `config.json`, falls vorhanden.
     pub config_error: Option<String>,
-    /// Verfuegbare Kalender als `(id, Name)` — Grundlage fuer die Auswahl im
-    /// Kontextmenue. Vorher musste man die IDs von Hand in die JSON eintragen.
+    /// Available calendars as `(id, name)`, the basis for picking them in the
+    /// context menu. Before this, the ids had to be typed into the settings
+    /// file by hand.
     pub calendars: Vec<(String, String)>,
     pub tasklists: Vec<(String, String)>,
     /// A newer release, once the daily check has found one.
     pub update: Option<crate::update::Available>,
 }
 
-/// Sperrt den geteilten Zustand und ueberlebt eine Vergiftung.
+/// Locks the shared state and survives poisoning.
 ///
-/// `Mutex::lock` liefert `Err`, sobald irgendein Thread waehrend des Haltens
-/// gepanickt ist — ab dann wuerde jedes `.unwrap()` die naechste Panik
-/// ausloesen und aus einem lokalen Fehler einen Totalausfall machen. Der
-/// Inhalt ist hier reine Anzeigedaten; im schlimmsten Fall ist ein Feld
-/// halb geschrieben, was der naechste Abgleich ohnehin korrigiert.
+/// `Mutex::lock` returns `Err` as soon as any thread panicked while holding
+/// it; from then on every `.unwrap()` would trigger the next panic and turn a
+/// local fault into a total failure. The content here is display data only —
+/// at worst a field is half written, which the next sync corrects anyway.
 pub fn lock(shared: &Mutex<Shared>) -> MutexGuard<'_, Shared> {
     shared
         .lock()
@@ -179,7 +178,7 @@ impl CalendarProvider for BrokenProvider {
 }
 
 pub enum Command {
-    /// Regulaerer Abgleich (Timer, Aufwachen, manueller Klick).
+    /// A normal sync: timer, waking from standby, or a manual click.
     Sync,
     /// Complete a task; hidden optimistically before the call goes out.
     CompleteTask {
@@ -189,7 +188,7 @@ pub enum Command {
         tasklist_id: String,
         task_id: String,
     },
-    /// Zugang verwerfen und interaktiv neu anmelden.
+    /// Discard the stored credential and sign in again interactively.
     Relogin,
     Quit,
 }
@@ -327,7 +326,7 @@ fn same_accounts(providers: &[Box<dyn CalendarProvider>], wanted: &[AccountConfi
             .all(|(p, a)| p.account_id() == a.id)
 }
 
-/// Reicht das Kalender-/Listenverzeichnis an die Oberflaeche weiter.
+/// Passes the calendar and task list directory on to the interface.
 fn publish_sources(shared: &Arc<Mutex<Shared>>, meta: &Option<Meta>) {
     let Some(m) = meta else { return };
     let mut guard = lock(shared);
@@ -342,14 +341,13 @@ fn publish_sources(shared: &Arc<Mutex<Shared>>, meta: &Option<Meta>) {
     guard.tasklists = lists.into_iter().map(|l| (l.id, l.name)).collect();
 }
 
-/// Fasst aufgestaute Befehle zusammen.
+/// Collapses queued commands.
 ///
-/// Waehrend eines langen Laufs — die Browser-Anmeldung darf fuenf Minuten
-/// dauern — sammeln sich weitere Anforderungen im Kanal. Zehnmal
-/// hintereinander abzugleichen liefert zehnmal dasselbe Ergebnis und kostet
-/// nur API-Kontingent, deshalb bleibt von mehreren `Sync` genau einer uebrig.
-/// Erledigungen und Neuanmeldungen sind dagegen jede fuer sich bedeutsam und
-/// bleiben vollstaendig erhalten.
+/// During a long run — a browser sign-in may take five minutes — further
+/// requests pile up in the channel. Syncing ten times in a row returns the
+/// same result ten times and only spends API quota, so exactly one of several
+/// `Sync` commands survives. Completions and re-authorisations each matter in
+/// their own right and are kept in full.
 fn coalesce(first: Command, rx: &Receiver<Command>) -> Vec<Command> {
     let mut batch = vec![first];
     while let Ok(next) = rx.try_recv() {
@@ -504,11 +502,12 @@ fn apply_sync_result(
                 guard.status = Status::Idle;
             }
             Err(e) => {
-                // Der volle Text passt nicht in die Statuszeile — ins
-                // Protokoll gehoert er trotzdem.
+                // The full text does not fit the status line, but it still
+                // belongs in the log.
                 log::error(&format!("Sync fehlgeschlagen: {e}"));
-                // Bewusst *keine* Daten verwerfen: ein WLAN-Aussetzer soll das
-                // Widget nicht leerraeumen, nur die Statuszeile faerben.
+                // Deliberately discard *no* data: a dropped wireless
+                // connection should tint the status line, not empty the
+                // widget.
                 guard.status = status_for(&e);
                 guard.agenda.last_error = Some(e.to_string());
             }
@@ -536,13 +535,13 @@ fn notify(waker: &Arc<dyn Waker>) {
 
 // --- Cache -----------------------------------------------------------------
 //
-// Damit beim Start sofort etwas dasteht statt einer leeren Flaeche, bis der
-// erste Netzabruf durch ist.
+// So something is on screen immediately at start-up rather than a blank
+// panel, until the first network round trip completes.
 
 pub fn read_cache() -> Option<Agenda> {
     let raw = std::fs::read_to_string(config::cache_path()).ok()?;
     let agenda: Agenda = serde_json::from_str(&raw).ok()?;
-    // Ein Stand von gestern ist wertlos und waere sogar irrefuehrend.
+    // Yesterday's state is worthless and would in fact be misleading.
     if agenda.day? != Local::now().date_naive() {
         return None;
     }

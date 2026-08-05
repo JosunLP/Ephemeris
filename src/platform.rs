@@ -22,7 +22,7 @@ const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const RUN_VALUE: &str = "TPMPlaner";
 const PERSONALIZE_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
 
-/// UTF-16 mit abschliessender Null, wie es die Win32-`*W`-Funktionen wollen.
+/// UTF-16 with a trailing null, as the Win32 `*W` functions expect.
 pub fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
@@ -42,7 +42,7 @@ pub fn open_in_browser(url: &str) {
     }
 }
 
-/// Oeffnet einen Pfad im zugeordneten Programm (Konfig-Datei, Datenordner).
+/// Opens a path in its associated program: the settings file, the data folder.
 pub fn open_path(path: &std::path::Path) {
     open_in_browser(&path.to_string_lossy());
 }
@@ -96,8 +96,8 @@ pub fn set_autostart(enabled: bool) {
         let name = wide(RUN_VALUE);
 
         if enabled {
-            // Pfad in Anfuehrungszeichen, sonst zerlegt Windows ihn an
-            // Leerzeichen ("C:\Program Files\...").
+            // Quote the path, or Windows splits it at spaces such as in
+            // "C:\Program Files\...".
             let exe = std::env::current_exe().unwrap_or_default();
             let quoted = format!("\"{}\"", exe.to_string_lossy());
             let value = wide(&quoted);
@@ -114,13 +114,13 @@ pub fn set_autostart(enabled: bool) {
     }
 }
 
-/// Liest einen DWORD-Wert unter HKEY_CURRENT_USER.
+/// Reads a DWORD value under HKEY_CURRENT_USER.
 fn read_dword(subkey: &str, value: &str) -> Option<u32> {
     unsafe {
         let mut key = HKEY::default();
         let sub = wide(subkey);
-        // `RegOpenKeyExW` liefert `WIN32_ERROR`, kein `Result` — `?` ist hier
-        // nicht anwendbar.
+        // `RegOpenKeyExW` returns a `WIN32_ERROR`, not a `Result`, so `?`
+        // does not apply here.
         if RegOpenKeyExW(
             HKEY_CURRENT_USER,
             PCWSTR(sub.as_ptr()),
@@ -151,19 +151,19 @@ fn read_dword(subkey: &str, value: &str) -> Option<u32> {
     }
 }
 
-/// Nutzt Windows gerade das helle App-Design?
+/// Is Windows currently using the light app appearance?
 ///
-/// `AppsUseLightTheme` ist der Wert, den auch die Systemanwendungen auswerten;
-/// `SystemUsesLightTheme` betrifft nur Taskleiste und Startmenue und waere
-/// hier das falsche Signal.
+/// `AppsUseLightTheme` is the value the system's own applications read;
+/// `SystemUsesLightTheme` only covers the taskbar and start menu and would be
+/// the wrong signal here.
 pub fn system_uses_light_theme() -> bool {
     read_dword(PERSONALIZE_KEY, "AppsUseLightTheme") == Some(1)
 }
 
-/// Systemakzentfarbe als `0xRRGGBB`.
+/// The system accent colour as `0xRRGGBB`.
 ///
-/// `DwmGetColorizationColor` liefert `0xAARRGGBB`; der Alphaanteil beschreibt
-/// die Glasmischung des Fensterrahmens und ist fuer uns bedeutungslos.
+/// `DwmGetColorizationColor` returns `0xAARRGGBB`; the alpha part describes
+/// the glass blend of the window frame and is meaningless here.
 pub fn system_accent() -> Option<u32> {
     unsafe {
         use windows::Win32::Graphics::Dwm::DwmGetColorizationColor;
@@ -233,26 +233,26 @@ fn client_area_animation() -> bool {
             SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
         )
         .is_ok();
-        // Im Zweifel animieren — der Schalter fehlt auf aelteren Systemen.
+        // Animate when in doubt: the switch is absent on older systems.
         !ok || enabled.as_bool()
     }
 }
 
-/// Eine Systemfarbe als `0xRRGGBB`.
+/// A system colour as `0xRRGGBB`.
 ///
-/// `GetSysColor` liefert ein COLORREF, also `0x00BBGGRR` — Rot und Blau sind
-/// gegenueber der hier ueblichen Schreibweise vertauscht.
+/// `GetSysColor` returns a COLORREF, that is `0x00BBGGRR` — red and blue are
+/// swapped relative to the notation used everywhere else here.
 pub fn sys_color(index: windows::Win32::Graphics::Gdi::SYS_COLOR_INDEX) -> u32 {
     let bgr = unsafe { windows::Win32::Graphics::Gdi::GetSysColor(index) };
     let (r, g, b) = (bgr & 0xFF, (bgr >> 8) & 0xFF, (bgr >> 16) & 0xFF);
     (r << 16) | (g << 8) | b
 }
 
-/// Legt Text als Unicode in die Zwischenablage.
+/// Puts text on the clipboard as Unicode.
 ///
-/// Damit laesst sich der Tagesplan in eine Mail, ein Ticket oder einen
-/// Vorleser uebernehmen — das Widget selbst ist als nicht aktivierbares
-/// Werkzeugfenster fuer Bildschirmleser praktisch unerreichbar.
+/// That is how the day's plan reaches an email, a ticket or a screen reader —
+/// the widget itself, being a non-activatable tool window, is practically
+/// unreachable for assistive technology.
 pub fn set_clipboard_text(text: &str) -> bool {
     use windows::Win32::Foundation::HANDLE;
     use windows::Win32::System::DataExchange::{
@@ -270,8 +270,8 @@ pub fn set_clipboard_text(text: &str) -> bool {
         }
         let result = (|| {
             EmptyClipboard().ok()?;
-            // Die Zwischenablage uebernimmt den Speicher; er darf deshalb
-            // nicht wieder freigegeben werden.
+            // The clipboard takes ownership of the memory, so it must not be
+            // freed here.
             let handle = GlobalAlloc(GHND, bytes).ok()?;
             let target = GlobalLock(handle);
             if target.is_null() {
@@ -287,10 +287,10 @@ pub fn set_clipboard_text(text: &str) -> bool {
     }
 }
 
-/// Zerlegt `"Win+Alt+K"` in Modifizierer und virtuellen Tastencode.
+/// Splits `"Win+Alt+K"` into modifiers and a virtual key code.
 ///
-/// Bewusst genuegsam: Buchstaben, Ziffern und F1-F12 decken ab, was jemand
-/// realistisch als Kurzbefehl waehlt.
+/// Deliberately frugal: letters, digits and F1 to F12 cover what anyone
+/// realistically picks as a shortcut.
 pub fn parse_hotkey(spec: &str) -> Option<(u32, u32)> {
     use windows::Win32::UI::Input::KeyboardAndMouse::{MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN};
     let mut modifiers = 0u32;
@@ -305,11 +305,11 @@ pub fn parse_hotkey(spec: &str) -> Option<(u32, u32)> {
             other => {
                 let bytes = other.as_bytes();
                 key = if bytes.len() == 1 && bytes[0].is_ascii_alphanumeric() {
-                    // Virtuelle Tastencodes fuer A-Z und 0-9 entsprechen den
-                    // ASCII-Werten der Grossbuchstaben bzw. Ziffern.
+                    // The virtual key codes for A-Z and 0-9 are the ASCII
+                    // values of the upper case letters and digits.
                     Some(bytes[0].to_ascii_uppercase() as u32)
                 } else if let Some(number) = other.strip_prefix('f') {
-                    // F1 bis F12 liegen ab VK_F1 (0x70) fortlaufend.
+                    // F1 to F12 run consecutively from VK_F1 (0x70).
                     number
                         .parse::<u32>()
                         .ok()
@@ -321,8 +321,8 @@ pub fn parse_hotkey(spec: &str) -> Option<(u32, u32)> {
             }
         }
     }
-    // Ohne Modifizierer waere es eine globale Einzeltaste — die wuerde sie
-    // jeder anderen Anwendung wegnehmen.
+    // Without a modifier this would be a global single key, taken away from
+    // every other application.
     match (modifiers, key) {
         (0, _) => None,
         (_, Some(k)) => Some((modifiers, k)),
@@ -330,49 +330,49 @@ pub fn parse_hotkey(spec: &str) -> Option<(u32, u32)> {
     }
 }
 
-/// Belegt die Einzelinstanz-Sperre. `false` = es laeuft bereits ein Widget.
+/// Takes the single instance lock. `false` means a widget is already running.
 ///
-/// Ohne diese Sperre legt ein zweiter Start ein deckungsgleiches Fenster auf
-/// das erste — beide zeichnen, beide synchronisieren, und der Benutzer sieht
-/// nur, dass Klicks scheinbar ins Leere gehen.
+/// Without it a second start puts an identical window on top of the first —
+/// both draw, both synchronise, and all the user sees is clicks apparently
+/// going nowhere.
 pub fn acquire_single_instance() -> bool {
     unsafe {
-        // "Local\" = pro Anmeldesitzung. Auf einem Terminalserver darf jeder
-        // Benutzer sein eigenes Widget haben.
+        // "Local\" scopes the lock to the logon session, so every user of a
+        // terminal server may have their own widget.
         let name = wide(r"Local\TPMPlaner.SingleInstance");
         match CreateMutexW(None, true, PCWSTR(name.as_ptr())) {
             Ok(handle) => {
                 if GetLastError() == ERROR_ALREADY_EXISTS {
                     return false;
                 }
-                // Absichtlich nicht geschlossen: die Sperre soll exakt so lange
-                // gelten wie der Prozess lebt. `HANDLE` ist ein reiner
-                // Zahlenwert ohne Drop-Verhalten, das Fallenlassen der
-                // Variable schliesst also nichts.
+                // Deliberately not closed: the lock should last exactly as
+                // long as the process. `HANDLE` is a plain numeric value with
+                // no drop behaviour, so letting the variable go closes
+                // nothing.
                 let _ = handle;
                 true
             }
-            // Im Zweifel starten — lieber zwei Fenster als gar keines.
+            // Start when in doubt: two windows beat none at all.
             Err(_) => true,
         }
     }
 }
 
-/// Liegt das Fenster noch auf einem angeschlossenen Monitor?
+/// Is the window still on a connected monitor?
 ///
-/// Wird der Monitor abgezogen, auf dem das Widget stand, bleibt die
-/// gespeicherte Position in einem Bereich, den es nicht mehr gibt — das Widget
-/// waere unsichtbar und ohne Registry-Eingriff nicht zurueckzuholen.
+/// Unplug the monitor the widget sat on and the stored position points into an
+/// area that no longer exists — the widget would be invisible and
+/// unrecoverable without editing the settings by hand.
 pub fn is_on_screen(r: &RECT) -> bool {
     unsafe { MonitorFromRect(r, MONITOR_DEFAULTTONULL) != HMONITOR::default() }
 }
 
-/// Arbeitsbereich des Primaermonitors (ohne Taskleiste).
+/// Work area of the primary monitor, excluding the taskbar.
 pub fn primary_work_area() -> Option<RECT> {
     unsafe {
         use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTOPRIMARY};
-        // Ein entartetes Rechteck am Ursprung landet zuverlaessig auf dem
-        // Primaermonitor.
+        // A degenerate rectangle at the origin reliably lands on the primary
+        // monitor.
         let origin = RECT {
             left: 0,
             top: 0,
@@ -390,13 +390,12 @@ pub fn primary_work_area() -> Option<RECT> {
     }
 }
 
-/// Gibt nach dem Start und nach jedem Sync die inzwischen unbenutzten Seiten
-/// ans Betriebssystem zurueck.
+/// Returns pages that have fallen out of use to the operating system, after
+/// start-up and after every sync.
 ///
-/// Ein Sync alloziert kurzzeitig ein paar hundert Kilobyte fuer JSON und
-/// TLS-Puffer; ohne diesen Hinweis bleibt der Peak fuer den Rest des Tages im
-/// Working Set stehen. `(usize::MAX, usize::MAX)` ist der dokumentierte
-/// Sonderwert dafuer.
+/// A sync briefly allocates a few hundred kilobytes for JSON and TLS buffers;
+/// without this hint the peak stays in the working set for the rest of the
+/// day. `(usize::MAX, usize::MAX)` is the documented special value for it.
 pub fn trim_working_set() {
     unsafe {
         let _ = SetProcessWorkingSetSize(GetCurrentProcess(), usize::MAX, usize::MAX);
@@ -407,7 +406,7 @@ pub fn trim_working_set() {
 mod tests {
     use super::parse_hotkey;
 
-    /// Virtuelle Tastencodes: 'K' = 0x4B, F5 = 0x74.
+    /// Virtual key codes: 'K' is 0x4B, F5 is 0x74.
     #[test]
     fn common_combinations_parse() {
         let (m, k) = parse_hotkey("Win+Alt+K").unwrap();
@@ -429,8 +428,8 @@ mod tests {
 
     #[test]
     fn a_bare_key_is_rejected() {
-        // Ohne Modifizierer wuerde die Taste global belegt und stuende keiner
-        // anderen Anwendung mehr zur Verfuegung.
+        // Without a modifier the key would be claimed globally and no longer
+        // available to any other application.
         assert_eq!(parse_hotkey("K"), None);
         assert_eq!(parse_hotkey("F5"), None);
     }

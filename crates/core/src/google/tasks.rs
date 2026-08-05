@@ -2,13 +2,13 @@
 // Copyright (C) 2026 TPMPlaner contributors
 //! Google Tasks API v1.
 //!
-//! Zwei Eigenheiten der API, die das Widget beruecksichtigen muss:
+//! Two quirks of this API the widget has to allow for:
 //!
-//! 1. `due` ist faktisch ein reines Datum — die Uhrzeit wird serverseitig auf
-//!    `T00:00:00.000Z` normalisiert. Siehe [`crate::model::parse_task_due`].
-//! 2. Sobald `dueMin`/`dueMax` gesetzt sind, verschwinden Aufgaben **ohne**
-//!    Faelligkeitsdatum komplett aus der Antwort. Wer sie sehen will, muss
-//!    ungefiltert abfragen und clientseitig aussieben.
+//! 1. `due` is effectively a plain date — the time is normalised server side
+//!    to `T00:00:00.000Z`. See [`crate::model::parse_task_due`].
+//! 2. As soon as `dueMin` or `dueMax` is set, tasks **without** a due date
+//!    vanish from the response entirely. Seeing them means querying unfiltered
+//!    and sieving on the client.
 
 use super::auth::Auth;
 use super::{Result, agent, api_error, urlencode};
@@ -87,18 +87,18 @@ pub fn list_tasklists(auth: &mut Auth) -> Result<Vec<TaskListRef>> {
 
 /// Offene Aufgaben einer Liste.
 ///
-/// Ist `include_undated` aus, filtert bereits der Server via `dueMax` — dann
-/// gehen die "erst in drei Wochen faellig"-Aufgaben gar nicht erst ueber die
-/// Leitung. Andernfalls muss ungefiltert geladen werden (siehe Modulkommentar).
+/// With `include_undated` off the server filters through `dueMax`, so the
+/// "not due for three weeks" tasks never go over the wire at all. Otherwise
+/// everything has to be fetched; see the module comment.
 pub fn list_tasks(
     auth: &mut Auth,
     list: &TaskListRef,
     today: NaiveDate,
     include_undated: bool,
 ) -> Result<Vec<Task>> {
-    // Obergrenze bewusst als 23:59:59 desselben Tages: liegt zwischen der
-    // heutigen und der morgigen Mitternacht und funktioniert damit unabhaengig
-    // davon, ob Google die Grenze inklusiv oder exklusiv auswertet.
+    // The upper bound is deliberately 23:59:59 of the same day: it sits
+    // between today's and tomorrow's midnight and therefore works whether
+    // Google treats the bound as inclusive or exclusive.
     let due_max = format!("{}T23:59:59.999Z", today.format("%Y-%m-%d"));
 
     let mut raw: Vec<TaskEntry> = Vec::new();
@@ -127,8 +127,8 @@ pub fn list_tasks(
         }
     }
 
-    // Tiefe aus der parent-Kette bestimmen, bevor gefiltert wird — sonst
-    // verliert eine Unteraufgabe ihren Elternbezug.
+    // Work out the depth from the parent chain before filtering, or a
+    // subtask loses its parent.
     let by_id: HashMap<&str, &TaskEntry> = raw.iter().map(|t| (t.id.as_str(), t)).collect();
 
     let tasks = raw
@@ -158,7 +158,7 @@ pub fn list_tasks(
     Ok(tasks)
 }
 
-/// Verschachtelungstiefe, gegen Zyklen abgesichert und auf 3 Ebenen begrenzt.
+/// Nesting depth, guarded against cycles and capped at three levels.
 fn depth_of(entry: &TaskEntry, by_id: &HashMap<&str, &TaskEntry>) -> u8 {
     let mut depth = 0u8;
     let mut cursor = entry.parent.as_deref();
@@ -172,7 +172,7 @@ fn depth_of(entry: &TaskEntry, by_id: &HashMap<&str, &TaskEntry>) -> u8 {
     depth
 }
 
-/// Hakt eine Aufgabe ab. Braucht den vollen `tasks`-Scope.
+/// Completes a task. Requires the full `tasks` scope.
 pub fn complete_task(auth: &mut Auth, tasklist_id: &str, task_id: &str) -> Result<()> {
     let url = format!(
         "{BASE}/lists/{}/tasks/{}",

@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 TPMPlaner contributors
-//! Windows-DPAPI-Wrapper fuer den Refresh-Token.
+//! Windows DPAPI wrapper for stored credentials.
 //!
-//! Der Token ist ein Dauerzugang zum Google-Konto und hat als Klartext auf der
-//! Platte nichts verloren. `CryptProtectData` bindet ihn an das Windows-
-//! Benutzerkonto: ein anderer Benutzer desselben Rechners kann ihn nicht lesen,
-//! und kopiert man die Datei auf eine andere Maschine, ist sie wertlos.
+//! A refresh token is standing access to a calendar account and has no
+//! business sitting on disk in plain text. `CryptProtectData` ties it to the
+//! Windows user account: another user of the same machine cannot read it, and
+//! copying the file to a different machine makes it worthless.
 
 use windows::Win32::Foundation::{HLOCAL, LocalFree};
 use windows::Win32::Security::Cryptography::{
@@ -32,8 +32,7 @@ fn blob(data: &[u8]) -> CRYPT_INTEGER_BLOB {
     }
 }
 
-/// Kopiert das Ergebnis-Blob heraus und gibt den von DPAPI allozierten
-/// Speicher wieder frei.
+/// Copies the result blob out and releases the memory DPAPI allocated.
 unsafe fn take_blob(out: CRYPT_INTEGER_BLOB) -> Vec<u8> {
     if out.pbData.is_null() {
         return Vec::new();
@@ -76,14 +75,14 @@ pub fn unprotect(cipher: &[u8], tag: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
-/// Kryptographisch sichere Zufallsbytes fuer PKCE-Verifier und State.
+/// Cryptographically secure random bytes for PKCE verifiers and OAuth state.
 ///
-/// Nutzt den System-RNG direkt, statt eine RNG-Crate mitzuschleppen.
+/// Uses the system generator directly rather than carrying an RNG crate.
 pub fn random_bytes(len: usize) -> Vec<u8> {
     let mut buf = vec![0u8; len];
     unsafe {
         let status = BCryptGenRandom(None, &mut buf, BCRYPT_USE_SYSTEM_PREFERRED_RNG);
-        assert!(status.is_ok(), "BCryptGenRandom fehlgeschlagen");
+        assert!(status.is_ok(), "BCryptGenRandom failed");
     }
     buf
 }

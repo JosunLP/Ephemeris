@@ -21,22 +21,22 @@
 use crate::host::locale_backend;
 use chrono::{DateTime, Datelike, Local, NaiveDate, Timelike};
 
-/// Alle Zeichenketten der Oberflaeche.
+/// Every string in the interface.
 ///
-/// Bewusst ein Struct mit benannten Feldern statt einer Nachschlagetabelle:
-/// eine vergessene Uebersetzung ist damit ein Kompilierfehler, kein zur
-/// Laufzeit fehlender Schluessel.
+/// Deliberately a struct with named fields rather than a lookup table: a
+/// forgotten translation is then a compile error, not a key missing at
+/// runtime.
 pub struct Catalog {
     pub code: &'static str,
-    /// Ist die Sprache selbst rechts-nach-links geschrieben?
+    /// Is the language itself written right to left?
     ///
-    /// Nicht dasselbe wie die Leserichtung des Gebietsschemas: laeuft das
-    /// Widget unter `ar-SA`, ist das *Layout* gespiegelt, die Texte kommen
-    /// aber mangels arabischem Katalog auf Englisch — also lateinisch und
-    /// links-nach-rechts. Beides muss getrennt behandelt werden.
+    /// Not the same as the locale's reading direction: running under `ar-SA`
+    /// mirrors the *layout*, but for want of an Arabic catalogue the text
+    /// arrives in English — Latin script, left to right. The two have to be
+    /// handled separately.
     pub rtl: bool,
 
-    // Abschnitte und Listen
+    // Sections and lists
     pub section_events: &'static str,
     pub section_tasks: &'static str,
     pub no_events: &'static str,
@@ -49,12 +49,12 @@ pub struct Catalog {
     pub conflict_one: &'static str,
     pub conflict_many: &'static str,
 
-    // Hervorgehobener Termin
+    // Highlighted event
     pub now_label: &'static str,
     pub next_label: &'static str,
     pub running: &'static str,
 
-    // Relative Zeiten. `{}` steht fuer die Menge samt Einheit.
+    // Relative times. `{}` stands for the amount including its unit.
     pub in_pattern: &'static str,
     pub ago_pattern: &'static str,
     pub left_pattern: &'static str,
@@ -63,12 +63,12 @@ pub struct Catalog {
     pub unit_hour: &'static str,
     pub unit_day: &'static str,
 
-    // Aufgaben
+    // Tasks
     pub undo: &'static str,
     pub overdue_one: &'static str,
     pub overdue_many: &'static str,
 
-    // Statuszeile
+    // Status line
     pub syncing: &'static str,
     pub updated_next: &'static str,
     pub not_synced: &'static str,
@@ -76,7 +76,7 @@ pub struct Catalog {
     pub connect_google: &'static str,
     pub config_broken: &'static str,
 
-    // Kontextmenue
+    // Context menu
     pub menu_sync: &'static str,
     pub menu_autostart: &'static str,
     pub menu_config: &'static str,
@@ -92,7 +92,7 @@ pub struct Catalog {
     pub menu_relogin: &'static str,
     pub menu_quit: &'static str,
 
-    // Anmeldung und Fehler
+    // Sign-in and errors
     pub auth_connected_title: &'static str,
     pub auth_connected_body: &'static str,
     pub auth_cancelled_title: &'static str,
@@ -390,11 +390,11 @@ pub const IT: Catalog = Catalog {
     fatal_start: "Impossibile avviare TPMPlaner.",
 };
 
-/// Katalog anhand des primaeren Sprach-Subtags.
+/// Picks a catalogue from the primary language subtag.
 ///
-/// Regionale Varianten teilen sich einen Katalog: `de-AT` und `de-CH`
-/// bekommen `DE`. Datum und Uhrzeit unterscheiden sich trotzdem korrekt, weil
-/// die vom Betriebssystem kommen und nicht von hier.
+/// Regional variants share one catalogue: `de-AT` and `de-CH` both get `DE`.
+/// Dates and times still differ correctly, because those come from the
+/// operating system and not from here.
 pub fn catalog_for(tag: &str) -> &'static Catalog {
     match tag
         .split(['-', '_'])
@@ -411,11 +411,12 @@ pub fn catalog_for(tag: &str) -> &'static Catalog {
     }
 }
 
-/// Katalog fuer Code, der keinen Zugriff auf die [`Locale`] des Fensters hat.
+/// Catalogue for code that has no access to the window's [`Locale`].
 ///
-/// Betrifft den Sync-Thread (OAuth-Meldungen, Anmeldeseite im Browser) und den
-/// Notausgang in `main`. Ein `RwLock` statt `OnceLock`, weil die Sprache ueber
-/// die Konfiguration im Betrieb wechseln kann.
+/// That means the sync thread — OAuth messages, the sign-in page shown in the
+/// browser — and the emergency exit in `main`. An `RwLock` rather than a
+/// `OnceLock`, because the language can change through the configuration while
+/// running.
 static GLOBAL: std::sync::RwLock<&'static Catalog> = std::sync::RwLock::new(&EN);
 
 pub fn set_global(cat: &'static Catalog) {
@@ -424,8 +425,8 @@ pub fn set_global(cat: &'static Catalog) {
     }
 }
 
-/// Aktueller Katalog. Faellt bei vergifteter Sperre auf Englisch zurueck —
-/// eine fehlende Uebersetzung darf keine Anmeldung verhindern.
+/// The current catalogue. Falls back to English on a poisoned lock: a missing
+/// translation must never prevent a sign-in.
 pub fn global() -> &'static Catalog {
     GLOBAL.read().map(|g| *g).unwrap_or(&EN)
 }
@@ -485,20 +486,19 @@ impl Locale {
             .unwrap_or_else(|| format!("{:02}.{:02}.", d.day(), d.month()))
     }
 
-    /// Isoliert lateinischen Text in einem gespiegelten Layout.
+    /// Isolates Latin text inside a mirrored layout.
     ///
-    /// Ohne diese Klammer wendet der Unicode-Bidi-Algorithmus die Absatz-
-    /// richtung auf die schwachen Zeichen am Rand an: aus "32 min left" wird
-    /// sichtbar "min left 32", weil die fuehrende Ziffer als schwach
-    /// links-nach-rechts gilt und ans andere Ende rutscht.
+    /// Without this bracket the Unicode bidi algorithm applies the paragraph
+    /// direction to the weak characters at the edges: "32 min left" visibly
+    /// becomes "min left 32", because the leading digit counts as weakly
+    /// left-to-right and slides to the other end.
     ///
-    /// Verwendet werden `U+202A LEFT-TO-RIGHT EMBEDDING` und
-    /// `U+202C POP DIRECTIONAL FORMATTING`. Die neueren Isolate (`U+2066` /
-    /// `U+2069`, Unicode 6.3) werden von DirectWrite nicht ausgewertet — mit
-    /// ihnen blieb die Umsortierung bestehen.
+    /// Uses `U+202A LEFT-TO-RIGHT EMBEDDING` and `U+202C POP DIRECTIONAL
+    /// FORMATTING`. The newer isolates (`U+2066` / `U+2069`, Unicode 6.3) are
+    /// not honoured by DirectWrite — with them the reordering persisted.
     ///
-    /// Nutzerdaten (Termintitel, Aufgabennamen) bleiben bewusst unangetastet —
-    /// die koennen sehr wohl arabisch sein und muessen frei laufen duerfen.
+    /// User data such as event titles and task names is deliberately left
+    /// alone: it may well be Arabic and has to run freely.
     fn iso(&self, s: String) -> String {
         if self.rtl && !self.cat.rtl {
             format!("\u{202A}{s}\u{202C}")
@@ -507,16 +507,15 @@ impl Locale {
         }
     }
 
-    /// Feste Katalogbeschriftung, fuer die Anzeige aufbereitet.
+    /// A fixed catalogue label, prepared for display.
     pub fn label(&self, s: &str) -> String {
         self.iso(s.to_string())
     }
 
     /// Menschenlesbarer Abstand: "in 25 min", "2 hr 10 ago", "encore 5 min".
     ///
-    /// Bewusst grob gerundet und mit abgekuerzten Einheiten — das umgeht
-    /// zugleich die Pluralregeln, die sonst je Sprache eigene Formen
-    /// braeuchten.
+    /// Deliberately coarse, with abbreviated units — which also sidesteps the
+    /// plural rules that would otherwise need their own forms per language.
     pub fn relative(&self, minutes: i64) -> String {
         let c = self.cat;
         if minutes.abs() < 1 {
@@ -536,7 +535,7 @@ impl Locale {
         self.iso(self.cat.left_pattern.replacen("{}", &body, 1))
     }
 
-    /// Reine Mengenangabe ohne Richtungswort, noch ohne Bidi-Klammer.
+    /// The bare amount without a direction word, and without the bidi bracket.
     fn duration_raw(&self, minutes: i64) -> String {
         let c = self.cat;
         let m = minutes.max(0);

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 TPMPlaner contributors
-//! Google Calendar API v3 — nur die Termine des laufenden Tages.
+//! Google Calendar API v3.
 
 use super::auth::Auth;
 use super::{Result, agent, api_error, urlencode};
@@ -31,7 +31,7 @@ struct CalendarListEntry {
     summary: String,
     #[serde(default)]
     background_color: Option<String>,
-    /// Im Google-Web-UI abgewaehlte Kalender wollen wir auch hier nicht sehen.
+    /// Calendars deselected in the Google web interface stay hidden here too.
     #[serde(default)]
     selected: Option<bool>,
 }
@@ -67,10 +67,10 @@ struct EventEntry {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct EventTime {
-    /// Zeitgebundener Termin, RFC 3339 mit Offset.
+    /// A timed event, RFC 3339 with an offset.
     #[serde(default)]
     date_time: Option<String>,
-    /// Ganztaegig: reines Datum, **keine** Zeitzonenkonvertierung.
+    /// All day: a plain date, with **no** time zone conversion.
     #[serde(default)]
     date: Option<String>,
 }
@@ -84,7 +84,7 @@ struct Attendee {
     response_status: Option<String>,
 }
 
-/// Alle lesbaren, im Web-UI aktivierten Kalender des Kontos.
+/// Every readable calendar of the account that is enabled in the web UI.
 pub fn list_calendars(auth: &mut Auth) -> Result<Vec<CalendarRef>> {
     let url = format!(
         "{BASE}/users/me/calendarList?minAccessRole=reader&maxResults=250\
@@ -109,10 +109,10 @@ pub fn list_calendars(auth: &mut Auth) -> Result<Vec<CalendarRef>> {
         .collect())
 }
 
-/// Termine eines Kalenders im Fenster `[from, to)`.
+/// Events of one calendar in the window `[from, to)`.
 ///
-/// `singleEvents=true` ist entscheidend: ohne das liefert die API bei
-/// Serienterminen die Wiederholungsregel statt der konkreten Instanz von heute.
+/// `singleEvents=true` is the crucial part: without it the API returns the
+/// recurrence rule for a series rather than today's concrete occurrence.
 pub fn list_events(
     auth: &mut Auth,
     cal: &CalendarRef,
@@ -180,7 +180,7 @@ pub fn list_events(
     Ok(events)
 }
 
-/// `dateTime` -> lokale Zeit; `date` -> Ganztagestermin ohne Zeitpunkt.
+/// `dateTime` becomes a local time; `date` becomes an all-day event.
 fn convert_time(t: Option<&EventTime>) -> (Option<DateTime<Local>>, bool) {
     let Some(t) = t else {
         return (None, false);

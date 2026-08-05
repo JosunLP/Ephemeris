@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 TPMPlaner contributors
-//! Google-API-Anbindung: OAuth, Kalender, Tasks.
+//! The Google APIs: OAuth, Calendar and Tasks.
 //!
-//! Alles synchron/blockierend — laeuft ausschliesslich im Sync-Thread. Kein
-//! async-Runtime, das spart im Leerlauf einen ganzen Thread-Pool.
+//! Everything blocking, and only ever called from the sync thread. No async
+//! runtime, which saves a whole thread pool while idle.
 
 pub mod auth;
 pub mod calendar;
@@ -13,9 +13,9 @@ use std::time::Duration;
 
 #[derive(Debug, Clone)]
 pub enum Error {
-    /// `client_secret.json` fehlt oder ist unbrauchbar — einmalige Einrichtung noetig.
+    /// `client_secret.json` is missing or unusable; one-time setup needed.
     NeedsSetup(String),
-    /// Kein/ungueltiger Refresh-Token: Benutzer muss sich (neu) anmelden.
+    /// No or invalid refresh token: the user has to sign in again.
     NeedsLogin(String),
     Other(String),
 }
@@ -52,16 +52,16 @@ impl From<std::io::Error> for Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Ein einziger Agent fuer den gesamten Prozess: haelt die TLS-Session und
-/// die Verbindung zu googleapis.com am Leben, sodass ein Sync-Lauf nicht
-/// jedesmal einen kompletten Handshake zahlt.
+/// One agent for the whole process: keeps the TLS session and the connection
+/// to googleapis.com alive, so a sync run does not pay for a full handshake
+/// every time.
 pub fn agent() -> &'static ureq::Agent {
     use std::sync::OnceLock;
     static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
     AGENT.get_or_init(|| {
         ureq::Agent::config_builder()
-            // Wir wollen den Fehler-Body von Google lesen koennen, statt nur
-            // einen nackten Statuscode zu bekommen.
+            // We want to read Google's error body, not just a bare status
+            // code.
             .http_status_as_error(false)
             .timeout_global(Some(Duration::from_secs(30)))
             .user_agent("TPMPlaner/0.1 (Windows Desktop Gadget)")
@@ -70,7 +70,7 @@ pub fn agent() -> &'static ureq::Agent {
     })
 }
 
-/// Minimaler Percent-Encoder fuer Query-Parameter (RFC 3986 unreserved).
+/// Minimal percent encoder for query parameters (RFC 3986 unreserved set).
 pub fn urlencode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.as_bytes() {
@@ -84,8 +84,8 @@ pub fn urlencode(s: &str) -> String {
     out
 }
 
-/// Zieht die von Google gelieferte Fehlerbeschreibung aus dem Body, damit im
-/// Widget nicht nur "HTTP 403" steht.
+/// Pulls Google's own error description out of the body, so the widget shows
+/// more than "HTTP 403".
 pub fn api_error(status: u16, body: &str) -> Error {
     let detail = serde_json::from_str::<serde_json::Value>(body)
         .ok()

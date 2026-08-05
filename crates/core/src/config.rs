@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 TPMPlaner contributors
-//! Konfiguration in `%APPDATA%\TPMPlaner\config.json`.
+//! Settings, stored as `config.json` in the data directory.
 //!
-//! Wird beim Start gelesen und bei Positionsaenderungen zurueckgeschrieben.
-//! Unbekannte/fehlende Felder fallen auf die Defaults zurueck, damit ein
-//! haendisch editiertes File das Widget nicht lahmlegt.
+//! Read at start-up and written back whenever the window moves or is resized.
+//! Unknown or missing fields fall back to their defaults, so a hand edited
+//! file cannot bring the widget down.
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -12,15 +12,15 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
-    /// Fensterposition in physischen Pixeln. `None` = beim ersten Start
-    /// oben rechts auf dem Primaermonitor platzieren.
+    /// Window position in physical pixels. `None` means "place it top right
+    /// on the primary monitor at first start".
     pub x: Option<i32>,
     pub y: Option<i32>,
-    /// Groesse in DIPs (geraeteunabhaengige Pixel bei 96 dpi).
+    /// Size in device independent pixels, at 96 dpi.
     pub width: f32,
     pub height: f32,
 
-    /// Sync-Intervall in Minuten.
+    /// Sync interval in minutes.
     pub sync_minutes: u32,
 
     /// Configured accounts. An empty list is treated as a single Google
@@ -29,46 +29,47 @@ pub struct Config {
     #[serde(default)]
     pub accounts: Vec<crate::provider::AccountConfig>,
 
-    /// Leere Liste = alle Kalender bzw. alle Aufgabenlisten des Kontos.
+    /// An empty list means every calendar or task list the account offers.
     pub calendar_ids: Vec<String>,
     pub tasklist_ids: Vec<String>,
 
-    /// Aufgaben ohne Faelligkeitsdatum ebenfalls anzeigen.
+    /// Show tasks that have no due date as well.
     pub show_undated_tasks: bool,
-    /// Bereits vergangene Termine des Tages weiterhin (gedimmt) anzeigen.
+    /// Keep events that already ended visible, dimmed.
     pub show_past_events: bool,
-    /// Termine, die man selbst abgelehnt hat, ausblenden.
+    /// Hide events you declined yourself.
     pub hide_declined: bool,
 
-    /// Deckkraft des Panels (0.0 - 1.0).
+    /// Panel opacity, 0.0 to 1.0.
     pub opacity: f32,
-    /// `"none"` (Vorgabe) = eigener Verlauf mit selbstgezeichnetem Schatten
-    /// und runden Ecken. `"acrylic"` = Windows-Systembackdrop; dabei entfaellt
-    /// der Schattenrand und DWM rundet die Ecken, sonst legt die Backdrop
-    /// einen eckigen Kasten um das Panel.
+    /// `"none"` (the default) draws the widget's own gradient, shadow and
+    /// rounded corners. `"acrylic"` uses the Windows system backdrop; the
+    /// shadow margin then has to go and the compositor rounds the corners,
+    /// because a system backdrop fills the whole window rectangle and would
+    /// otherwise put a square box around the panel.
     pub backdrop: String,
-    /// Schriftgroessen-/Layoutskalierung zusaetzlich zur Monitor-DPI.
+    /// Extra layout and font scaling on top of the monitor's own DPI.
     pub scale: f32,
 
-    /// `"system"` folgt der Windows-Anzeigesprache, sonst ein BCP-47-Tag wie
-    /// `"en-US"`, `"fr-FR"` oder `"ar-SA"`. Datum und Uhrzeit richten sich
-    /// immer nach dem gewaehlten Gebietsschema, auch wenn dafuer kein
-    /// Textkatalog existiert.
+    /// `"system"` follows the display language, otherwise a BCP-47 tag such
+    /// as `"en-US"`, `"fr-FR"` or `"ar-SA"`. Dates and times always follow the
+    /// chosen locale, even where no text catalogue exists for it.
     pub language: String,
-    /// `"system"` folgt dem Windows-App-Design, sonst `"dark"` / `"light"`.
+    /// `"system"` follows the system appearance, otherwise `"dark"`,
+    /// `"light"` or `"contrast"`.
     pub theme: String,
-    /// `"system"` uebernimmt die Windows-Akzentfarbe, sonst `"#RRGGBB"`.
+    /// `"system"` adopts the system accent colour, otherwise `"#RRGGBB"`.
     pub accent: String,
-    /// Tastenkombination, die das Widget kurz in den Vordergrund holt.
-    /// Format: Modifizierer plus Taste, z. B. `"Ctrl+Alt+K"`, `"Ctrl+Shift+P"`.
-    /// `Win+...` moeglichst meiden — Windows 11 hat sich davon sehr viel
-    /// selbst reserviert (Win+Alt+K ist z. B. die Mikrofonstummschaltung).
-    /// Leer schaltet die Funktion ab.
+    /// Shortcut that brings the widget to the front for a moment.
+    /// Modifiers plus a key, for example `"Ctrl+Alt+K"` or `"Ctrl+Shift+P"`.
+    /// Avoid `Win+...` where possible — Windows 11 has reserved a great deal
+    /// of it (Win+Alt+K is the microphone mute, for instance). An empty value
+    /// turns the feature off.
     pub peek_hotkey: String,
-    /// Wie lange das Widget nach der Tastenkombination vorne bleibt.
+    /// How long the widget stays in front after the shortcut.
     pub peek_seconds: u32,
-    /// Bedenkzeit in Sekunden, bevor ein Abhaken an Google gesendet wird.
-    /// `0` schaltet die Rueckgaengig-Moeglichkeit ab.
+    /// Grace period in seconds before a completed task is sent to the
+    /// service. `0` turns the undo window off.
     pub undo_seconds: u32,
 }
 
@@ -100,22 +101,21 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Laedt die Konfiguration und meldet einen Syntaxfehler mit zurueck.
+    /// Loads the settings and reports a syntax error alongside them.
     ///
-    /// Frueher fiel eine kaputte Datei stillschweigend auf die Vorgaben
-    /// zurueck: der Benutzer speicherte, nichts passierte, und es gab keinen
-    /// Hinweis warum. Der Fehlertext landet jetzt in der Statuszeile.
+    /// A broken file used to fall back to the defaults in silence: you saved,
+    /// nothing happened, and there was no hint why. The error text now reaches
+    /// the status line.
     pub fn load() -> (Self, Option<String>) {
         let path = config_path();
         let Ok(raw) = std::fs::read_to_string(&path) else {
-            // Noch keine Datei — das ist der Normalfall beim ersten Start.
+            // No file yet, which is the normal case at first start.
             return (Self::default(), None);
         };
-        // Viele Windows-Editoren (u. a. Windows PowerShell mit `-Encoding
-        // UTF8`) stellen der Datei eine Byte-Order-Mark voran. JSON kennt kein
-        // BOM, und ohne dieses Abschneiden scheitert das Parsen an einem
-        // unsichtbaren ersten Zeichen — mit einer Fehlermeldung, die niemand
-        // deuten kann.
+        // Many Windows editors — Windows PowerShell with `-Encoding UTF8`
+        // among them — put a byte order mark in front of the file. JSON has no
+        // concept of a BOM, and without trimming it the parse fails on an
+        // invisible first character, with an error message nobody can act on.
         let raw = raw.trim_start_matches('\u{feff}');
 
         match serde_json::from_str::<Config>(raw) {
@@ -131,8 +131,8 @@ impl Config {
         }
     }
 
-    /// Grenzen erzwingen, damit ein Tippfehler im JSON nicht zu einem
-    /// 0x0-Fenster oder einem Sync-Sturm fuehrt.
+    /// Clamps the values, so a typo in the file cannot produce a zero sized
+    /// window or a storm of requests.
     fn sanitized(mut self) -> Self {
         self.width = self.width.clamp(240.0, 1200.0);
         self.height = self.height.clamp(200.0, 2000.0);
@@ -186,18 +186,18 @@ pub fn config_path() -> PathBuf {
     data_dir().join("config.json")
 }
 
-/// Von der Google Cloud Console heruntergeladene OAuth-Client-Datei
-/// (Anwendungstyp "Desktop-App").
+/// The OAuth client file downloaded from the Google Cloud Console
+/// (application type "desktop app").
 pub fn client_secret_path() -> PathBuf {
     data_dir().join("client_secret.json")
 }
 
-/// DPAPI-verschluesselter Refresh-Token.
+/// The encrypted refresh token.
 pub fn token_path() -> PathBuf {
     data_dir().join("token.bin")
 }
 
-/// Letzter erfolgreicher Sync-Stand, damit beim Start sofort etwas dasteht.
+/// Last successful sync, so something is on screen immediately at start-up.
 pub fn cache_path() -> PathBuf {
     data_dir().join("cache.json")
 }

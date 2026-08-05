@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Bug report
+description: Something does not work as it should
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The log usually answers half of these questions on its own.
+        Right-click the widget and choose **Open log**.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Which account is involved
+      multiple: true
+      options:
+        - Google
+        - Microsoft (Outlook / Teams / To Do)
+        - CalDAV (iCloud, Nextcloud, Fastmail, ...)
+        - None / not account related
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Right-click the widget, or the file name you installed.
+      placeholder: "1.0.0"
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "Windows 11 26200"
+    validations:
+      required: true
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Relevant log lines
+      description: Paste the lines around the failure. Redact anything private.
+      render: text

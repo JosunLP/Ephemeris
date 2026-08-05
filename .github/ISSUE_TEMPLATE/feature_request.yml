@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Feature request
+description: Suggest something the widget should do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve
+      description: >
+        Describe the situation you are in, not the solution you have in mind.
+        That usually leads to a better solution than the one either of us
+        started with.
+    validations:
+      required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you had in mind
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you have tried or considered

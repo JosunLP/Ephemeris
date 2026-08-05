@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 TPMPlaner contributors
-//! Schlankes Dateiprotokoll.
+//! A small file log.
 //!
-//! Die Statuszeile im Widget hat Platz fuer rund 56 Zeichen — fuer eine
-//! Google-Fehlermeldung reicht das nicht annaehernd. Ohne Protokoll bleibt bei
-//! einem Problem im Betrieb nur Raten. Deshalb landet der vollstaendige Text
-//! zusaetzlich in `%APPDATA%\TPMPlaner\tpmplaner.log`, erreichbar ueber das
-//! Kontextmenue.
+//! The status line in the widget has room for roughly 56 characters, nowhere
+//! near enough for a provider's error message. Without a log, diagnosing a
+//! problem in the field is guesswork, so the full text also goes to
+//! `tpmplaner.log` in the data directory, reachable from the context menu.
 //!
-//! Bewusst ohne Log-Crate: ein `Mutex<File>` und eine Groessenrotation sind
-//! alles, was hier gebraucht wird.
+//! Deliberately without a logging crate: a `Mutex<File>` and rotation by size
+//! are all this needs.
 
 use crate::config;
 use chrono::Local;
@@ -18,8 +17,8 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
-/// Ab dieser Groesse wird nach `.1` rotiert. Zwei Dateien à 256 KB reichen fuer
-/// mehrere Tage Betrieb und fallen auf keiner Platte auf.
+/// Rotates to `.1` beyond this size. Two files of 256 KB cover several days
+/// of operation and are unnoticeable on any disk.
 const MAX_BYTES: u64 = 256 * 1024;
 
 fn path() -> PathBuf {
@@ -31,8 +30,8 @@ fn lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
-/// Schreibt eine Zeile. Fehler werden geschluckt — ein nicht schreibbares
-/// Protokoll darf das Widget nicht stoppen.
+/// Writes one line. Errors are swallowed: a log that cannot be written must
+/// never stop the widget.
 pub fn write(level: &str, message: &str) {
     let _guard = lock().lock();
     let path = path();
@@ -45,8 +44,8 @@ pub fn write(level: &str, message: &str) {
     }
 
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) {
-        // Einzeilig und mit fester Spaltenbreite, damit sich das Protokoll mit
-        // Bordmitteln filtern laesst.
+        // One line per entry with fixed column widths, so the log can be
+        // filtered with ordinary tools.
         let _ = writeln!(
             file,
             "{} {:<5} {}",
@@ -73,12 +72,12 @@ pub fn file_path() -> PathBuf {
     path()
 }
 
-/// Schreibt jede Panik ins Protokoll, bevor der Prozess endet.
+/// Writes every panic to the log before the process ends.
 ///
-/// Das Widget laeuft ohne Konsole und mit `panic = "abort"`. Ohne diesen Haken
-/// verschwindet es bei einem Fehler einfach vom Desktop — ohne Meldung, ohne
-/// Spur, und niemand kann sagen warum. Der Haken laeuft noch vor dem Abbruch
-/// und kostet im Normalbetrieb nichts.
+/// The widget runs without a console and with `panic = "abort"`. Without this
+/// hook it simply vanishes from the desktop when something goes wrong: no
+/// message, no trace, and nobody can say why. The hook runs before the abort
+/// and costs nothing in normal operation.
 pub fn install_panic_hook() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -87,17 +86,17 @@ pub fn install_panic_hook() {
             .downcast_ref::<&str>()
             .map(|s| s.to_string())
             .or_else(|| info.payload().downcast_ref::<String>().cloned())
-            .unwrap_or_else(|| "(unbekannte Ursache)".to_string());
+            .unwrap_or_else(|| "(unknown cause)".to_string());
         let location = info
             .location()
             .map(|l| format!("{}:{}", l.file(), l.line()))
-            .unwrap_or_else(|| "(unbekannte Stelle)".to_string());
+            .unwrap_or_else(|| "(unknown location)".to_string());
         let thread = std::thread::current()
             .name()
-            .unwrap_or("unbenannt")
+            .unwrap_or("unnamed")
             .to_string();
         error(&format!(
-            "PANIK in Thread '{thread}' bei {location}: {payload}"
+            "PANIC in thread '{thread}' at {location}: {payload}"
         ));
         previous(info);
     }));

@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://josunlp.github.io/TPMPlaner/
+    about: Setup, configuration and troubleshooting
+  - name: Security issue
+    url: https://github.com/JosunLP/TPMPlaner/security/advisories/new
+    about: Please report vulnerabilities privately

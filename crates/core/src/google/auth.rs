@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 TPMPlaner contributors
-//! OAuth 2.0 fuer installierte Anwendungen: Loopback-Redirect mit PKCE.
+//! OAuth 2.0 for installed applications: loopback redirect with PKCE.
 //!
-//! Der frueher uebliche `urn:ietf:wg:oauth:2.0:oob`-Flow ist von Google
-//! abgeschaltet. Stattdessen: kurzlebiger HTTP-Listener auf `127.0.0.1` mit
-//! zufaelligem Port, Browser-Redirect dorthin, Code gegen Tokens tauschen.
+//! The old `urn:ietf:wg:oauth:2.0:oob` flow has been switched off by Google.
+//! Instead: a short lived HTTP listener on `127.0.0.1` with a random port, the
+//! browser redirected there, and the code exchanged for tokens.
 //!
-//! Der Refresh-Token landet DPAPI-verschluesselt auf der Platte, der
-//! Access-Token bleibt ausschliesslich im Speicher.
+//! The refresh token is stored encrypted; the access token never leaves
+//! memory.
 
 use super::{Error, Result, agent, api_error, urlencode};
 use crate::config;
@@ -23,13 +23,13 @@ use std::time::{Duration, Instant};
 const AUTH_ENDPOINT: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 
-/// Kalender nur lesen; Tasks brauchen Schreibrechte, weil Aufgaben im Widget
-/// abgehakt werden koennen. `tasks.readonly` wuerde dafuer nicht reichen.
+/// Calendars are read only; tasks need write access because the widget can
+/// complete them, for which `tasks.readonly` would not be enough.
 const SCOPES: &str = "https://www.googleapis.com/auth/calendar.readonly \
                       https://www.googleapis.com/auth/calendar.events.readonly \
                       https://www.googleapis.com/auth/tasks";
 
-/// Inhalt der aus der Cloud Console heruntergeladenen Client-Datei.
+/// Contents of the client file downloaded from the Cloud Console.
 #[derive(Debug, Deserialize)]
 struct ClientSecretFile {
     #[serde(alias = "web")]
@@ -66,7 +66,7 @@ pub struct Auth {
 }
 
 impl Auth {
-    /// Laedt Client-Credentials und einen ggf. vorhandenen Refresh-Token.
+    /// Loads the client credentials and any stored refresh token.
     pub fn load() -> Result<Self> {
         let path = config::client_secret_path();
         let raw = std::fs::read_to_string(&path).map_err(|_| {
@@ -97,10 +97,10 @@ impl Auth {
         self.refresh_token.is_some()
     }
 
-    /// Gueltiger Access-Token, ggf. per Refresh erneuert.
+    /// A valid access token, refreshed if needed.
     ///
-    /// 60 Sekunden Sicherheitsabstand vor dem Ablauf, damit ein Request nicht
-    /// genau in die Luecke faellt.
+    /// Sixty seconds of headroom before expiry, so a request cannot fall into
+    /// the gap.
     pub fn access_token(&mut self) -> Result<String> {
         if let Some((tok, expiry)) = &self.access
             && Instant::now() + Duration::from_secs(60) < *expiry
@@ -120,8 +120,8 @@ impl Auth {
             urlencode(&refresh),
         );
         let token = self.post_token(&body).map_err(|e| match e {
-            // Ein abgelehnter Refresh-Token ist dauerhaft kaputt: lokal
-            // verwerfen, sonst laeuft jeder weitere Sync in denselben Fehler.
+            // A rejected refresh token stays rejected: drop it locally, or
+            // every following sync runs into the same error.
             Error::NeedsLogin(m) | Error::Other(m) if m.contains("invalid_grant") => {
                 self.forget();
                 Error::NeedsLogin(i18n::global().err_grant_expired.into())
@@ -132,16 +132,16 @@ impl Auth {
         self.store_access(token)
     }
 
-    /// Interaktive Erstanmeldung. Blockiert bis der Benutzer im Browser
-    /// zugestimmt hat (oder der Timeout greift).
+    /// Interactive first sign-in. Blocks until the user has agreed in the
+    /// browser, or the timeout hits.
     pub fn interactive_login(&mut self) -> Result<()> {
-        // Port 0 = das Betriebssystem sucht einen freien Port aus.
+        // Port 0 lets the operating system pick a free one.
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let port = listener.local_addr()?.port();
         let redirect_uri = format!("http://127.0.0.1:{port}");
 
-        // PKCE: schuetzt den Autorisierungscode, falls ihn ein anderer lokaler
-        // Prozess abfangen sollte. Bei Loopback-Redirects Pflichtprogramm.
+        // PKCE protects the authorization code should another local process
+        // intercept it. Mandatory for loopback redirects.
         let verifier = URL_SAFE_NO_PAD.encode(crate::host::host().random_bytes(48));
         let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
         let state = URL_SAFE_NO_PAD.encode(crate::host::host().random_bytes(16));
@@ -183,7 +183,7 @@ impl Auth {
         Ok(())
     }
 
-    /// Lokal gespeicherten Zugang verwerfen (Menuepunkt "Neu anmelden").
+    /// Discards the stored credential; the "sign in again" menu entry.
     pub fn forget(&mut self) {
         self.refresh_token = None;
         self.access = None;
@@ -226,10 +226,10 @@ fn persist_refresh_token(refresh: &str) {
     }
 }
 
-/// Nimmt genau eine Loopback-Anfrage entgegen und zieht `code` heraus.
+/// Accepts exactly one loopback request and extracts the code.
 ///
-/// Browser schicken gern noch `/favicon.ico` hinterher, deshalb wird in einer
-/// Schleife gelesen, bis eine Anfrage mit `code=` oder `error=` dabei ist.
+/// Browsers like to follow up with `/favicon.ico`, so this loops until a
+/// request carrying `code=` or `error=` arrives.
 fn wait_for_code(listener: TcpListener, expected_state: &str) -> Result<String> {
     listener.set_nonblocking(false)?;
     let deadline = Instant::now() + Duration::from_secs(300);
@@ -271,7 +271,8 @@ fn wait_for_code(listener: TcpListener, expected_state: &str) -> Result<String> 
         }
 
         if let Some(code) = code {
-            // State-Check gegen CSRF: nur unsere eigene Anfrage zaehlt.
+            // State check against cross-site request forgery: only our own
+            // request counts.
             if state.as_deref() != Some(expected_state) {
                 respond(&mut stream, cat.auth_cancelled_title, cat.auth_waiting);
                 return Err(Error::NeedsLogin("OAuth state mismatch".into()));
@@ -283,8 +284,7 @@ fn wait_for_code(listener: TcpListener, expected_state: &str) -> Result<String> 
             );
             return Ok(code);
         }
-
-        // Irgendein Nebengeraeusch (z. B. favicon) — hoeflich abwimmeln.
+        // Background noise such as a favicon request.
         respond(&mut stream, "TPMPlaner", cat.auth_waiting);
     }
 

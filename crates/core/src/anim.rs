@@ -1,24 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 TPMPlaner contributors
-//! Animationszustand.
+//! Animation state.
 //!
-//! Bewusst ohne Render-Schleife: der Fenster-Code startet einen 16-ms-Timer
-//! *nur* solange [`Animations::tick`] meldet, dass noch Bewegung stattfindet,
-//! und faellt danach auf den Minutentakt zurueck. Ein ruhendes Widget kostet
-//! damit weiterhin null CPU-Zeit.
+//! Deliberately without a render loop: the window starts a 16 ms timer *only*
+//! while [`Animations::tick`] reports that something is still moving, and
+//! falls back to the one minute tick afterwards. A widget at rest therefore
+//! still costs no CPU time at all.
 
 use std::time::Instant;
 
-/// Exponentielle Annaeherung an einen Zielwert.
+/// Exponential approach towards a target value.
 ///
-/// Die Form `1 - e^(-rate·dt)` statt eines festen Schritts pro Frame macht die
-/// Bewegung unabhaengig von der tatsaechlichen Bildrate — bei einem verpassten
-/// Frame springt der Wert entsprechend weiter, statt die Animation zu dehnen.
+/// The `1 - e^(-rate·dt)` form, rather than a fixed step per frame, makes the
+/// motion independent of the actual frame rate: a missed frame moves the value
+/// correspondingly further instead of stretching the animation.
 #[derive(Debug, Clone, Copy)]
 pub struct Spring {
     pub value: f32,
     pub target: f32,
-    /// Groesser = schneller. 10 ≈ knackig, 4 ≈ weich.
+    /// Larger is faster. 10 is crisp, 4 is soft.
     rate: f32,
 }
 
@@ -35,7 +35,7 @@ impl Spring {
         self.target = target;
     }
 
-    /// Ohne Animation direkt setzen (z. B. beim ersten Frame).
+    /// Set directly without animating, for the first frame for instance.
     pub fn jump(&mut self, value: f32) {
         self.value = value;
         self.target = value;
@@ -53,22 +53,23 @@ impl Spring {
 }
 
 pub struct Animations {
-    /// 0 → 1 beim Eintreffen neuer Daten: Inhalt blendet auf und schiebt sich
-    /// leicht nach oben.
+    /// 0 to 1 when new data arrives: the content fades in and slides up
+    /// slightly.
     pub reveal: Spring,
-    /// Geglaetteter Scroll-Offset.
+    /// Smoothed scroll offset.
     pub scroll: Spring,
-    /// Deckkraft der Hover-Hinterlegung.
+    /// Opacity of the hover highlight.
     pub hover: Spring,
-    /// Deckkraft des Scrollbalkens; blendet nach dem Scrollen wieder aus.
+    /// Opacity of the scrollbar; fades out again after scrolling.
     pub scrollbar: Spring,
-    /// Drehwinkel des Aktualisieren-Symbols in Radiant.
+    /// Rotation of the refresh glyph, in radians.
     pub spinner: f32,
     pub spinning: bool,
 
-    /// Folgt "Animationseffekte in Windows anzeigen". Ist der Schalter aus,
-    /// springt jeder Wert sofort ans Ziel — Bewegung kann bei vestibulaeren
-    /// Stoerungen Beschwerden ausloesen, und Windows fragt genau deshalb.
+    /// Follows the system's "show animations" setting. With it off every
+    /// value jumps straight to its target — motion can trigger symptoms in
+    /// people with vestibular disorders, which is exactly why the system
+    /// asks.
     pub enabled: bool,
 
     last: Option<Instant>,
@@ -90,7 +91,7 @@ impl Default for Animations {
 }
 
 impl Animations {
-    /// Neue Daten: von unten einblenden.
+    /// New data: fade in from below.
     pub fn restart_reveal(&mut self) {
         if !self.enabled {
             self.reveal.jump(1.0);
@@ -100,11 +101,11 @@ impl Animations {
         self.reveal.target = 1.0;
     }
 
-    /// Rechnet alle Werte fort und meldet, ob weiter animiert werden muss.
+    /// Advances every value and reports whether animation must continue.
     pub fn tick(&mut self) -> bool {
         if !self.enabled {
-            // Alles sofort auf den Zielwert; der Aufrufer schaltet den Timer
-            // daraufhin ab und zeichnet genau einmal.
+            // Everything straight to its target; the caller then stops the
+            // timer and draws exactly once.
             self.reveal.jump(self.reveal.target);
             self.scroll.jump(self.scroll.target);
             self.hover.jump(self.hover.target);
@@ -115,8 +116,9 @@ impl Animations {
         }
 
         let now = Instant::now();
-        // Beim ersten Aufruf und nach langen Pausen (Standby) keinen riesigen
-        // Zeitschritt zulassen, sonst springt alles auf einen Schlag ans Ziel.
+        // Do not allow a huge time step on the first call or after a long
+        // pause such as standby, or everything would snap to its target at
+        // once.
         let dt = match self.last {
             Some(prev) => (now - prev).as_secs_f32().min(0.1),
             None => 1.0 / 60.0,
@@ -133,8 +135,7 @@ impl Animations {
             self.spinner = (self.spinner + dt * 5.0) % std::f32::consts::TAU;
             active = true;
         } else if self.spinner != 0.0 {
-            // Nicht mitten in der Drehung stehenbleiben, sondern zur naechsten
-            // vollen Umdrehung auslaufen.
+            // Do not stop mid-rotation; coast to the next full turn.
             self.spinner = (self.spinner + dt * 5.0) % std::f32::consts::TAU;
             if self.spinner < 0.25 {
                 self.spinner = 0.0;
