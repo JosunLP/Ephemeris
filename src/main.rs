@@ -18,6 +18,7 @@ mod render;
 mod secure;
 mod sync;
 mod theme;
+mod update;
 mod window;
 
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};

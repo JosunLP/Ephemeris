@@ -125,6 +125,8 @@ pub struct Frame<'a> {
     pub undo: Option<UndoView<'a>>,
     /// Syntaxfehler in `config.json`; hat Vorrang vor der Sync-Statuszeile.
     pub config_error: Option<&'a str>,
+    /// Version of a newer release, if the daily check found one.
+    pub update: Option<&'a str>,
 }
 
 pub struct FrameResult {
@@ -1694,6 +1696,17 @@ impl Renderer {
             (None, Status::NeedsLogin(_)) => (frame.loc.label(c.connect_google), p.warn, true),
             (None, Status::Error(e)) => (short(e, 56), p.overdue, true),
             (None, Status::Syncing) => (frame.loc.label(c.syncing), p.text_dim, false),
+            // An available update outranks the routine "last synced" line —
+            // that one carries no news once it has been read.
+            (None, Status::Idle) if frame.update.is_some() => (
+                frame.loc.label(c.update_available).replacen(
+                    "{}",
+                    frame.update.unwrap_or_default(),
+                    1,
+                ),
+                p.accent,
+                true,
+            ),
             (None, Status::Idle) => match frame.agenda.fetched_at {
                 Some(t) => {
                     let next = t + chrono::Duration::minutes(frame.sync_minutes as i64);

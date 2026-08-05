@@ -53,6 +53,8 @@ pub struct Shared {
     /// Kontextmenue. Vorher musste man die IDs von Hand in die JSON eintragen.
     pub calendars: Vec<(String, String)>,
     pub tasklists: Vec<(String, String)>,
+    /// A newer release, once the daily check has found one.
+    pub update: Option<crate::update::Available>,
 }
 
 /// Sperrt den geteilten Zustand und ueberlebt eine Vergiftung.
@@ -108,6 +110,13 @@ fn build_providers(accounts: &[AccountConfig]) -> Vec<Box<dyn CalendarProvider>>
                     provider::google::GoogleProvider::new(&account.id, account.display())
                         .map(|p| Box::new(p) as Box<dyn CalendarProvider>)
                 }
+                Kind::Caldav => provider::caldav::CalDavProvider::new(
+                    &account.id,
+                    account.display(),
+                    &config::data_dir().join(format!("caldav-{}.json", account.id)),
+                    config::data_dir().join(format!("token-{}.bin", account.id)),
+                )
+                .map(|p| Box::new(p) as Box<dyn CalendarProvider>),
                 Kind::Microsoft => provider::graph::GraphProvider::new(
                     &account.id,
                     account.display(),
@@ -201,6 +210,8 @@ pub fn spawn(shared: Arc<Mutex<Shared>>, hwnd: isize) -> SyncHandle {
 fn worker(shared: Arc<Mutex<Shared>>, hwnd: isize, rx: Receiver<Command>) {
     let mut providers = build_providers(&snapshot_config(&shared).effective_accounts());
     let mut meta: Option<Meta> = None;
+    // Ride along with the sync run rather than opening a second connection.
+    let mut last_update_check: Option<Instant> = None;
 
     while let Ok(first) = rx.recv() {
         for cmd in coalesce(first, &rx) {
@@ -221,6 +232,7 @@ fn worker(shared: Arc<Mutex<Shared>>, hwnd: isize, rx: Receiver<Command>) {
                     let result = run_sync(&mut providers, cfg, &mut meta);
                     publish_sources(&shared, &meta);
                     apply_sync_result(&shared, hwnd, result);
+                    check_for_update(&shared, hwnd, &mut last_update_check);
                 }
 
                 Command::Relogin => {
@@ -274,6 +286,20 @@ fn worker(shared: Arc<Mutex<Shared>>, hwnd: isize, rx: Receiver<Command>) {
                 }
             }
         }
+    }
+}
+
+/// Looks for a newer release at most once a day.
+fn check_for_update(shared: &Arc<Mutex<Shared>>, hwnd: isize, last: &mut Option<Instant>) {
+    if last.is_some_and(|t| t.elapsed() < crate::update::CHECK_INTERVAL) {
+        return;
+    }
+    *last = Some(Instant::now());
+
+    if let Some(available) = crate::update::check() {
+        log::info(&format!("Update available: {}", available.version));
+        lock(shared).update = Some(available);
+        notify(hwnd, WM_APP_SYNC_DONE);
     }
 }
 

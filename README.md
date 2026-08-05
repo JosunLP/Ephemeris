@@ -84,6 +84,51 @@ Autostart: Rechtsklick auf das Widget → *Mit Windows starten*.
 
 ---
 
+## Konten
+
+Ohne `accounts`-Eintrag verhält sich das Widget wie bisher: ein Google-Konto. Mehrere Konten werden
+**parallel** abgefragt; fällt eines aus, bleiben die anderen sichtbar.
+
+```jsonc
+"accounts": [
+  { "kind": "google",    "id": "privat", "label": "Privat" },
+  { "kind": "microsoft", "id": "arbeit", "label": "Arbeit" },
+  { "kind": "caldav",    "id": "icloud", "label": "iCloud" }
+]
+```
+
+| Dienst | Zugangsdatei in `%APPDATA%\TPMPlaner\` | Woher |
+|---|---|---|
+| `google` | `client_secret.json` | Google Cloud Console, OAuth-Client „Desktop-App" |
+| `microsoft` | `microsoft_client.json` mit `{"client_id":"…"}` | Azure-Portal, App-Registrierung als **öffentlicher Client**, Umleitungs-URI `http://localhost` |
+| `caldav` | `caldav-<id>.json` mit `{"url":"…","username":"…","password":"…"}` | Server-URL und ein **app-spezifisches Passwort** |
+
+**Outlook und Teams** laufen beide über `microsoft`. Einen eigenen Teams-Kalender gibt es nicht — eine
+Teams-Besprechung ist ein Outlook-Termin mit Beitrittslink. Der Klick auf eine solche Zeile öffnet
+die Besprechung statt des Kalendereintrags.
+
+**CalDAV** deckt iCloud, Nextcloud, Fastmail, Synology und mailbox.org ab. Das Passwort wird beim
+ersten Start aus der JSON-Datei in den verschlüsselten Speicher verschoben und dort entfernt.
+Serientermine löst der Server auf (`<C:expand>`), nicht das Widget.
+
+## Installation
+
+```powershell
+irm https://github.com/JosunLP/TPMPlaner/releases/latest/download/install.ps1 | iex
+```
+
+Installiert nach `%LOCALAPPDATA%\Programs\TPMPlaner`, ohne Administratorrechte. Die SHA256-Prüfsumme
+wird **vor** dem Schreiben geprüft. Das Widget sucht danach täglich nach neuen Versionen und bietet
+sie im Menü und in der Fußzeile an — installiert aber nichts von selbst.
+
+Entfernen:
+
+```powershell
+irm https://github.com/JosunLP/TPMPlaner/releases/latest/download/uninstall.ps1 | iex
+```
+
+Einstellungen und Zugangsdaten bleiben erhalten; `-Purge` löscht auch die.
+
 ## Konfiguration
 
 `%APPDATA%\TPMPlaner\config.json` (Rechtsklick → *Konfiguration bearbeiten*). Änderungen werden

@@ -19,8 +19,10 @@
 //!   returned. An expired Microsoft token should never hide today's Google
 //!   meetings.
 
+pub mod caldav;
 pub mod google;
 pub mod graph;
+pub mod ical;
 pub mod oauth;
 
 use crate::model::{Event, Task};
@@ -118,6 +120,9 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[serde(rename_all = "lowercase")]
 pub enum Kind {
     Google,
+    /// Any standards compliant CalDAV server: iCloud, Nextcloud, Fastmail,
+    /// Synology, mailbox.org.
+    Caldav,
     /// Microsoft Graph — covers Outlook calendars and Microsoft To Do.
     /// Teams meetings are ordinary Outlook events carrying a join link, so
     /// they need no separate back end.

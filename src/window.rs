@@ -73,6 +73,7 @@ const CMD_LOG: usize = 1005;
 const CMD_RELOGIN: usize = 1006;
 const CMD_RESET_POS: usize = 1007;
 const CMD_COPY: usize = 1009;
+const CMD_UPDATE: usize = 1011;
 const CMD_QUIT: usize = 1010;
 /// Kennungsbereiche fuer die dynamisch erzeugten Quellen-Eintraege.
 const CMD_CALENDAR_BASE: usize = 2000;
@@ -240,6 +241,7 @@ pub fn run() -> Result<()> {
                 config_error,
                 calendars: Vec::new(),
                 tasklists: Vec::new(),
+                update: None,
             })),
             sync: None,
             renderer: None,
@@ -849,6 +851,43 @@ fn toggle_source(st: &mut State, is_calendar: bool, index: usize) {
     request_sync(st);
 }
 
+/// Runs the published installer and steps aside so it can replace the binary.
+///
+/// Deliberately a visible console window: this downloads and executes a script
+/// from the internet, and the user should be able to watch it rather than
+/// having their widget swapped out invisibly.
+fn start_update(st: &mut State) {
+    let Some(update) = sync::lock(&st.shared).update.clone() else {
+        return;
+    };
+    log::info(&format!("Installing update {}", update.version));
+
+    const INSTALLER: &str =
+        "irm https://github.com/JosunLP/TPMPlaner/releases/latest/download/install.ps1 | iex";
+    let args = platform::wide(&format!(
+        "-NoProfile -ExecutionPolicy Bypass -Command \"{INSTALLER}\""
+    ));
+    let exe = platform::wide("powershell.exe");
+    unsafe {
+        use windows::Win32::UI::Shell::ShellExecuteW;
+        use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+        use windows::core::PCWSTR;
+        ShellExecuteW(
+            None,
+            PCWSTR(platform::wide("open").as_ptr()),
+            PCWSTR(exe.as_ptr()),
+            PCWSTR(args.as_ptr()),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        );
+    }
+    // The installer stops a running instance anyway; leaving first avoids the
+    // file lock and makes the restart its job, not ours.
+    unsafe {
+        let _ = DestroyWindow(st.hwnd);
+    }
+}
+
 /// Legt den Tagesplan als Text in die Zwischenablage.
 fn copy_agenda(st: &mut State) {
     let guard = sync::lock(&st.shared);
@@ -1321,8 +1360,11 @@ fn on_left_down(st: &mut State, lparam: LPARAM) {
                 let guard = sync::lock(&st.shared);
                 (guard.status.clone(), guard.config_error.is_some())
             };
+            let has_update = sync::lock(&st.shared).update.is_some();
             if has_config_error {
                 platform::open_path(&config::config_path());
+            } else if has_update && matches!(status, Status::Idle) {
+                start_update(st);
             } else {
                 match status {
                     Status::NeedsSetup(_) => platform::open_path(&config::data_dir()),
@@ -1552,6 +1594,7 @@ fn redraw(st: &mut State) {
             show_past_events: guard.config.show_past_events,
             undo,
             config_error: guard.config_error.as_deref(),
+            update: guard.update.as_ref().map(|u| u.version.as_str()),
         };
         renderer.draw(&frame, hits)
     };
@@ -1701,6 +1744,10 @@ fn show_menu(st: &mut State) {
         }
 
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+        // Only offered when there is something to install.
+        if sync::lock(&st.shared).update.is_some() {
+            item(MF_STRING, CMD_UPDATE, c.menu_update);
+        }
         item(MF_STRING, CMD_COPY, c.menu_copy);
         item(MF_STRING, CMD_CONFIG, c.menu_config);
         item(MF_STRING, CMD_RESET_POS, c.menu_reset_pos);
@@ -1776,6 +1823,7 @@ fn show_menu(st: &mut State) {
                     SWP_NOACTIVATE | SWP_NOOWNERZORDER,
                 );
             }
+            CMD_UPDATE => start_update(st),
             CMD_COPY => copy_agenda(st),
             CMD_LOG => platform::open_path(&log::file_path()),
             id if (CMD_CALENDAR_BASE..CMD_CALENDAR_BASE + calendars.len()).contains(&id) => {
