@@ -12,7 +12,6 @@
 use super::{Error, Result, agent, api_error, urlencode};
 use crate::config;
 use crate::i18n;
-use crate::secure;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::{Deserialize, Serialize};
@@ -83,7 +82,7 @@ impl Auth {
 
         let refresh_token = std::fs::read(config::token_path())
             .ok()
-            .and_then(|enc| secure::unprotect(&enc, b"google-token"))
+            .and_then(|enc| crate::host::host().unprotect(&enc, b"google-token"))
             .and_then(|plain| serde_json::from_slice::<StoredToken>(&plain).ok())
             .map(|t| t.refresh_token);
 
@@ -143,9 +142,9 @@ impl Auth {
 
         // PKCE: schuetzt den Autorisierungscode, falls ihn ein anderer lokaler
         // Prozess abfangen sollte. Bei Loopback-Redirects Pflichtprogramm.
-        let verifier = URL_SAFE_NO_PAD.encode(secure::random_bytes(48));
+        let verifier = URL_SAFE_NO_PAD.encode(crate::host::host().random_bytes(48));
         let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
-        let state = URL_SAFE_NO_PAD.encode(secure::random_bytes(16));
+        let state = URL_SAFE_NO_PAD.encode(crate::host::host().random_bytes(16));
 
         let url = format!(
             "{AUTH_ENDPOINT}?client_id={}&redirect_uri={}&response_type=code&scope={}\
@@ -158,7 +157,7 @@ impl Auth {
             urlencode(&state),
         );
 
-        crate::platform::open_in_browser(&url);
+        crate::host::host().open_url(&url);
 
         let code = wait_for_code(listener, &state)?;
 
@@ -221,7 +220,7 @@ fn persist_refresh_token(refresh: &str) {
         refresh_token: refresh.to_owned(),
     });
     if let Ok(bytes) = payload
-        && let Some(enc) = secure::protect(&bytes, b"google-token")
+        && let Some(enc) = crate::host::host().protect(&bytes, b"google-token")
     {
         let _ = std::fs::write(config::token_path(), enc);
     }

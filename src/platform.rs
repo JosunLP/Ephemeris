@@ -2,6 +2,7 @@
 // Copyright (C) 2026 TPMPlaner contributors
 //! Kleine Windows-Helfer: Browser oeffnen, Autostart, Speicher trimmen.
 
+use tpmplaner_core::theme::{ContrastColors, SystemVisuals};
 use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError, HWND, RECT};
 use windows::Win32::Graphics::Gdi::{
     HMONITOR, MONITOR_DEFAULTTONULL, MONITORINFO, MonitorFromRect,
@@ -173,34 +174,28 @@ pub fn system_accent() -> Option<u32> {
     }
 }
 
-/// Darstellungsbezogene Windows-Einstellungen.
-///
-/// Alle vier sind Barrierefreiheits- bzw. Personalisierungsschalter, die eine
-/// Anwendung respektieren muss, damit sie sich in das System einfuegt statt
-/// ihre eigene Optik durchzusetzen.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SystemVisuals {
-    /// Kontrastdesign aktiv. Dann gelten ausschliesslich die Systemfarben,
-    /// und Transparenz, Verlaeufe und Schatten sind unerwuenscht — sie
-    /// senken genau den Kontrast, den der Modus herstellen soll.
-    pub high_contrast: bool,
-    /// "Transparenzeffekte" in Einstellungen → Personalisierung → Farben.
-    pub transparency: bool,
-    /// "Animationseffekte in Windows anzeigen". Aus = keine Bewegung.
-    pub animations: bool,
-    pub light: bool,
-    /// Systemakzentfarbe als `0xRRGGBB`.
-    pub accent: Option<u32>,
-}
-
+/// Reads the appearance settings the portable core reacts to.
 pub fn system_visuals() -> SystemVisuals {
+    use windows::Win32::Graphics::Gdi::{
+        COLOR_GRAYTEXT, COLOR_HIGHLIGHT, COLOR_HOTLIGHT, COLOR_WINDOW, COLOR_WINDOWTEXT,
+    };
+    let high_contrast = high_contrast_active();
     SystemVisuals {
-        high_contrast: high_contrast_active(),
-        // Fehlender Wert bedeutet "eingeschaltet" — so ist es ausgeliefert.
+        high_contrast,
+        // A missing value means "on" - that is how Windows ships.
         transparency: read_dword(PERSONALIZE_KEY, "EnableTransparency") != Some(0),
         animations: client_area_animation(),
         light: system_uses_light_theme(),
         accent: system_accent(),
+        // There are several contrast themes with entirely different palettes,
+        // so nothing is guessed: the system is asked.
+        contrast: high_contrast.then(|| ContrastColors {
+            window: sys_color(COLOR_WINDOW),
+            text: sys_color(COLOR_WINDOWTEXT),
+            gray: sys_color(COLOR_GRAYTEXT),
+            highlight: sys_color(COLOR_HIGHLIGHT),
+            hot: sys_color(COLOR_HOTLIGHT),
+        }),
     }
 }
 

@@ -18,7 +18,6 @@
 use super::ical::{self, Stamp};
 use super::{CalendarProvider, CalendarRef, Error, Result, api_error, http};
 use crate::model::Event;
-use crate::secure;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use chrono::{DateTime, Local, Utc};
@@ -70,7 +69,9 @@ impl CalDavProvider {
         let password = match parsed.password.take() {
             Some(plain) if !plain.is_empty() => {
                 // Move it out of the settings file straight away.
-                if let Some(encrypted) = secure::protect(plain.as_bytes(), tag.as_bytes()) {
+                if let Some(encrypted) =
+                    crate::host::host().protect(plain.as_bytes(), tag.as_bytes())
+                {
                     if let Some(dir) = token_file.parent() {
                         let _ = std::fs::create_dir_all(dir);
                     }
@@ -87,7 +88,7 @@ impl CalDavProvider {
             }
             _ => std::fs::read(&token_file)
                 .ok()
-                .and_then(|enc| secure::unprotect(&enc, tag.as_bytes()))
+                .and_then(|enc| crate::host::host().unprotect(&enc, tag.as_bytes()))
                 .and_then(|plain| String::from_utf8(plain).ok())
                 .ok_or_else(|| {
                     Error::NeedsLogin(format!(

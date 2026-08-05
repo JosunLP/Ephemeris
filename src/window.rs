@@ -21,17 +21,17 @@
 //! waehrend einer Animation, 100 ms waehrend einer laufenden Bedenkzeit
 //! zum Rueckgaengigmachen.
 
-use crate::anim::Animations;
-use crate::config::{self, Config};
-use crate::i18n::Locale;
-use crate::log;
 use crate::platform;
 use crate::render::{self, Frame, Hit, HitRegion, Renderer, UndoView};
-use crate::sync::{self, Command, Shared, Status, SyncHandle, WM_APP_STATUS, WM_APP_SYNC_DONE};
-use crate::theme::{Metrics, Palette, ThemePref};
 use chrono::{DateTime, Duration as ChronoDuration, Local, Timelike};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
+use tpmplaner_core::anim::Animations;
+use tpmplaner_core::config::{self, Config};
+use tpmplaner_core::i18n::Locale;
+use tpmplaner_core::log;
+use tpmplaner_core::sync::{self, Command, Shared, Status, SyncHandle};
+use tpmplaner_core::theme::{Metrics, Palette, ThemePref};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{
     DWMSBT_NONE, DWMSBT_TRANSIENTWINDOW, DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE,
@@ -56,6 +56,10 @@ const TIMER_UNDO: usize = 3;
 const TIMER_PEEK: usize = 4;
 /// Kennung der globalen Tastenkombination.
 const HOTKEY_PEEK: i32 = 1;
+
+/// Posted by the sync thread when a command finished. The core knows nothing
+/// about window messages; `WindowWaker` turns its wake call into this.
+const WM_APP_SYNC_DONE: u32 = WM_APP + 1;
 /// ~60 Hz. Laeuft ausschliesslich, solange etwas in Bewegung ist.
 const ANIM_INTERVAL_MS: u32 = 16;
 /// Zehn Schritte pro Sekunde reichen fuer einen Ablaufbalken voellig.
@@ -175,7 +179,7 @@ struct State {
     /// Zuletzt gelesene Darstellungseinstellungen von Windows. Wird bei
     /// `WM_SETTINGCHANGE` neu bestimmt und dient zugleich als Vergleichswert,
     /// damit ein unbeteiligter Systemhinweis kein Neuzeichnen ausloest.
-    visuals: platform::SystemVisuals,
+    visuals: tpmplaner_core::theme::SystemVisuals,
 }
 
 pub fn run() -> Result<()> {
@@ -192,7 +196,7 @@ pub fn run() -> Result<()> {
         let loc = Locale::resolve(&cfg.language);
         // Sync-Thread und Notausgang haben keinen Zugriff auf diese Instanz
         // und greifen deshalb auf den globalen Katalog zu.
-        crate::i18n::set_global(loc.cat);
+        tpmplaner_core::i18n::set_global(loc.cat);
         let visuals = platform::system_visuals();
         let palette = Palette::resolve(ThemePref::parse(&cfg.theme), &cfg.accent, visuals);
         log::info(&format!(
@@ -225,12 +229,12 @@ pub fn run() -> Result<()> {
             return Err(windows::core::Error::from_thread());
         }
 
-        let demo = crate::demo::enabled();
+        let demo = tpmplaner_core::demo::enabled();
         let mut state = Box::new(State {
             hwnd: HWND::default(),
             shared: Arc::new(Mutex::new(Shared {
                 agenda: if demo {
-                    crate::demo::agenda()
+                    tpmplaner_core::demo::agenda()
                 } else {
                     // Letzter bekannter Stand, damit beim Start nicht erst
                     // eine leere Flaeche steht.
@@ -318,7 +322,13 @@ pub fn run() -> Result<()> {
         // fehlende Google-Zugang die Beispieldaten sofort mit einer
         // Fehlermeldung ueberdecken.
         if !demo {
-            st.sync = Some(sync::spawn(shared, hwnd.0 as isize));
+            st.sync = Some(sync::spawn(
+                shared,
+                std::sync::Arc::new(crate::host_impl::WindowWaker {
+                    hwnd: hwnd.0 as isize,
+                    message: WM_APP_SYNC_DONE,
+                }),
+            ));
             st.sync.as_ref().unwrap().send(Command::Sync);
             st.anim.spinning = true;
         }
@@ -611,12 +621,6 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             WM_APP_SYNC_DONE => {
                 on_sync_done(st);
                 platform::trim_working_set();
-                LRESULT(0)
-            }
-
-            WM_APP_STATUS => {
-                st.anim.spinning = matches!(sync::lock(&st.shared).status, Status::Syncing);
-                kick(st);
                 LRESULT(0)
             }
 
@@ -1187,7 +1191,7 @@ fn reload_config_if_changed(st: &mut State) {
     // geaenderte Skalierung.
     let new_loc = Locale::resolve(&cfg.language);
     let direction_changed = new_loc.rtl != st.loc.rtl;
-    crate::i18n::set_global(new_loc.cat);
+    tpmplaner_core::i18n::set_global(new_loc.cat);
     st.loc = new_loc;
 
     st.scale = cfg.scale;

@@ -1,0 +1,21 @@
+[package]
+name = "tpmplaner-core"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+description = "Portable core of TPMPlaner: calendar providers, sync, model, localisation"
+repository = "https://github.com/JosunLP/TPMPlaner"
+rust-version = "1.90"
+
+[dependencies]
+base64 = "0.23.1"
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std", "serde"] }
+quick-xml = "0.41.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sha2 = "0.11.0"
+ureq = { version = "3.3.0", default-features = false, features = [
+    "rustls",
+    "json",
+    "win-system-proxy",
+] }

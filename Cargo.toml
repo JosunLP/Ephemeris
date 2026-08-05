@@ -1,3 +1,6 @@
+[workspace]
+members = ["crates/core"]
+
 [package]
 name = "tpmplaner"
 version = "0.1.0"
@@ -9,6 +12,7 @@ readme = "README.md"
 rust-version = "1.90"
 
 [dependencies]
+tpmplaner-core = { path = "crates/core" }
 base64 = "0.23.1"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std", "serde"] }
 quick-xml = "0.41.0"

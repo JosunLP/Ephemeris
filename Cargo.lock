@@ -742,9 +742,23 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tpmplaner-core",
  "ureq",
  "windows",
  "windows-numerics",
+]
+
+[[package]]
+name = "tpmplaner-core"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "chrono",
+ "quick-xml",
+ "serde",
+ "serde_json",
+ "sha2",
+ "ureq",
 ]
 
 [[package]]

@@ -1,32 +1,25 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 TPMPlaner contributors
-//! Internationalisierung.
+//! Internationalisation.
 //!
-//! Zwei getrennte Zustaendigkeiten, und die Trennung ist der Kern des Ganzen:
+//! Two responsibilities, and keeping them apart is the whole point:
 //!
-//! * **Oberflaechentexte** kommen aus einem einkompilierten Katalog. Jede
-//!   Sprache ist ein [`Catalog`]-Literal; eine weitere hinzuzufuegen heisst,
-//!   eine Konstante zu schreiben und sie in [`catalog_for`] einzutragen.
-//! * **Datum, Uhrzeit und Leserichtung** kommen vom Betriebssystem
-//!   (`GetDateFormatEx`, `GetTimeFormatEx`, `GetLocaleInfoEx`). Das ist der
-//!   entscheidende Unterschied zu einer blossen Uebersetzung: Windows kennt
-//!   fuer *jedes* Gebietsschema die richtige Datumsreihenfolge, die lokalen
-//!   Monatsnamen und vor allem, ob 12- oder 24-Stunden-Zaehlung gilt. Eine
-//!   fest verdrahtete Formatierung `{:02}:{:02}` zeigt einem Benutzer in den
-//!   USA "20:09" statt "8:09 PM" — formal richtig, aber falsch.
+//! * **Interface text** comes from compiled-in catalogues. Each language is a
+//!   [`Catalog`] literal; adding one means writing a constant and listing it
+//!   in [`catalog_for`].
+//! * **Dates, times and reading direction** come from the operating system,
+//!   through [`crate::host::LocaleBackend`]. That is the difference between a
+//!   translation and an internationalised program: the system knows, for
+//!   *every* locale, the field order of a date, the local month names and —
+//!   above all — whether the clock counts to twelve or to twenty-four. A hard
+//!   coded `{:02}:{:02}` shows a user in the United States "20:09" instead of
+//!   "8:09 PM": formally right, actually wrong.
 //!
-//! Dadurch funktionieren Datum und Uhrzeit auch in Sprachen korrekt, fuer die
-//! gar kein Katalog existiert; dort werden lediglich die Beschriftungen
-//! englisch.
+//! Dates and times therefore work correctly even in languages that have no
+//! catalogue at all; only the labels fall back to English.
 
+use crate::host::locale_backend;
 use chrono::{DateTime, Datelike, Local, NaiveDate, Timelike};
-use windows::Win32::Foundation::SYSTEMTIME;
-use windows::Win32::Globalization::{
-    DATE_LONGDATE, ENUM_DATE_FORMATS_FLAGS, GetDateFormatEx, GetLocaleInfoEx, GetTimeFormatEx,
-    GetUserDefaultLocaleName, LOCALE_IREADINGLAYOUT, LOCALE_RETURN_NUMBER, LOCALE_SLONGDATE,
-    TIME_NOSECONDS,
-};
-use windows::core::PCWSTR;
 
 /// Alle Zeichenketten der Oberflaeche.
 ///
@@ -438,61 +431,57 @@ pub fn global() -> &'static Catalog {
 }
 
 pub struct Locale {
-    /// BCP-47-Kennung, so wie Windows sie liefert (z. B. `de-DE`).
+    /// BCP-47 tag as the system reports it, for example `de-DE`.
     pub tag: String,
     pub cat: &'static Catalog,
-    /// Rechts-nach-links-Leserichtung (Arabisch, Hebraeisch, Persisch …).
+    /// Right-to-left reading (Arabic, Hebrew, Persian and others).
     pub rtl: bool,
-    /// Zwischengespeichertes Datumsmuster ohne Wochentag.
-    date_pattern: Vec<u16>,
 }
 
 impl Locale {
-    /// `pref` ist `"system"` oder ein BCP-47-Tag aus der Konfiguration.
+    /// `pref` is `"system"` or a BCP-47 tag from the configuration.
     pub fn resolve(pref: &str) -> Self {
+        let backend = locale_backend();
         let tag = match pref.trim() {
-            "" | "system" | "auto" => user_default_locale(),
+            "" | "system" | "auto" => backend.user_default_tag(),
             explicit => explicit.to_string(),
         };
-        let cat = catalog_for(&tag);
-        let rtl = reading_layout_is_rtl(&tag);
-        let date_pattern = long_date_without_weekday(&tag);
+        let rtl = backend.is_rtl(&tag);
         Self {
+            cat: catalog_for(&tag),
             tag,
-            cat,
             rtl,
-            date_pattern,
         }
     }
 
-    /// Uhrzeit im kurzen Format des Gebietsschemas.
+    /// Time of day in the locale's short format.
     ///
-    /// Hier entscheidet sich 12- gegen 24-Stunden-Zaehlung, und zwar so, wie
-    /// der Benutzer es in Windows eingestellt hat.
+    /// This is where twelve- against twenty-four-hour counting is decided, the
+    /// way the user set it up.
     pub fn time(&self, dt: DateTime<Local>) -> String {
-        let st = to_systemtime_time(dt);
-        format_time(&self.tag, &st)
+        locale_backend()
+            .format_time(&self.tag, dt)
             .unwrap_or_else(|| format!("{:02}:{:02}", dt.hour(), dt.minute()))
     }
 
-    /// Ausgeschriebener Wochentag ("Dienstag", "Tuesday", "الثلاثاء").
+    /// Full weekday name ("Dienstag", "Tuesday", "الثلاثاء").
     pub fn weekday(&self, d: NaiveDate) -> String {
-        let st = to_systemtime_date(d);
-        format_date(&self.tag, &st, Some(&wide("dddd"))).unwrap_or_else(|| d.weekday().to_string())
+        locale_backend()
+            .format_weekday(&self.tag, d)
+            .unwrap_or_else(|| d.weekday().to_string())
     }
 
-    /// Langes Datum **ohne** Wochentag — der steht bereits eine Zeile darueber.
+    /// Long date **without** the weekday — that already sits one line above.
     pub fn date_line(&self, d: NaiveDate) -> String {
-        let st = to_systemtime_date(d);
-        let pattern = (!self.date_pattern.is_empty()).then_some(&self.date_pattern);
-        format_date(&self.tag, &st, pattern.map(|v| v.as_slice()))
+        locale_backend()
+            .format_date(&self.tag, d)
             .unwrap_or_else(|| format!("{}-{:02}-{:02}", d.year(), d.month(), d.day()))
     }
 
-    /// Kompaktes Tag/Monat fuer die Faelligkeitsspalte ("4 Aug", "4 août").
+    /// Compact day and month for the due column ("4 Aug", "4 août").
     pub fn day_month(&self, d: NaiveDate) -> String {
-        let st = to_systemtime_date(d);
-        format_date(&self.tag, &st, Some(&wide("d MMM")))
+        locale_backend()
+            .format_day_month(&self.tag, d)
             .unwrap_or_else(|| format!("{:02}.{:02}.", d.day(), d.month()))
     }
 
@@ -593,149 +582,6 @@ impl Locale {
     }
 }
 
-// --- Windows-NLS ------------------------------------------------------------
-
-fn wide(s: &str) -> Vec<u16> {
-    s.encode_utf16().chain(std::iter::once(0)).collect()
-}
-
-fn from_wide(buf: &[u16], len: i32) -> Option<String> {
-    if len <= 0 {
-        return None;
-    }
-    // Die Get*FormatEx-Funktionen zaehlen die abschliessende Null mit.
-    let n = (len as usize).saturating_sub(1).min(buf.len());
-    let s = String::from_utf16_lossy(&buf[..n]);
-    (!s.trim().is_empty()).then_some(s)
-}
-
-fn user_default_locale() -> String {
-    // LOCALE_NAME_MAX_LENGTH ist 85.
-    let mut buf = [0u16; 85];
-    let len = unsafe { GetUserDefaultLocaleName(&mut buf) };
-    from_wide(&buf, len).unwrap_or_else(|| "en-US".to_string())
-}
-
-/// `LOCALE_IREADINGLAYOUT` == 1 bedeutet rechts-nach-links.
-fn reading_layout_is_rtl(tag: &str) -> bool {
-    let name = wide(tag);
-    let mut value: u32 = 0;
-    let ok = unsafe {
-        GetLocaleInfoEx(
-            PCWSTR(name.as_ptr()),
-            LOCALE_IREADINGLAYOUT | LOCALE_RETURN_NUMBER,
-            // Bei LOCALE_RETURN_NUMBER erwartet die API einen Puffer, der als
-            // DWORD interpretiert wird.
-            Some(std::slice::from_raw_parts_mut(
-                &mut value as *mut u32 as *mut u16,
-                2,
-            )),
-        )
-    };
-    ok > 0 && value == 1
-}
-
-/// Das lange Datumsmuster des Gebietsschemas ohne den Wochentag.
-///
-/// Der Wochentag steht im Widget bereits eine Zeile darueber. Ihn aus dem
-/// Muster zu entfernen ist zuverlaessiger, als ein eigenes Muster je Sprache
-/// zu erfinden — die Reihenfolge von Tag, Monat und Jahr bleibt so die des
-/// Gebietsschemas.
-fn long_date_without_weekday(tag: &str) -> Vec<u16> {
-    let name = wide(tag);
-    let mut buf = [0u16; 128];
-    let len = unsafe {
-        GetLocaleInfoEx(
-            PCWSTR(name.as_ptr()),
-            LOCALE_SLONGDATE,
-            Some(buf.as_mut_slice()),
-        )
-    };
-    let Some(pattern) = from_wide(&buf, len) else {
-        return Vec::new();
-    };
-
-    // "dddd, d. MMMM yyyy" -> "d. MMMM yyyy"
-    let mut cleaned = pattern.replace("dddd", "");
-    // Zurueckbleibende Trennzeichen an den Raendern abraeumen.
-    let trim: &[char] = &[' ', ',', '،', '、', '.', '-', '/'];
-    cleaned = cleaned.trim_matches(trim).to_string();
-    // Doppelte Leerzeichen aus der Mitte entfernen.
-    while cleaned.contains("  ") {
-        cleaned = cleaned.replace("  ", " ");
-    }
-
-    if cleaned.is_empty() {
-        Vec::new()
-    } else {
-        wide(&cleaned)
-    }
-}
-
-fn format_time(tag: &str, st: &SYSTEMTIME) -> Option<String> {
-    let name = wide(tag);
-    let mut buf = [0u16; 96];
-    let len = unsafe {
-        GetTimeFormatEx(
-            PCWSTR(name.as_ptr()),
-            TIME_NOSECONDS,
-            Some(st),
-            PCWSTR::null(),
-            Some(buf.as_mut_slice()),
-        )
-    };
-    from_wide(&buf, len)
-}
-
-fn format_date(tag: &str, st: &SYSTEMTIME, pattern: Option<&[u16]>) -> Option<String> {
-    let name = wide(tag);
-    let mut buf = [0u16; 160];
-    let fmt = match pattern {
-        Some(p) => PCWSTR(p.as_ptr()),
-        None => PCWSTR::null(),
-    };
-    // Eigenes Muster und DATE_LONGDATE schliessen sich gegenseitig aus.
-    let flags = if pattern.is_some() {
-        ENUM_DATE_FORMATS_FLAGS(0)
-    } else {
-        DATE_LONGDATE
-    };
-    let len = unsafe {
-        GetDateFormatEx(
-            PCWSTR(name.as_ptr()),
-            flags,
-            Some(st),
-            fmt,
-            Some(buf.as_mut_slice()),
-            PCWSTR::null(),
-        )
-    };
-    from_wide(&buf, len)
-}
-
-fn to_systemtime_date(d: NaiveDate) -> SYSTEMTIME {
-    SYSTEMTIME {
-        wYear: d.year() as u16,
-        wMonth: d.month() as u16,
-        wDayOfWeek: d.weekday().num_days_from_sunday() as u16,
-        wDay: d.day() as u16,
-        ..Default::default()
-    }
-}
-
-fn to_systemtime_time(dt: DateTime<Local>) -> SYSTEMTIME {
-    SYSTEMTIME {
-        wYear: dt.year() as u16,
-        wMonth: dt.month() as u16,
-        wDayOfWeek: dt.weekday().num_days_from_sunday() as u16,
-        wDay: dt.day() as u16,
-        wHour: dt.hour() as u16,
-        wMinute: dt.minute() as u16,
-        wSecond: dt.second() as u16,
-        wMilliseconds: 0,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -776,47 +622,30 @@ mod tests {
         assert_eq!(es.overdue(3), "3 atrasadas");
     }
 
+    /// The platform decides how a date looks; this crate only has to route
+    /// the question. Verifying the actual formats needs a locale database, so
+    /// those assertions live with the host that provides one — see
+    /// `host_impl` in the Windows front end.
     #[test]
-    fn twelve_and_twentyfour_hour_clocks_both_come_from_windows() {
+    fn formatting_is_delegated_and_never_panics() {
         use chrono::TimeZone;
+        let loc = Locale::resolve("de-DE");
+        let date = NaiveDate::from_ymd_opt(2026, 8, 4).unwrap();
         let dt = Local.with_ymd_and_hms(2026, 8, 4, 20, 9, 0).unwrap();
 
-        // Deutsch zaehlt 24-stuendig, US-Englisch 12-stuendig. Genau diese
-        // Unterscheidung ginge bei fest verdrahtetem "{:02}:{:02}" verloren.
-        let de = Locale::resolve("de-DE").time(dt);
-        let us = Locale::resolve("en-US").time(dt);
-        assert!(de.contains("20"), "de-DE: {de}");
-        assert!(
-            us.contains('8') && us.to_ascii_uppercase().contains("PM"),
-            "en-US: {us}"
-        );
-    }
-
-    #[test]
-    fn date_order_follows_the_locale() {
-        let d = NaiveDate::from_ymd_opt(2026, 8, 4).unwrap();
-        // Im Deutschen steht der Tag vorn, im US-Englischen der Monat.
-        let de = Locale::resolve("de-DE").date_line(d);
-        let us = Locale::resolve("en-US").date_line(d);
-        assert!(de.starts_with('4'), "de-DE: {de}");
-        assert!(us.starts_with("August"), "en-US: {us}");
-        // Der Wochentag gehoert in die Zeile darueber und muss hier fehlen.
-        assert!(!de.contains("Dienstag"), "de-DE: {de}");
-        assert!(!us.contains("Tuesday"), "en-US: {us}");
-    }
-
-    #[test]
-    fn weekday_is_localised() {
-        let d = NaiveDate::from_ymd_opt(2026, 8, 4).unwrap();
-        assert_eq!(Locale::resolve("de-DE").weekday(d), "Dienstag");
-        assert_eq!(Locale::resolve("en-US").weekday(d), "Tuesday");
+        assert!(!loc.time(dt).is_empty());
+        assert!(!loc.weekday(date).is_empty());
+        assert!(!loc.date_line(date).is_empty());
+        assert!(!loc.day_month(date).is_empty());
     }
 
     #[test]
     fn reading_direction_is_detected() {
+        // The portable fallback knows the right-to-left languages by their
+        // primary subtag, so this holds without a platform locale database.
         assert!(!Locale::resolve("de-DE").rtl);
         assert!(!Locale::resolve("en-US").rtl);
-        assert!(Locale::resolve("ar-SA").rtl, "Arabisch muss RTL sein");
-        assert!(Locale::resolve("he-IL").rtl, "Hebräisch muss RTL sein");
+        assert!(Locale::resolve("ar-SA").rtl, "Arabic must be right to left");
+        assert!(Locale::resolve("he-IL").rtl, "Hebrew must be right to left");
     }
 }

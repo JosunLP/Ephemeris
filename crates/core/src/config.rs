@@ -174,12 +174,12 @@ impl Config {
     }
 }
 
-/// `%APPDATA%\TPMPlaner`, mit Fallback ins Arbeitsverzeichnis.
+/// Where settings, credentials, cache and log live.
+///
+/// The location differs per platform, so the host decides; see
+/// [`crate::host::Host::data_dir`].
 pub fn data_dir() -> PathBuf {
-    match std::env::var_os("APPDATA") {
-        Some(v) => PathBuf::from(v).join("TPMPlaner"),
-        None => PathBuf::from("."),
-    }
+    crate::host::host().data_dir()
 }
 
 pub fn config_path() -> PathBuf {

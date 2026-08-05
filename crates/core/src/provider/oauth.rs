@@ -12,7 +12,6 @@
 //! memory.
 
 use crate::provider::{Error, Result};
-use crate::secure;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::{Deserialize, Serialize};
@@ -81,7 +80,7 @@ impl Session {
         let entropy_tag = entropy_tag.into();
         let refresh_token = std::fs::read(&token_file)
             .ok()
-            .and_then(|enc| secure::unprotect(&enc, entropy_tag.as_bytes()))
+            .and_then(|enc| crate::host::host().unprotect(&enc, entropy_tag.as_bytes()))
             .and_then(|plain| serde_json::from_slice::<StoredToken>(&plain).ok())
             .map(|t| t.refresh_token);
 
@@ -155,9 +154,9 @@ impl Session {
 
         // PKCE protects the authorization code should another local process
         // intercept it. Mandatory for loopback redirects.
-        let verifier = URL_SAFE_NO_PAD.encode(secure::random_bytes(48));
+        let verifier = URL_SAFE_NO_PAD.encode(crate::host::host().random_bytes(48));
         let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
-        let state = URL_SAFE_NO_PAD.encode(secure::random_bytes(16));
+        let state = URL_SAFE_NO_PAD.encode(crate::host::host().random_bytes(16));
 
         let mut url = format!(
             "{}?client_id={}&redirect_uri={}&response_type=code&scope={}\
@@ -173,7 +172,7 @@ impl Session {
             url.push_str(&format!("&{key}={}", urlencode(value)));
         }
 
-        crate::platform::open_in_browser(&url);
+        crate::host::host().open_url(&url);
         let code = self.wait_for_code(listener, &state)?;
 
         let mut body = format!(
@@ -207,7 +206,8 @@ impl Session {
             refresh_token: refresh.to_owned(),
         });
         if let Ok(bytes) = payload
-            && let Some(encrypted) = secure::protect(&bytes, self.entropy_tag.as_bytes())
+            && let Some(encrypted) =
+                crate::host::host().protect(&bytes, self.entropy_tag.as_bytes())
         {
             let _ = std::fs::write(&self.token_file, encrypted);
         }

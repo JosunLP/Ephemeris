@@ -8,6 +8,7 @@
 //! blockiert kein Netzwerkaufruf jemals das Zeichnen.
 
 use crate::config::{self, Config};
+use crate::host::Waker;
 use crate::log;
 use crate::model::{
     Agenda, Event, Task, filter_tasks_for_today, local_day_start, sort_events, sort_tasks,
@@ -26,10 +27,18 @@ use std::time::{Duration, Instant};
 /// Anfragen pro Sync, ohne je etwas Neues zu liefern.
 const META_TTL: Duration = Duration::from_secs(6 * 60 * 60);
 
-/// Wird nach jedem abgeschlossenen Befehl an das Fenster gepostet.
-pub const WM_APP_SYNC_DONE: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 1;
-/// Signalisiert nur "Statuszeile hat sich geaendert" (z. B. Sync gestartet).
-pub const WM_APP_STATUS: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 2;
+/// Why the user interface is being woken.
+///
+/// The sync thread must not know what kind of window it is talking to; on
+/// Windows this becomes a posted message, another toolkit would use its own
+/// event loop proxy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Wake {
+    /// A command finished; the agenda or the status may have changed.
+    Finished,
+    /// Only the status line moved, for instance "syncing" turning on.
+    Status,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Status {
@@ -196,18 +205,20 @@ impl SyncHandle {
     }
 }
 
-/// Startet den Sync-Thread. `hwnd` als `isize`, weil `HWND` nicht `Send` ist —
-/// wir nutzen es ausschliesslich fuer `PostMessage`, was threadsicher ist.
-pub fn spawn(shared: Arc<Mutex<Shared>>, hwnd: isize) -> SyncHandle {
+/// Starts the sync thread.
+///
+/// `waker` is how finished work reaches the user interface. Nothing else in
+/// this crate knows what a window is.
+pub fn spawn(shared: Arc<Mutex<Shared>>, waker: Arc<dyn Waker>) -> SyncHandle {
     let (tx, rx) = channel();
     std::thread::Builder::new()
         .name("tpmplaner-sync".into())
-        .spawn(move || worker(shared, hwnd, rx))
-        .expect("Sync-Thread konnte nicht gestartet werden");
+        .spawn(move || worker(shared, waker, rx))
+        .expect("could not start the sync thread");
     SyncHandle { tx }
 }
 
-fn worker(shared: Arc<Mutex<Shared>>, hwnd: isize, rx: Receiver<Command>) {
+fn worker(shared: Arc<Mutex<Shared>>, waker: Arc<dyn Waker>, rx: Receiver<Command>) {
     let mut providers = build_providers(&snapshot_config(&shared).effective_accounts());
     let mut meta: Option<Meta> = None;
     // Ride along with the sync run rather than opening a second connection.
@@ -219,7 +230,7 @@ fn worker(shared: Arc<Mutex<Shared>>, hwnd: isize, rx: Receiver<Command>) {
                 Command::Quit => return,
 
                 Command::Sync => {
-                    set_status(&shared, hwnd, Status::Syncing);
+                    set_status(&shared, &waker, Status::Syncing);
                     let cfg = snapshot_config(&shared);
                     // Accounts can be added or removed while running; rebuild
                     // when the configured set no longer matches.
@@ -231,13 +242,13 @@ fn worker(shared: Arc<Mutex<Shared>>, hwnd: isize, rx: Receiver<Command>) {
                     }
                     let result = run_sync(&mut providers, cfg, &mut meta);
                     publish_sources(&shared, &meta);
-                    apply_sync_result(&shared, hwnd, result);
-                    check_for_update(&shared, hwnd, &mut last_update_check);
+                    apply_sync_result(&shared, &waker, result);
+                    check_for_update(&shared, &waker, &mut last_update_check);
                 }
 
                 Command::Relogin => {
                     log::info("Re-authorization requested");
-                    set_status(&shared, hwnd, Status::Syncing);
+                    set_status(&shared, &waker, Status::Syncing);
                     for p in providers.iter_mut() {
                         p.forget();
                     }
@@ -247,7 +258,7 @@ fn worker(shared: Arc<Mutex<Shared>>, hwnd: isize, rx: Receiver<Command>) {
                     meta = None;
                     let result = run_sync(&mut providers, cfg, &mut meta);
                     publish_sources(&shared, &meta);
-                    apply_sync_result(&shared, hwnd, result);
+                    apply_sync_result(&shared, &waker, result);
                 }
 
                 Command::CompleteTask {
@@ -282,7 +293,7 @@ fn worker(shared: Arc<Mutex<Shared>>, hwnd: isize, rx: Receiver<Command>) {
                         }
                     }
                     drop(guard);
-                    notify(hwnd, WM_APP_SYNC_DONE);
+                    notify(&waker);
                 }
             }
         }
@@ -290,7 +301,11 @@ fn worker(shared: Arc<Mutex<Shared>>, hwnd: isize, rx: Receiver<Command>) {
 }
 
 /// Looks for a newer release at most once a day.
-fn check_for_update(shared: &Arc<Mutex<Shared>>, hwnd: isize, last: &mut Option<Instant>) {
+fn check_for_update(
+    shared: &Arc<Mutex<Shared>>,
+    waker: &Arc<dyn Waker>,
+    last: &mut Option<Instant>,
+) {
     if last.is_some_and(|t| t.elapsed() < crate::update::CHECK_INTERVAL) {
         return;
     }
@@ -299,7 +314,7 @@ fn check_for_update(shared: &Arc<Mutex<Shared>>, hwnd: isize, last: &mut Option<
     if let Some(available) = crate::update::check() {
         log::info(&format!("Update available: {}", available.version));
         lock(shared).update = Some(available);
-        notify(hwnd, WM_APP_SYNC_DONE);
+        notify(waker);
     }
 }
 
@@ -477,7 +492,7 @@ fn run_sync(
 
 fn apply_sync_result(
     shared: &Arc<Mutex<Shared>>,
-    hwnd: isize,
+    waker: &Arc<dyn Waker>,
     result: std::result::Result<Agenda, Error>,
 ) {
     {
@@ -499,7 +514,7 @@ fn apply_sync_result(
             }
         }
     }
-    notify(hwnd, WM_APP_SYNC_DONE);
+    notify(waker);
 }
 
 fn status_for(e: &Error) -> Status {
@@ -510,17 +525,13 @@ fn status_for(e: &Error) -> Status {
     }
 }
 
-fn set_status(shared: &Arc<Mutex<Shared>>, hwnd: isize, status: Status) {
+fn set_status(shared: &Arc<Mutex<Shared>>, waker: &Arc<dyn Waker>, status: Status) {
     lock(shared).status = status;
-    notify(hwnd, WM_APP_STATUS);
+    notify(waker);
 }
 
-fn notify(hwnd: isize, msg: u32) {
-    use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
-    use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
-    unsafe {
-        let _ = PostMessageW(Some(HWND(hwnd as *mut _)), msg, WPARAM(0), LPARAM(0));
-    }
+fn notify(waker: &Arc<dyn Waker>) {
+    waker.wake();
 }
 
 // --- Cache -----------------------------------------------------------------

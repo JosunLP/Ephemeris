@@ -21,18 +21,32 @@
 //! waehrend einer laufenden Animation mit ~60 Hz. Sobald alles zur Ruhe
 //! gekommen ist, hoert das Zeichnen vollstaendig auf.
 
-use crate::anim::Animations;
-use crate::i18n::Locale;
-use crate::model::{Agenda, Event, Task};
-use crate::sync::Status;
-use crate::theme::{Metrics, Palette, mix, rgba};
+use tpmplaner_core::anim::Animations;
+use tpmplaner_core::i18n::Locale;
+use tpmplaner_core::model::{Agenda, Event, Task};
+use tpmplaner_core::sync::Status;
+use tpmplaner_core::theme::{self, Metrics, Palette, mix};
+
+/// Converts the core's toolkit-neutral colour into the Direct2D one.
+///
+/// The portable crate must not know about Direct2D, so the conversion happens
+/// here, at the one boundary where it belongs.
+fn rgba(hex: u32, a: f32) -> D2D1_COLOR_F {
+    let c = theme::rgba(hex, a);
+    D2D1_COLOR_F {
+        r: c.r,
+        g: c.g,
+        b: c.b,
+        a: c.a,
+    }
+}
 use chrono::{DateTime, Local, NaiveDate, Timelike};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::mem::ManuallyDrop;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Direct2D::Common::{
-    D2D_RECT_F, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_GRADIENT_STOP, D2D1_PIXEL_FORMAT,
+    D2D_RECT_F, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_GRADIENT_STOP, D2D1_PIXEL_FORMAT,
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1,
@@ -1034,7 +1048,7 @@ impl Renderer {
 
         // Doppelbuchungen sind beim Ueberfliegen einer Liste kaum zu sehen —
         // man muesste Ende und Anfang zweier Zeilen im Kopf vergleichen.
-        let overlapping = crate::model::mark_overlaps(&frame.agenda.events);
+        let overlapping = tpmplaner_core::model::mark_overlaps(&frame.agenda.events);
         let conflicts = overlapping.iter().filter(|&&f| f).count() / 2;
 
         let mut badges: Vec<(String, u32)> = Vec::new();

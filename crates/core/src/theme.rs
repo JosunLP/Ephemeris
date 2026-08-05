@@ -15,17 +15,71 @@
 //! Systemakzentfarbe, damit sich das Widget wie ein Teil des Systems anfuehlt
 //! statt wie eine Fremdanwendung mit eigenem Blau.
 
-use crate::platform;
-use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
+/// A colour with straight alpha, in the 0..1 range every graphics API wants.
+///
+/// Deliberately not a toolkit type: this crate must not depend on Direct2D,
+/// Core Graphics or anything else. The renderer converts on use.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Rgba {
+    pub r: f32,
+    pub g: f32,
+    pub b: f32,
+    pub a: f32,
+}
 
-/// `0xRRGGBB` + Alpha in ein D2D-Farbobjekt.
-pub fn rgba(hex: u32, a: f32) -> D2D1_COLOR_F {
-    D2D1_COLOR_F {
+/// `0xRRGGBB` plus alpha.
+pub fn rgba(hex: u32, a: f32) -> Rgba {
+    Rgba {
         r: ((hex >> 16) & 0xFF) as f32 / 255.0,
         g: ((hex >> 8) & 0xFF) as f32 / 255.0,
         b: (hex & 0xFF) as f32 / 255.0,
         a,
     }
+}
+
+/// Appearance settings read from the operating system.
+///
+/// All five are accessibility or personalisation switches an application has
+/// to respect to feel like part of the system instead of imposing its own
+/// look. The host fills this in; this crate only reacts to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SystemVisuals {
+    /// A contrast theme is active. Gradients, gloss and shadows then work
+    /// against the very contrast the mode exists to provide.
+    pub high_contrast: bool,
+    /// "Transparency effects" in the system's appearance settings.
+    pub transparency: bool,
+    /// "Show animations". Off means no motion at all.
+    pub animations: bool,
+    pub light: bool,
+    /// System accent colour as `0xRRGGBB`.
+    pub accent: Option<u32>,
+    /// Colours of the active contrast scheme. There are several such schemes
+    /// with entirely different palettes, so nothing is guessed — the host
+    /// reports what the system says.
+    pub contrast: Option<ContrastColors>,
+}
+
+impl Default for SystemVisuals {
+    fn default() -> Self {
+        Self {
+            high_contrast: false,
+            transparency: true,
+            animations: true,
+            light: false,
+            accent: None,
+            contrast: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContrastColors {
+    pub window: u32,
+    pub text: u32,
+    pub gray: u32,
+    pub highlight: u32,
+    pub hot: u32,
 }
 
 /// Lineare Mischung zweier Farbwerte, fuer Hover- und Zustandsuebergaenge.
@@ -109,7 +163,7 @@ pub struct Palette {
 
 impl Palette {
     /// Baut die Palette aus Systemeinstellungen und Konfiguration.
-    pub fn resolve(pref: ThemePref, accent_cfg: &str, vis: platform::SystemVisuals) -> Self {
+    pub fn resolve(pref: ThemePref, accent_cfg: &str, vis: SystemVisuals) -> Self {
         // Das Windows-Kontrastdesign hat Vorrang vor jeder Konfiguration: wer
         // es einschaltet, braucht es, und eine App, die sich darueber
         // hinwegsetzt, wird unbenutzbar.
@@ -155,15 +209,17 @@ impl Palette {
     /// deshalb wird hier nichts geraten, sondern alles ueber `GetSysColor`
     /// abgefragt. Verlaeufe, Glanz und Schatten sind abgeschaltet — sie
     /// wuerden genau den Kontrast zerstoeren, um den es geht.
-    fn high_contrast(vis: platform::SystemVisuals) -> Self {
-        use windows::Win32::Graphics::Gdi::{
-            COLOR_GRAYTEXT, COLOR_HIGHLIGHT, COLOR_HOTLIGHT, COLOR_WINDOW, COLOR_WINDOWTEXT,
-        };
-        let window = platform::sys_color(COLOR_WINDOW);
-        let text = platform::sys_color(COLOR_WINDOWTEXT);
-        let gray = platform::sys_color(COLOR_GRAYTEXT);
-        let highlight = platform::sys_color(COLOR_HIGHLIGHT);
-        let hot = platform::sys_color(COLOR_HOTLIGHT);
+    fn high_contrast(vis: SystemVisuals) -> Self {
+        // Without reported colours there is nothing to build on; a readable
+        // black on white beats inventing a scheme.
+        let c = vis.contrast.unwrap_or(ContrastColors {
+            window: 0xFF_FFFF,
+            text: 0x00_0000,
+            gray: 0x60_6060,
+            highlight: 0x00_78D4,
+            hot: 0x00_5A9E,
+        });
+        let (window, text, gray, highlight, hot) = (c.window, c.text, c.gray, c.highlight, c.hot);
         // Helligkeit des Fensterhintergrunds entscheidet, ob es ein helles
         // oder dunkles Kontrastdesign ist.
         let (_, _, l) = rgb_to_hsl(window);
