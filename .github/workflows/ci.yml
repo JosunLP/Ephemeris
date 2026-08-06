@@ -114,8 +114,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
+      # `cargo install cargo-audit` compiles the tool from source on every
+      # run — several minutes of runner time for a check that only reads
+      # `Cargo.lock`. This pulls a prebuilt binary instead.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
       # A known-vulnerable dependency in a program that holds an OAuth refresh
       # token is worth failing the build over.
       - name: Audit
