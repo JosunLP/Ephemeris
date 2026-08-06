@@ -23,37 +23,52 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: docs
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # VitePress reads the git history for "last updated" stamps.
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      # `cache` and `cache-dependency-path` are set explicitly rather than
+      # relying on the automatic package-manager detection that v5 introduced,
+      # so the cache key stays tied to the lockfile this build actually uses.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
 
+      # `npm ci` installs exactly what the lockfile pins and fails if the
+      # lockfile and package.json have drifted apart. `npm install` would
+      # silently resolve new versions, so a docs build could differ from the
+      # one that was reviewed.
       - name: Install
-        run: npm install
+        run: npm ci
 
       - name: Build
         run: npm run build
 
-      - uses: actions/configure-pages@v5
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6
 
-      - uses: actions/upload-pages-artifact@v3
+      # Since v4 this action drops hidden files from the artifact. The current
+      # VitePress output contains none, but anything dot-prefixed added to the
+      # build (a `public/.well-known`, say) would silently not be deployed —
+      # `include-hidden-files: true` is the escape hatch if that day comes.
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
         with:
           path: docs/.vitepress/dist
 
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5

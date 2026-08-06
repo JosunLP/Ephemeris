@@ -18,7 +18,26 @@ updates:
           - minor
           - patch
 
+  # The workflows pin actions to commit SHAs, which means a fix upstream only
+  # reaches this repository when Dependabot rewrites the pin — monthly is too
+  # slow a floor for that. Grouped, because bumping five pins is one review.
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: monthly
+      interval: weekly
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  # The documentation site has its own lockfile, and `npm ci` builds strictly
+  # from it — so nothing there updates unless Dependabot proposes it.
+  - package-ecosystem: npm
+    directory: /docs
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      docs:
+        patterns:
+          - "*"
