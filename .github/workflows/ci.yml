@@ -17,17 +17,35 @@ env:
   # Fail on warnings in CI, but keep local builds comfortable.
   RUSTFLAGS: -D warnings
 
+# Every job below is independent — there is no `needs:` anywhere in this
+# workflow, so all of them start at once and the run takes as long as its
+# slowest job rather than the sum of all of them.
 jobs:
-  # The portable core must build and pass its tests on all three systems.
-  # This is what keeps the boundary honest: a stray platform call in
-  # `tpmplaner-core` fails here rather than on somebody's laptop months later.
+  # Formatting is a parser-level check, so it does not need Windows and it
+  # does not need a build cache. It finishes in seconds and gives the fastest
+  # possible "your diff is not formatted" signal.
+  fmt:
+    name: Formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  # The portable core must build and pass its tests on the non-Windows
+  # systems too. This is what keeps the boundary honest: a stray platform call
+  # in `tpmplaner-core` fails here rather than on somebody's laptop months
+  # later. Windows is left out on purpose — the `check` job already compiles
+  # and tests the core there as part of `--workspace`.
   core:
     name: Core on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -40,7 +58,7 @@ jobs:
         run: cargo test -p tpmplaner-core
 
   check:
-    name: Format, lint and test
+    name: Lint and test
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
@@ -48,13 +66,10 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: clippy
 
       - name: Cache cargo registry and build output
         uses: Swatinem/rust-cache@v2
-
-      - name: Formatting
-        run: cargo fmt --all -- --check
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
@@ -62,11 +77,28 @@ jobs:
       - name: Tests
         run: cargo test --workspace --all-targets
 
-      # The unit tests cover the platform-independent logic. The parts that
-      # need a real GPU device and a window (renderer, hit testing) are only
-      # exercised by building — a broken Direct2D call is a compile error, not
-      # something a headless runner could observe.
-      - name: Release build
+  # Split out from `check` rather than appended to it: the release profile
+  # (`lto = "fat"`, `codegen-units = 1`) shares no build artifacts with the
+  # debug profile the tests use, so running it as a separate job costs no
+  # extra compilation but takes the slowest step off the critical path.
+  #
+  # The unit tests cover the platform-independent logic. The parts that need a
+  # real GPU device and a window (renderer, hit testing) are only exercised by
+  # building — a broken Direct2D call is a compile error, not something a
+  # headless runner could observe.
+  build:
+    name: Release build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and build output
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build
         run: cargo build --release
 
       - name: Upload binary
