@@ -8,7 +8,7 @@
 use chrono::{DateTime, Local, NaiveDate, NaiveTime};
 use serde::{Deserialize, Serialize};
 
-/// Ein Kalendereintrag des heutigen Tages.
+/// A calendar entry for today.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Event {
     pub title: String,
@@ -62,7 +62,7 @@ impl Event {
     }
 }
 
-/// Eine Aufgabe aus Google Tasks.
+/// A task from a task list.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
     /// Needed to complete the task through the API.

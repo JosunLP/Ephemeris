@@ -61,7 +61,7 @@ struct TokenResponse {
 pub struct Auth {
     creds: ClientCredentials,
     refresh_token: Option<String>,
-    /// Access-Token samt Ablaufzeitpunkt, nur im RAM.
+    /// The access token and its expiry, held in memory only.
     access: Option<(String, Instant)>,
 }
 

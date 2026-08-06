@@ -529,7 +529,7 @@ impl Locale {
         })
     }
 
-    /// Restlaufzeit des gerade laufenden Termins ("noch 32 Min").
+    /// Time remaining in the event running right now ("32 min left").
     pub fn time_left(&self, minutes: i64) -> String {
         let body = self.duration_raw(minutes.max(0));
         self.iso(self.cat.left_pattern.replacen("{}", &body, 1))

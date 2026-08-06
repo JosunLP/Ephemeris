@@ -549,7 +549,7 @@ mod tests {
         for color in [0x4FA3FF, 0xC03535, 0x1D8A5C, 0x808080] {
             let (h, s, l) = rgb_to_hsl(color);
             let back = hsl_to_rgb(h, s, l);
-            // Rundungsfehler von hoechstens einem Schritt je Kanal.
+            // A rounding error of at most one step per channel.
             for shift in [16, 8, 0] {
                 let a = ((color >> shift) & 0xFF) as i32;
                 let b = ((back >> shift) & 0xFF) as i32;

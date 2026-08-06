@@ -123,7 +123,7 @@ impl Config {
             Err(e) => (
                 Self::default(),
                 Some(format!(
-                    "config.json Zeile {}: {} — es gelten die Vorgabewerte.",
+                    "config.json line {}: {} — the defaults are in use.",
                     e.line(),
                     e
                 )),

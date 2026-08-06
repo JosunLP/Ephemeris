@@ -1,25 +1,25 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 TPMPlaner contributors
-//! Direct2D-Renderer auf einer DirectComposition-Oberflaeche.
+//! Direct2D renderer on a DirectComposition surface.
 //!
-//! Aufbau der Kette:
+//! How the chain is put together:
 //!
 //! ```text
-//! D3D11 Device ─► DXGI Device ─┬─► D2D Device ─► D2D DeviceContext  (zeichnen)
+//! D3D11 Device ─► DXGI Device ─┬─► D2D Device ─► D2D DeviceContext  (drawing)
 //!                              └─► DComp Device ─► Visual ─► Target ─► HWND
 //!                                        ▲
 //!               Composition-Swapchain ───┘   (DXGI_ALPHA_MODE_PREMULTIPLIED)
 //! ```
 //!
-//! Warum dieser Weg statt eines klassischen Layered Window:
-//! `UpdateLayeredWindow` laeuft ueber eine CPU-Bitmap und kostet bei jedem
-//! Frame eine volle Kopie. Die Composition-Swapchain bleibt komplett auf der
-//! GPU und liefert trotzdem echtes Per-Pixel-Alpha — Voraussetzung dafuer ist
-//! `WS_EX_NOREDIRECTIONBITMAP` am Fenster.
+//! Why this route rather than a classic layered window:
+//! `UpdateLayeredWindow` goes through a CPU bitmap and costs a full copy every
+//! frame. The composition swapchain stays entirely on the GPU and still gives
+//! true per-pixel alpha — which requires `WS_EX_NOREDIRECTIONBITMAP` on the
+//! window.
 //!
-//! Gezeichnet wird bei Bedarf: neue Daten, Minutenwechsel, Hover — und
-//! waehrend einer laufenden Animation mit ~60 Hz. Sobald alles zur Ruhe
-//! gekommen ist, hoert das Zeichnen vollstaendig auf.
+//! Drawing happens on demand: new data, a change of minute, hover — and at
+//! roughly 60 Hz while an animation runs. Once everything has settled, drawing
+//! stops completely.
 
 use tpmplaner_core::anim::Animations;
 use tpmplaner_core::i18n::Locale;
@@ -85,23 +85,23 @@ use windows::Win32::Graphics::Dxgi::{
 use windows::core::{HRESULT, Interface, Result, w};
 use windows_numerics::{Matrix3x2, Vector2};
 
-/// Anklickbare Flaeche, in DIPs relativ zur Fensterecke.
+/// A clickable area, in DIPs relative to the window corner.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Hit {
     Refresh,
-    /// Kreis vor einer Aufgabe -> abhaken.
+    /// The circle before a task -> tick it off.
     TaskCheck(usize),
-    /// Aufgabenzeile -> in Google Tasks oeffnen.
+    /// A task row -> open it in the web interface.
     Task(usize),
-    /// Zeile einer Aufgabe, deren Abhaken noch zurueckgenommen werden kann.
+    /// The row of a task whose completion can still be undone.
     Undo(usize),
-    /// Terminzeile -> im Kalender oeffnen.
+    /// An event row -> open it in the calendar.
     Event(usize),
-    /// Hervorgehobener Termin im Kopfbereich.
+    /// The highlighted event in the header area.
     Hero(usize),
-    /// Termin aus der Morgen-Vorschau.
+    /// An event from tomorrow's preview.
     Tomorrow(usize),
-    /// Statuszeile mit Handlungsbedarf (Einrichtung/Anmeldung/Konfiguration).
+    /// A status line that needs action (setup, sign-in or configuration).
     StatusAction,
 }
 
@@ -117,15 +117,15 @@ impl HitRegion {
     }
 }
 
-/// Aufgabe, deren Abhaken noch aussteht und zurueckgenommen werden kann.
+/// A task that has been ticked off but not yet sent, and can still be undone.
 #[derive(Debug, Clone, Copy)]
 pub struct UndoView<'a> {
     pub task_id: &'a str,
-    /// 1.0 direkt nach dem Klick, 0.0 wenn gesendet wird.
+    /// 1.0 right after the click, 0.0 when it is sent.
     pub remaining: f32,
 }
 
-/// Zeichenzustand, den das Fenster hereinreicht.
+/// The drawing state the window passes in.
 pub struct Frame<'a> {
     pub agenda: &'a Agenda,
     pub loc: &'a Locale,
@@ -137,19 +137,19 @@ pub struct Frame<'a> {
     pub opacity: f32,
     pub show_past_events: bool,
     pub undo: Option<UndoView<'a>>,
-    /// Syntaxfehler in `config.json`; hat Vorrang vor der Sync-Statuszeile.
+    /// A syntax error in `config.json`; outranks the sync status line.
     pub config_error: Option<&'a str>,
     /// Version of a newer release, if the daily check found one.
     pub update: Option<&'a str>,
 }
 
 pub struct FrameResult {
-    /// Gesamthoehe des Inhalts — Basis fuer die Scroll-Begrenzung.
+    /// Total height of the content — the basis for limiting the scroll.
     pub content_height: f32,
     pub viewport_height: f32,
 }
 
-/// Schriftrollen; der Index adressiert `Renderer::formats`.
+/// Type roles; the index addresses `Renderer::formats`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(usize)]
 enum Font {
@@ -163,7 +163,7 @@ enum Font {
     MetaRight,
     Footer,
     Icon,
-    /// Mehrzeilig mit Umbruch, ohne Kuerzung — nur fuer den Tooltip.
+    /// Multi-line with wrapping and no truncation — for the tooltip only.
     Tooltip,
 }
 const FONT_COUNT: usize = 11;
@@ -180,26 +180,25 @@ pub struct Renderer {
     formats: [IDWriteTextFormat; FONT_COUNT],
     round_stroke: ID2D1StrokeStyle,
 
-    /// Ein Pinsel je Farbe; die Deckkraft wird pro Verwendung gesetzt. Spart
-    /// bei 60 Hz einige hundert COM-Objekterzeugungen pro Sekunde.
+    /// One brush per colour; opacity is set per use. At 60 Hz this saves a
+    /// few hundred COM object creations per second.
     brushes: RefCell<HashMap<u32, ID2D1SolidColorBrush>>,
-    /// Fertige Textlayouts. DirectWrite-Layout ist der teuerste Einzelschritt
-    /// im Frame; waehrend einer Animation aendert sich der Text aber nicht.
+    /// Finished text layouts. DirectWrite layout is the most expensive single
+    /// step in a frame, and the text does not change during an animation.
     layouts: RefCell<HashMap<(u64, u32, u32, u32), IDWriteTextLayout>>,
 
-    /// Globaler Deckkraftfaktor fuer die Einblend-Animation.
+    /// Global opacity factor for the reveal animation.
     fade: Cell<f32>,
-    /// Voller Text der ueberfahrenen Zeile, sofern er gekuerzt dargestellt
-    /// wurde. Wird waehrend des Zeichnens gesetzt und ganz am Ende als
-    /// Ueberlagerung ausgegeben.
+    /// Full text of the hovered row, if it was drawn truncated. Set while
+    /// drawing and emitted as an overlay right at the end.
     tooltip: RefCell<Option<(String, f32, f32)>>,
 
     pal: Palette,
-    /// Rechts-nach-links-Layout. Gespiegelt wird ausschliesslich in den
-    /// Zeichenprimitiven; der gesamte Layoutcode rechnet unveraendert von
-    /// links nach rechts.
+    /// Right-to-left layout. Mirroring happens exclusively in the drawing
+    /// primitives; all the layout code goes on computing left to right,
+    /// unchanged.
     rtl: bool,
-    /// Spiegelachse `panel.left + panel.right`, je Frame gesetzt.
+    /// Mirror axis `panel.left + panel.right`, set once per frame.
     mirror: Cell<f32>,
     metrics: Metrics,
     dpi: f32,
@@ -236,7 +235,7 @@ impl Renderer {
                 BufferCount: 2,
                 Scaling: DXGI_SCALING_STRETCH,
                 SwapEffect: DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
-                // Ohne premultiplied Alpha bleibt das Fenster undurchsichtig.
+                // Without premultiplied alpha the window stays opaque.
                 AlphaMode: DXGI_ALPHA_MODE_PREMULTIPLIED,
                 Flags: 0,
             };
@@ -244,8 +243,8 @@ impl Renderer {
 
             let dcomp: IDCompositionDevice = DCompositionCreateDevice(&dxgi_device)?;
 
-            // `topmost = false`: die Z-Ordnung regelt das Fenster selbst
-            // (bottom-most), nicht die Komposition.
+            // `topmost = false`: the window manages its own z-order
+            // (bottom-most); composition does not.
             let target = dcomp.CreateTargetForHwnd(hwnd, false)?;
             let visual = dcomp.CreateVisual()?;
             visual.SetContent(&swapchain)?;
@@ -257,12 +256,12 @@ impl Renderer {
             let d2d_device = d2d_factory.CreateDevice(&dxgi_device)?;
             let dc = d2d_device.CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE)?;
 
-            // ClearType braucht einen deckenden Hintergrund. Auf einer
-            // transparenten Glasflaeche erzeugt es Farbsaeume, deshalb
-            // Graustufen-Antialiasing — dasselbe tun WPF und WinUI auf Acryl.
+            // ClearType needs an opaque background. On a transparent glass
+            // surface it produces colour fringes, hence greyscale
+            // antialiasing — which is what WPF and WinUI do on acrylic too.
             dc.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
 
-            // Runde Enden fuer Haken und Fortschrittsbalken.
+            // Round caps for ticks and progress bars.
             let round_stroke = d2d_factory.CreateStrokeStyle(
                 &D2D1_STROKE_STYLE_PROPERTIES1 {
                     startCap: D2D1_CAP_STYLE_ROUND,
@@ -274,8 +273,8 @@ impl Renderer {
                 },
                 None,
             )?;
-            // `ID2D1Factory1` liefert die "1"-Variante; `DrawLine` erwartet
-            // aber exakt die Basisschnittstelle.
+            // `ID2D1Factory1` hands back the "1" variant, but `DrawLine`
+            // wants exactly the base interface.
             let round_stroke: ID2D1StrokeStyle = round_stroke.into();
 
             let dwrite: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
@@ -375,10 +374,10 @@ impl Renderer {
         }
     }
 
-    /// Design gewechselt (Windows hell/dunkel, geaenderte Akzentfarbe).
+    /// The theme changed (Windows light/dark, or a different accent colour).
     ///
-    /// Die Pinsel sind nach Farbe zwischengespeichert; ohne Leeren blieben die
-    /// alten Eintraege dauerhaft liegen.
+    /// Brushes are cached by colour; without clearing them the old entries
+    /// would stay around for good.
     pub fn set_palette(&mut self, pal: Palette) {
         self.pal = pal;
         self.brushes.borrow_mut().clear();
@@ -388,7 +387,7 @@ impl Renderer {
         self.pal
     }
 
-    /// Backbuffer als D2D-Ziel setzen. Muss nach jedem Resize erneut passieren.
+    /// Point D2D at the back buffer. Has to happen again after every resize.
     fn bind_target(&mut self) -> Result<()> {
         unsafe {
             let surface: IDXGISurface = self.swapchain.GetBuffer(0)?;
@@ -406,7 +405,7 @@ impl Renderer {
                 .dc
                 .CreateBitmapFromDxgiSurface(&surface, Some(&props))?;
             self.dc.SetTarget(&bitmap);
-            // Ab hier rechnet alles in DIPs; die DPI-Skalierung uebernimmt D2D.
+            // From here everything is in DIPs; D2D handles the DPI scaling.
             self.dc.SetDpi(self.dpi, self.dpi);
             Ok(())
         }
@@ -418,8 +417,8 @@ impl Renderer {
             return Ok(());
         }
         unsafe {
-            // Das alte Ziel muss die Referenz auf den Backbuffer loslassen,
-            // sonst schlaegt ResizeBuffers mit DXGI_ERROR_INVALID_CALL fehl.
+            // The old target has to let go of the back buffer, or
+            // ResizeBuffers fails with DXGI_ERROR_INVALID_CALL.
             self.dc.SetTarget(None);
             self.swapchain.ResizeBuffers(
                 0,
@@ -435,25 +434,25 @@ impl Renderer {
         self.bind_target()
     }
 
-    /// Groesse des sichtbaren Bereichs in DIPs.
+    /// Size of the visible area in DIPs.
     pub fn size_dip(&self) -> (f32, f32) {
         let k = 96.0 / self.dpi;
         (self.size_px.0 as f32 * k, self.size_px.1 as f32 * k)
     }
 
-    /// `hits` wird vom Aufrufer bereitgestellt und hier neu befuellt — so
-    /// entfaellt eine Vec-Allokation pro Frame.
+    /// `hits` is supplied by the caller and refilled here, which avoids a Vec
+    /// allocation per frame.
     pub fn draw(&mut self, frame: &Frame, hits: &mut Vec<HitRegion>) -> Result<FrameResult> {
         let (w, h) = self.size_dip();
         let m = self.metrics;
         hits.clear();
 
-        // Der Glaskoerper ist um den Schattenrand eingerueckt.
+        // The glass body is inset by the shadow margin.
         let panel = rect(m.shadow, m.shadow, w - m.shadow, h - m.shadow);
         let cx0 = panel.left + m.pad;
         let cx1 = panel.right - m.pad;
-        // Achse fuer die RTL-Spiegelung: alles innerhalb des Glaskoerpers wird
-        // daran geklappt, der Koerper selbst bildet sich dabei auf sich ab.
+        // Axis for the RTL mirroring: everything inside the glass body is
+        // folded across it, and the body maps onto itself.
         self.mirror.set(panel.left + panel.right);
 
         unsafe {
@@ -471,8 +470,8 @@ impl Renderer {
             let content_top = y;
             let content_bottom = panel.bottom - m.footer_h;
 
-            // Alles dazwischen wird geklippt, damit gescrollte Zeilen nicht in
-            // Kopf-, Fuss- oder Rahmenbereich hineinlaufen.
+            // Everything between is clipped so scrolled rows cannot run into
+            // the header, the footer or the frame.
             self.dc.PushAxisAlignedClip(
                 &rect(
                     panel.left + 1.0,
@@ -483,7 +482,7 @@ impl Renderer {
                 Default::default(),
             );
 
-            // Einblenden: leicht von unten hereinschieben und aufblenden.
+            // Reveal: slide up slightly from below while fading in.
             let reveal = frame.anim.reveal.value;
             self.fade.set(reveal.clamp(0.0, 1.0));
             let slide = (1.0 - reveal) * 10.0;
@@ -507,16 +506,16 @@ impl Renderer {
                 frame,
             )?;
             self.draw_footer(panel, cx0, cx1, frame, hits)?;
-            // Ganz zuletzt, damit die Ueberlagerung ueber allem liegt und
-            // nicht vom Inhaltsklipp beschnitten wird.
+            // Last of all, so the overlay sits above everything and is not
+            // cut off by the content clip.
             self.draw_tooltip(panel, content_top, content_bottom)?;
 
             self.dc.EndDraw(None, None)?;
             self.swapchain.Present(1, DXGI_PRESENT(0)).ok()?;
             self.dcomp.Commit()?;
 
-            // Unbegrenztes Wachstum verhindern: die Relativzeiten ("in 25 Min")
-            // erzeugen jede Minute neue Schluessel.
+            // Keep this from growing without bound: the relative times
+            // ("in 25 min") produce new keys every minute.
             let mut layouts = self.layouts.borrow_mut();
             if layouts.len() > 512 {
                 layouts.clear();
@@ -529,19 +528,19 @@ impl Renderer {
         }
     }
 
-    // --- Glaskoerper --------------------------------------------------------
+    // --- Glass body ---------------------------------------------------------
 
-    /// Weicher Schlagschatten aus uebereinandergelegten, nach aussen
-    /// wachsenden Rundrechtecken.
+    /// A soft drop shadow made of stacked rounded rectangles growing
+    /// outwards.
     ///
-    /// Ein echter Gauss-Blur ueber `ID2D1Effect` waere sauberer, braucht aber
-    /// eine Zwischenbitmap und einen kompletten Effektgraphen pro Frame. Bei
-    /// zwoelf Fuellungen mit geringer Deckkraft ist das Ergebnis auf dieser
-    /// Groesse nicht unterscheidbar und deutlich billiger.
+    /// A real Gaussian blur through `ID2D1Effect` would be cleaner, but needs
+    /// an intermediate bitmap and a full effect graph every frame. With twelve
+    /// low-opacity fills the result is indistinguishable at this size, and far
+    /// cheaper.
     fn draw_shadow(&self, panel: D2D_RECT_F) -> Result<()> {
         let m = self.metrics;
-        // Im Kontrastdesign gibt es keinen Schatten: er weicht den Rand auf,
-        // den dieser Modus gerade hart haben will.
+        // A contrast theme has no shadow: it softens exactly the edge that
+        // this mode wants hard.
         if self.pal.shadow_alpha <= 0.0 {
             return Ok(());
         }
@@ -553,7 +552,7 @@ impl Renderer {
                 let grow = m.shadow * (1.0 - t);
                 self.dc.FillRoundedRectangle(
                     &D2D1_ROUNDED_RECT {
-                        // Leicht nach unten versetzt: Licht kommt von oben.
+                        // Offset slightly downwards: the light comes from above.
                         rect: rect(
                             panel.left - grow,
                             panel.top - grow * 0.6,
@@ -570,7 +569,7 @@ impl Renderer {
         Ok(())
     }
 
-    /// Verlauf, Glanzbogen und die doppelte Kante.
+    /// Gradient, gloss arc and the double edge.
     fn draw_panel(&self, panel: D2D_RECT_F, opacity: f32) -> Result<()> {
         unsafe {
             let m = self.metrics;
@@ -605,8 +604,8 @@ impl Renderer {
             )?;
             self.dc.FillRoundedRectangle(&body, &gradient);
 
-            // Glanzbogen: heller Verlauf im oberen Bereich, der nach unten
-            // vollstaendig ausblendet. Im Kontrastdesign entfaellt er.
+            // Gloss arc: a light gradient across the top that fades out
+            // completely towards the bottom. Dropped in a contrast theme.
             if p.sheen_gloss > 0.0 {
                 let gloss_h = (panel.bottom - panel.top) * 0.30;
                 let gloss_stops = [
@@ -641,8 +640,8 @@ impl Renderer {
                 );
             }
 
-            // Innen hell, aussen dunkel — dieser Kontrast erzeugt die
-            // plastische Kante.
+            // Light inside, dark outside — that contrast is what makes the
+            // edge look raised.
             self.dc.DrawRoundedRectangle(
                 &D2D1_ROUNDED_RECT {
                     rect: inset(panel, 1.0),
@@ -660,8 +659,8 @@ impl Renderer {
                 None,
             );
 
-            // Schmaler Lichtstreifen ganz oben, wie die Reflexion auf einer
-            // Glaskante.
+            // A narrow strip of light right at the top, like the reflection
+            // on the edge of a sheet of glass.
             self.dc.DrawLine(
                 point(panel.left + m.corner, panel.top + 1.0),
                 point(panel.right - m.corner, panel.top + 1.0),
@@ -673,7 +672,7 @@ impl Renderer {
         }
     }
 
-    // --- Kopfbereich --------------------------------------------------------
+    // --- Header -------------------------------------------------------------
 
     fn draw_header(
         &self,
@@ -689,7 +688,7 @@ impl Renderer {
         let today = frame.agenda.day.unwrap_or_else(|| frame.now.date_naive());
         let bottom = top + m.header_h;
 
-        // Aktualisieren-Knopf
+        // Refresh button
         let btn = rect(
             cx1 - m.icon_btn,
             top + m.pad * 0.65,
@@ -730,7 +729,7 @@ impl Renderer {
             hit: Hit::Refresh,
         });
 
-        // Wochentag gross, Datum klein darunter.
+        // Weekday large, date small underneath.
         let title_y = top + m.pad * 0.55;
         self.text(
             &loc.weekday(today),
@@ -752,8 +751,8 @@ impl Renderer {
             1.0,
         )?;
 
-        // Uhr rechts, auf Hoehe der Datumszeile. Sie ist der Grund, warum das
-        // Widget minuetlich neu zeichnet.
+        // The clock on the right, level with the date line. It is the reason
+        // the widget redraws every minute.
         self.text(
             &loc.time(frame.now),
             Font::Clock,
@@ -774,22 +773,21 @@ impl Renderer {
         Ok(bottom)
     }
 
-    /// Tagesschiene: der ganze Tag von 06:00 bis 22:00 auf einem Streifen.
+    /// The day rail: the whole day from 06:00 to 22:00 on a single strip.
     ///
-    /// Zeigt die *Form* des Tages, die aus einer Liste nicht hervorgeht —
-    /// geballte Vormittage, freie Nachmittage, wie lange etwas dauert. Jeder
-    /// Termin ist ein Segment in seiner Kalenderfarbe, an der richtigen
-    /// Stelle und in der richtigen Breite; die verstrichene Zeit ist getoent,
-    /// und eine Marke zeigt, wo man gerade steht.
+    /// It shows the *shape* of the day, which a list cannot — clustered
+    /// mornings, free afternoons, how long something runs. Every event is a
+    /// segment in its calendar colour, at the right place and the right width;
+    /// the elapsed time is tinted, and a marker shows where you are now.
     fn draw_day_rail(&self, x0: f32, x1: f32, y: f32, frame: &Frame) -> Result<()> {
         let m = self.metrics;
         let p = &self.pal;
         let now_min = frame.now.hour() as f32 * 60.0 + frame.now.minute() as f32;
 
-        // Standardfenster ist der Arbeitstag; es dehnt sich aber auf alles aus,
-        // was tatsaechlich ansteht. Ein festes 06:00-22:00 klemmt sonst den
-        // Fruehflug um 05:00 und den Abendtermin um 23:00 beide an den Rand —
-        // genau die Ausreisser, die man sehen will.
+        // The default window is the working day, but it stretches to cover
+        // whatever is actually on. A fixed 06:00-22:00 would squash the 05:00
+        // flight and the 23:00 event against the edges — precisely the
+        // outliers worth seeing.
         let (mut lo, mut hi) = (6.0 * 60.0_f32, 22.0 * 60.0_f32);
         for ev in &frame.agenda.events {
             if ev.all_day {
@@ -803,7 +801,7 @@ impl Renderer {
         }
         lo = lo.min(now_min).max(0.0);
         hi = hi.max(now_min).min(24.0 * 60.0);
-        // Bei einem sehr leeren Tag wuerde die Spanne sonst entarten.
+        // On a very empty day the span would otherwise degenerate.
         if hi - lo < 240.0 {
             hi = (lo + 240.0).min(24.0 * 60.0);
             lo = (hi - 240.0).max(0.0);
@@ -819,10 +817,10 @@ impl Renderer {
 
         let now_x = pos(now_min);
 
-        // Verstrichener Teil des Tages. Bewusst sehr zurueckhaltend: die
-        // Schiene soll nebenbei lesbar sein, nicht wie ein Fortschrittsbalken
-        // um Aufmerksamkeit buhlen — bei einer kraeftigen Akzentfarbe faellt
-        // sonst ein breiter farbiger Streifen ins Auge.
+        // The elapsed part of the day. Deliberately very restrained: the rail
+        // should be readable in passing, not compete for attention like a
+        // progress bar — with a strong accent colour a wide coloured stripe
+        // would be all you see.
         if now_x > x0 + 0.5 {
             self.fill_round(rect(x0, y, now_x, y + m.rail_h), radius, p.accent, 0.09)?;
         }
@@ -834,7 +832,7 @@ impl Renderer {
             let Some(start) = ev.start else { continue };
             let start_min = start.hour() as f32 * 60.0 + start.minute() as f32;
             let (sx, ex) = (pos(start_min), pos(end_minutes(ev, start_min)));
-            // Kurze Termine bleiben sonst unsichtbar.
+            // Short events would otherwise be invisible.
             let ex = ex.max(sx + 2.5);
             let running = ev.is_now(frame.now);
             let color = if self.pal.high_contrast {
@@ -852,7 +850,7 @@ impl Renderer {
             )?;
         }
 
-        // Jetzt-Marke ueber allem, damit sie nie von einem Segment verdeckt wird.
+        // The now marker goes on top so no segment can ever hide it.
         if (lo..=hi).contains(&now_min) {
             self.line(
                 now_x,
@@ -868,10 +866,10 @@ impl Renderer {
         Ok(())
     }
 
-    /// Hervorgehobener Termin: der laufende, sonst der naechste.
+    /// The highlighted event: the one running now, otherwise the next one.
     ///
-    /// Das ist die eine Information, fuer die man sonst hinsehen muesste — sie
-    /// gehoert nach ganz oben und nicht in eine Liste.
+    /// This is the one piece of information you would otherwise have to go
+    /// looking for — it belongs at the very top, not in a list.
     fn draw_hero(
         &self,
         cx0: f32,
@@ -890,7 +888,7 @@ impl Renderer {
         let card = rect(cx0, top + m.pad * 0.55, cx1, top + m.pad * 0.55 + m.hero_h);
         let hovered = frame.hover == Some(Hit::Hero(idx));
 
-        // Laufender Termin kraeftig, kommender zurueckhaltend.
+        // A running event strongly, an upcoming one quietly.
         let tint = if running { p.accent_soft } else { p.panel_top };
         let base = if running { 0.70 } else { 0.42 };
         let a = base
@@ -908,7 +906,7 @@ impl Renderer {
             if running { 0.40 } else { p.rule_alpha },
             1.0,
         )?;
-        // Akzentbalken an der Leseanfangs-Seite.
+        // Accent bar on the side the reading starts from.
         self.fill_round(
             rect(
                 card.left + 4.0,
@@ -939,8 +937,8 @@ impl Renderer {
             1.0,
         )?;
 
-        // Countdown rechts: bei laufendem Termin bis zum Ende, sonst bis zum
-        // Start.
+        // Countdown on the right: to the end while an event runs, otherwise
+        // to the start.
         let rel = if running {
             ev.end
                 .map(|e| loc.time_left((e - frame.now).num_minutes()))
@@ -985,7 +983,7 @@ impl Renderer {
             1.0,
         )?;
 
-        // Fortschritt des laufenden Termins als feine Linie am Kartenfuss.
+        // Progress of the running event as a fine line at the foot of the card.
         if running && let (Some(s), Some(e)) = (ev.start, ev.end) {
             let total = (e - s).num_seconds().max(1) as f32;
             let done = ((frame.now - s).num_seconds().max(0) as f32 / total).clamp(0.0, 1.0);
@@ -1021,7 +1019,7 @@ impl Renderer {
         Ok(card.bottom)
     }
 
-    // --- Listen -------------------------------------------------------------
+    // --- Lists --------------------------------------------------------------
 
     fn draw_events_section(
         &self,
@@ -1036,8 +1034,8 @@ impl Renderer {
         let loc = frame.loc;
         let now = frame.now;
 
-        // Der laufende Termin bleibt immer sichtbar, auch wenn vergangene
-        // ausgeblendet sind — sonst verschwindet ausgerechnet der wichtigste.
+        // The running event always stays visible, even when past ones are
+        // hidden — otherwise the most important one is the one that vanishes.
         let visible: Vec<(usize, &Event)> = frame
             .agenda
             .events
@@ -1046,8 +1044,9 @@ impl Renderer {
             .filter(|(_, e)| frame.show_past_events || !e.is_past(now) || e.is_now(now))
             .collect();
 
-        // Doppelbuchungen sind beim Ueberfliegen einer Liste kaum zu sehen —
-        // man muesste Ende und Anfang zweier Zeilen im Kopf vergleichen.
+        // Double bookings are hard to spot when skimming a list — you would
+        // have to compare the end of one row with the start of the next in
+        // your head.
         let overlapping = tpmplaner_core::model::mark_overlaps(&frame.agenda.events);
         let conflicts = overlapping.iter().filter(|&&f| f).count() / 2;
 
@@ -1077,8 +1076,8 @@ impl Renderer {
             return Ok(y + m.event_row_h);
         }
 
-        // Kalendername nur zeigen, wenn ueberhaupt mehrere im Spiel sind —
-        // sonst waere es in jeder Zeile dieselbe redundante Angabe.
+        // Only show the calendar name when more than one is in play —
+        // otherwise it is the same redundant label on every row.
         let multi_cal = visible
             .iter()
             .filter(|(_, e)| !e.all_day)
@@ -1087,8 +1086,8 @@ impl Renderer {
             .len()
             > 1;
 
-        // Spaltenbreiten aus dem tatsaechlichen Inhalt statt aus festen
-        // Werten — sonst passt das Layout nur zu einer Sprache.
+        // Column widths from the actual content rather than fixed values —
+        // otherwise the layout only fits one language.
         let time_labels: Vec<String> = visible
             .iter()
             .map(|(_, e)| {
@@ -1126,7 +1125,7 @@ impl Renderer {
             m.rel_col_w * 1.6,
         );
 
-        // Position der Jetzt-Linie: vor dem ersten Termin, der noch kommt.
+        // Where the now line goes: before the first event still to come.
         let now_line_before = visible
             .iter()
             .position(|(_, e)| !e.all_day && e.start.map(|s| s > now).unwrap_or(false));
@@ -1140,7 +1139,7 @@ impl Renderer {
             let row = rect(x0 - 5.0, y, x1 + 5.0, y + m.event_row_h);
             let is_now = ev.is_now(now);
             let past = ev.is_past(now) && !is_now;
-            // Zurueckgenommen, aber noch bequem lesbar.
+            // Held back, but still comfortable to read.
             let dim: f32 = if past { 0.55 } else { 1.0 };
 
             if frame.hover == Some(Hit::Event(*idx)) {
@@ -1150,9 +1149,9 @@ impl Renderer {
                 self.fill_round(row, 5.0, p.accent, 0.10)?;
             }
 
-            // Farbmarke des Quellkalenders.
-            // Im Kontrastdesign wird sie durch die Systemfarbe ersetzt — die
-            // Google-Kalenderfarben haetten dort keinen garantierten Kontrast.
+            // Colour marker for the source calendar.
+            // A contrast theme replaces it with the system colour — calendar
+            // colours carry no guaranteed contrast there.
             let bar_color = if self.pal.high_contrast {
                 if is_now { p.accent } else { p.text_primary }
             } else if is_now {
@@ -1168,8 +1167,8 @@ impl Renderer {
             )?;
 
             let tx = x0 + 11.0;
-            // Ueberschneidende Termine bekommen eine Warnfarbe auf der
-            // Uhrzeit — dort schaut man hin, wenn man Konflikte sucht.
+            // Overlapping events get a warning colour on the time — that is
+            // where you look when hunting for conflicts.
             let conflicted = overlapping.get(*idx).copied().unwrap_or(false);
             self.text(
                 &time_labels[slot],
@@ -1185,8 +1184,8 @@ impl Renderer {
                 dim,
             )?;
 
-            // Rechte Spalte: Restzeit, bei vergangenen Terminen der
-            // Kalendername (die Restzeit waere dort nur Rauschen).
+            // Right column: time remaining, or for past events the calendar
+            // name (time remaining would be noise there).
             let rel_x = x1 - rel_w;
             if !ev.all_day && !past {
                 let rel = if is_now {
@@ -1241,7 +1240,7 @@ impl Renderer {
             y += m.event_row_h + m.row_gap;
         }
 
-        // Alle Termine schon vorbei: Linie ans Ende.
+        // Every event is over: the line goes to the end.
         if now_line_before.is_none() && visible.iter().any(|(_, e)| !e.all_day) {
             self.draw_now_line(x0, x1, y, frame)?;
             y += m.nowline_h;
@@ -1251,12 +1250,12 @@ impl Renderer {
         Ok(y)
     }
 
-    /// Ausblick auf morgen.
+    /// A look ahead to tomorrow.
     ///
-    /// Ab dem spaeten Nachmittag ist die heutige Liste leer und das Widget
-    /// waere eine leere Flaeche — dabei ist genau dann die Frage "was kommt
-    /// morgen zuerst?" die interessante. Angezeigt werden hoechstens zwei
-    /// Termine, damit der Ausblick den heutigen Tag nicht verdraengt.
+    /// From late afternoon today's list is empty and the widget would be a
+    /// blank surface — while that is exactly when "what is first tomorrow?"
+    /// becomes the interesting question. At most two events are shown, so the
+    /// preview never crowds out today.
     fn draw_tomorrow(
         &self,
         x0: f32,
@@ -1299,8 +1298,8 @@ impl Renderer {
             if frame.hover == Some(Hit::Tomorrow(*idx)) {
                 self.fill_round(row, 5.0, p.hover, p.hover_alpha * frame.anim.hover.value)?;
             }
-            // Die Beschriftung steht nur an der ersten Zeile; die zweite
-            // rueckt darunter ein.
+            // The label sits on the first row only; the second is indented
+            // underneath it.
             let tx = x0 + label_w + 4.0;
             let time = ev.start.map(|s| loc.time(s)).unwrap_or_default();
             let time_w = self.text_width(&time, Font::Meta) + 8.0;
@@ -1328,12 +1327,12 @@ impl Renderer {
         Ok(y)
     }
 
-    /// Duenne Linie mit Uhrzeit-Marke, die zeigt, wo im Tag man gerade steht.
+    /// A thin line with a time marker showing where in the day you are.
     fn draw_now_line(&self, x0: f32, x1: f32, y: f32, frame: &Frame) -> Result<()> {
         let m = self.metrics;
         let cy = y + m.nowline_h * 0.5;
-        // Die Uhrzeit kann je nach Gebietsschema deutlich breiter sein
-        // ("8:09 PM" statt "20:09"), deshalb grosszuegig bemessen.
+        // Depending on the locale the time can be noticeably wider
+        // ("8:09 PM" rather than "20:09"), so this is measured generously.
         let label_w = m.fs_meta * 4.2;
 
         self.ellipse(x0 + 2.0, cy, 2.5, self.pal.accent, 0.9, true, 0.0)?;
@@ -1397,7 +1396,7 @@ impl Renderer {
             return Ok(y + m.task_row_h);
         }
 
-        // Listenname nur zeigen, wenn mehrere Aufgabenlisten beteiligt sind.
+        // Only show the list name when more than one task list is involved.
         let multi_list = tasks
             .iter()
             .map(|t| t.tasklist_name.as_str())
@@ -1412,7 +1411,7 @@ impl Renderer {
             m.time_col_w,
             m.time_col_w * 2.2,
         );
-        // Rechte Spalte teilen sich Rueckgaengig-Hinweis und Listenname.
+        // The undo hint and the list name share the right column.
         let list_names: Vec<&str> = if multi_list {
             tasks.iter().map(|t| t.tasklist_name.as_str()).collect()
         } else {
@@ -1429,8 +1428,8 @@ impl Renderer {
             let row = rect(x0 - 5.0, y, x1 + 5.0, y + m.task_row_h);
             let is_overdue = task.is_overdue(today);
             let undo = frame.undo.filter(|u| u.task_id == task.id);
-            // Waehrend das Abhaken laeuft: sofort ausblassen, damit der Klick
-            // sich unmittelbar anfuehlt, statt auf die API zu warten.
+            // While the tick is pending: fade out at once, so the click feels
+            // immediate instead of waiting on the API.
             let dim: f32 = if task.completing { 0.42 } else { 1.0 };
             let check_hovered = frame.hover == Some(Hit::TaskCheck(idx));
             let row_hovered = check_hovered
@@ -1455,7 +1454,7 @@ impl Renderer {
                 dim,
             )?;
 
-            // Rechte Spalte: Rueckgaengig-Hinweis schlaegt den Listennamen.
+            // Right column: the undo hint beats the list name.
             let mut title_right = x1;
             if let Some(u) = undo {
                 title_right = x1 - right_w - 6.0;
@@ -1466,7 +1465,7 @@ impl Renderer {
                     p.accent,
                     1.0,
                 )?;
-                // Ablaufbalken unter der Zeile.
+                // Countdown bar under the row.
                 let by = y + m.task_row_h - 2.0;
                 self.line(
                     x1 - right_w,
@@ -1489,9 +1488,9 @@ impl Renderer {
                 )?;
             }
 
-            // Notiz als gedaempfte Fortsetzung hinter dem Titel — analog zum
-            // Ort bei Terminen. Nur die erste Zeile, der Rest ist ohnehin
-            // abgeschnitten.
+            // The note as a muted continuation after the title — the same
+            // treatment the location gets on events. First line only; the rest
+            // would be cut off anyway.
             let title_x = due_x + due_w;
             let title = match task.notes.as_deref().and_then(|n| n.lines().next()) {
                 Some(note) if !note.trim().is_empty() => {
@@ -1514,9 +1513,9 @@ impl Renderer {
                 dim,
             )?;
 
-            // Reihenfolge zaehlt: spaeter gepushte Regionen gewinnen. Bei
-            // ausstehendem Abhaken faengt die ganze Zeile den Klick ab, damit
-            // ein Versehen ueberall zurueckgenommen werden kann.
+            // Order matters: regions pushed later win. While a tick is
+            // pending the whole row catches the click, so a mistake can be
+            // taken back from anywhere on it.
             hits.push(HitRegion {
                 rect: row,
                 hit: Hit::Task(idx),
@@ -1538,7 +1537,7 @@ impl Renderer {
         Ok(y)
     }
 
-    /// Abhak-Kreis. Beim Absenden fuellt er sich und bekommt einen Haken.
+    /// The tick circle. On sending it fills and gains a check mark.
     fn draw_check(
         &self,
         cx: f32,
@@ -1555,7 +1554,7 @@ impl Renderer {
         let color = if task.completing {
             p.ok_green
         } else if hovered {
-            // Ueber die Hover-Animation einblenden statt hart umzuschalten.
+            // Fade in through the hover animation rather than switching hard.
             mix(resting, p.accent, frame.anim.hover.value)
         } else {
             resting
@@ -1573,8 +1572,8 @@ impl Renderer {
 
         if task.completing {
             self.ellipse(cx, cy, r - 1.0, p.ok_green, 0.92, true, 0.0)?;
-            // Haken aus zwei Strichen mit runden Enden. Auf dem gefuellten
-            // Kreis braucht er die Gegenfarbe.
+            // A check mark from two strokes with round caps. On the filled
+            // circle it needs the opposing colour.
             let tick = if p.high_contrast {
                 p.panel_top
             } else if p.dark {
@@ -1603,16 +1602,16 @@ impl Renderer {
                 true,
             )?;
         } else if hovered {
-            // Vorschau: gefuellter Punkt, der andeutet, was ein Klick tut.
+            // Preview: a filled dot hinting at what a click would do.
             let a = 0.20 + 0.25 * frame.anim.hover.value;
             self.ellipse(cx, cy, r - 3.0, p.accent, a, true, 0.0)?;
         }
         Ok(())
     }
 
-    // --- Beiwerk ------------------------------------------------------------
+    // --- Trimmings ----------------------------------------------------------
 
-    /// Abschnittsueberschrift mit Anzahl und optionaler Ueberfaellig-Plakette.
+    /// A section heading with a count and an optional overdue badge.
     #[allow(clippy::too_many_arguments)]
     fn section_label(
         &self,
@@ -1626,8 +1625,8 @@ impl Renderer {
         let m = self.metrics;
         let h = m.section_label_h;
 
-        // Plaketten von rechts nach links setzen, damit sich mehrere
-        // (ueberfaellig, Ueberschneidungen) nicht ueberlappen.
+        // Place badges right to left so several of them (overdue, conflicts)
+        // cannot overlap.
         let mut right = x1;
         for (text, color) in badges.iter().rev() {
             let w = self.text_width(text, Font::Section) + 13.0;
@@ -1702,8 +1701,8 @@ impl Renderer {
         let y = panel.bottom - m.footer_h;
         self.line(cx0, y, cx1, y, p.rule, p.rule_alpha * 0.8, 1.0, false)?;
 
-        // Eine kaputte Konfiguration ist dringender als jeder Sync-Zustand:
-        // ohne Hinweis wundert man sich, warum Aenderungen nichts bewirken.
+        // A broken configuration is more urgent than any sync state: without
+        // a hint you are left wondering why your changes do nothing.
         let (text, color, actionable) = match (frame.config_error, frame.status) {
             (Some(_), _) => (frame.loc.label(c.config_broken), p.warn, true),
             (None, Status::NeedsSetup(_)) => (frame.loc.label(c.setup_needed), p.warn, true),
@@ -1754,15 +1753,15 @@ impl Renderer {
         Ok(())
     }
 
-    // --- Zeichenprimitive ---------------------------------------------------
+    // --- Drawing primitives -------------------------------------------------
 
-    /// Spiegelt eine X-Koordinate, wenn das Gebietsschema von rechts nach
-    /// links liest. Die Achse ist die Mitte des Glaskoerpers.
+    /// Mirrors an x coordinate when the locale reads right to left. The axis
+    /// is the centre of the glass body.
     fn mx(&self, x: f32) -> f32 {
         if self.rtl { self.mirror.get() - x } else { x }
     }
 
-    /// Gespiegeltes Rechteck; links und rechts tauschen dabei die Rollen.
+    /// A mirrored rectangle; left and right swap roles in the process.
     fn mrect(&self, r: D2D_RECT_F) -> D2D_RECT_F {
         if !self.rtl {
             return r;
@@ -1865,11 +1864,11 @@ impl Renderer {
         Ok(())
     }
 
-    /// Farbverlaufsstufen fuer den Glaskoerper.
+    /// Gradient stops for the glass body.
     ///
-    /// Interpolation bewusst *premultiplied*: die Stufen sind teiltransparent,
-    /// und ohne premultiplied Mischung erhaelt man auf dem Weg zwischen zwei
-    /// Stufen einen sichtbaren Grauschleier.
+    /// Interpolation is deliberately *premultiplied*: the stops are partly
+    /// transparent, and without premultiplied blending the path between two
+    /// stops picks up a visible grey haze.
     fn gradient_stops(&self, stops: &[D2D1_GRADIENT_STOP]) -> Result<ID2D1GradientStopCollection1> {
         unsafe {
             self.dc.CreateGradientStopCollection(
@@ -1883,8 +1882,8 @@ impl Renderer {
         }
     }
 
-    /// Zwischengespeicherter Pinsel; Deckkraft wird pro Aufruf gesetzt und
-    /// enthaelt den globalen Einblendfaktor.
+    /// A cached brush; opacity is set per call and carries the global reveal
+    /// factor.
     fn brush(&self, color: u32, alpha: f32) -> Result<ID2D1SolidColorBrush> {
         let mut cache = self.brushes.borrow_mut();
         let brush = match cache.get(&color) {
@@ -1904,7 +1903,7 @@ impl Renderer {
         Ok(brush)
     }
 
-    /// Einzeiliger Text mit Ellipse bei Ueberlauf, vertikal zentriert.
+    /// Single-line text with an ellipsis on overflow, vertically centred.
     fn text(&self, s: &str, font: Font, r: D2D_RECT_F, color: u32, alpha: f32) -> Result<()> {
         if s.is_empty() || r.right <= r.left {
             return Ok(());
@@ -1925,10 +1924,10 @@ impl Renderer {
         Ok(())
     }
 
-    /// Vormerken, dass die ueberfahrene Zeile gekuerzt dargestellt wird.
+    /// Note that the hovered row is being drawn truncated.
     ///
-    /// Ein mit "…" abgeschnittener Termintitel ist sonst schlicht nicht
-    /// lesbar — im Kalender nachsehen zu muessen widerspricht dem Sinn eines
+    /// An event title cut off with "…" is simply not readable — and having
+    /// to go and look it up in the calendar defeats the point of a
     /// Widgets.
     fn note_truncation(&self, hovered: bool, s: &str, font: Font, avail: f32, row: D2D_RECT_F) {
         if !hovered || avail <= 0.0 || self.text_width(s, font) <= avail {
@@ -1938,7 +1937,7 @@ impl Renderer {
             .replace(Some((s.to_string(), row.top, row.bottom)));
     }
 
-    /// Ueberlagerung mit dem vollstaendigen Text der ueberfahrenen Zeile.
+    /// An overlay carrying the full text of the hovered row.
     fn draw_tooltip(&self, panel: D2D_RECT_F, top_limit: f32, bottom_limit: f32) -> Result<()> {
         let Some((text, row_top, row_bottom)) = self.tooltip.borrow().clone() else {
             return Ok(());
@@ -1958,8 +1957,8 @@ impl Renderer {
         }
         let height = metrics.height + pad * 2.0;
 
-        // Bevorzugt unter die Zeile, sonst darueber — und in jedem Fall
-        // innerhalb des Inhaltsbereichs.
+        // Below the row by preference, above it otherwise — and inside the
+        // content area either way.
         let mut top = row_bottom + 3.0;
         if top + height > bottom_limit {
             top = row_top - 3.0 - height;
@@ -1972,8 +1971,8 @@ impl Renderer {
             top + height,
         );
 
-        // Deckend zeichnen: die Ueberlagerung muss den Text darunter
-        // vollstaendig verdecken, sonst wird sie selbst unlesbar.
+        // Drawn opaque: the overlay has to cover the text underneath
+        // completely, or it becomes unreadable itself.
         self.fill_round(box_rect, 5.0, p.panel_top, 1.0)?;
         self.stroke_round(box_rect, 5.0, p.accent, 0.55, 1.0)?;
         self.text_wrapped(
@@ -1988,7 +1987,7 @@ impl Renderer {
         )
     }
 
-    /// Mehrzeiliger Text am oberen Rand des Rechtecks.
+    /// Multi-line text at the top edge of the rectangle.
     fn text_wrapped(&self, s: &str, r: D2D_RECT_F, color: u32) -> Result<()> {
         let w = (r.right - r.left).max(1.0);
         let h = (r.bottom - r.top).max(1.0);
@@ -2008,12 +2007,11 @@ impl Renderer {
 
     /// Tatsaechliche Breite eines Textes in DIPs.
     ///
-    /// Feste Spaltenbreiten sind die klassische Falle bei der
-    /// Internationalisierung: was fuer "gestern" reicht, schneidet
-    /// "yesterday" ab und erst recht "المتأخرة". Deshalb werden die schmalen
-    /// Spalten aus dem gemessenen Inhalt bestimmt.
+    /// Fixed column widths are the classic internationalisation trap: what is
+    /// enough for "gestern" truncates "yesterday", and "المتأخرة" all the more.
+    /// So the narrow columns are derived from the measured content.
     fn text_width(&self, s: &str, font: Font) -> f32 {
-        // Grosszuegige Vorgabebreite, damit nichts umbricht oder gekuerzt wird.
+        // A generous default width, so nothing wraps or gets truncated.
         const UNBOUNDED: f32 = 4096.0;
         let Ok(layout) = self.layout(s, font, UNBOUNDED, 64.0) else {
             return 0.0;
@@ -2025,8 +2023,8 @@ impl Renderer {
         metrics.width
     }
 
-    /// Breite einer Spalte aus ihrem breitesten Eintrag, begrenzt damit ein
-    /// einzelner Ausreisser nicht die halbe Zeile frisst.
+    /// A column's width from its widest entry, capped so a single outlier
+    /// cannot eat half the row.
     fn column_width<'s>(
         &self,
         items: impl Iterator<Item = &'s str>,
@@ -2035,7 +2033,7 @@ impl Renderer {
         max: f32,
     ) -> f32 {
         let widest = items.fold(0.0_f32, |acc, s| acc.max(self.text_width(s, font)));
-        // Etwas Luft, damit Text und Nachbarspalte sich nicht beruehren.
+        // A little air, so the text and the neighbouring column do not touch.
         (widest + 6.0).clamp(min, max)
     }
 
@@ -2044,10 +2042,10 @@ impl Renderer {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         s.hash(&mut hasher);
 
-        // Breite und Hoehe gehoeren in den Schluessel: sie bestimmen, wo der
-        // Text mit "…" gekuerzt und wie er vertikal zentriert wird. Auf
-        // Viertel-DIP quantisiert, damit Rundungsrauschen keine neuen
-        // Eintraege erzeugt, aber echte Breitenunterschiede sichtbar bleiben.
+        // Width and height belong in the key: they decide where the text is
+        // cut with "…" and how it is centred vertically. Quantised to quarter
+        // DIPs so rounding noise produces no new entries while real
+        // differences in width stay visible.
         let key = (
             hasher.finish(),
             font as u32,
@@ -2068,9 +2066,9 @@ impl Renderer {
     }
 }
 
-/// Verlorenes Grafikgeraet — Treiberwechsel, GPU-Reset, Wechsel in eine
-/// RDP-Sitzung. Danach ist die gesamte Kette ungueltig und muss neu aufgebaut
-/// werden; ohne diese Behandlung bliebe das Widget dauerhaft schwarz.
+/// A lost graphics device — a driver change, a GPU reset, a move into an RDP
+/// session. Afterwards the entire chain is invalid and has to be rebuilt;
+/// without handling this the widget would stay black for good.
 pub fn is_device_lost(code: HRESULT) -> bool {
     const D2DERR_RECREATE_TARGET: u32 = 0x8899_000C;
     const DXGI_ERROR_DEVICE_REMOVED: u32 = 0x887A_0005;
@@ -2090,8 +2088,8 @@ pub fn is_device_lost(code: HRESULT) -> bool {
 
 /// Endzeit eines Termins in Minuten seit Mitternacht.
 ///
-/// Ohne Endzeit gilt eine Stunde; laeuft der Termin ueber Mitternacht, wuerde
-/// die rohe Uhrzeit rueckwaerts zeigen und wird deshalb auf Tagesende gesetzt.
+/// With no end time an hour is assumed; if the event runs past midnight the
+/// raw time would point backwards, so it is clamped to the end of the day.
 fn end_minutes(ev: &Event, start_min: f32) -> f32 {
     match ev.end {
         Some(e) => {
@@ -2102,7 +2100,7 @@ fn end_minutes(ev: &Event, start_min: f32) -> f32 {
     }
 }
 
-/// Laufender Termin, sonst der naechste noch kommende.
+/// The event running now, otherwise the next one still to come.
 fn pick_hero(events: &[Event], now: DateTime<Local>) -> Option<(usize, &Event, bool)> {
     if let Some((i, e)) = events.iter().enumerate().find(|(_, e)| e.is_now(now)) {
         return Some((i, e, true));
@@ -2120,7 +2118,7 @@ fn due_label(task: &Task, today: NaiveDate, loc: &Locale) -> String {
         None => "—".into(),
         Some(d) if d == today => loc.label(loc.cat.today),
         Some(d) if (today - d).num_days() == 1 => loc.label(loc.cat.yesterday),
-        // Tag und Monat in der Reihenfolge des Gebietsschemas.
+        // Day and month in the order the locale uses.
         Some(d) => loc.day_month(d),
     }
 }
@@ -2135,7 +2133,7 @@ fn short(s: &str, max: usize) -> String {
     }
 }
 
-/// Hardware bevorzugt, WARP als Rueckfallebene (RDP-Sitzungen, VMs ohne GPU).
+/// Hardware by preference, WARP as the fallback (RDP sessions, VMs with no GPU).
 fn create_d3d_device() -> Result<ID3D11Device> {
     for driver in [D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP] {
         let mut device: Option<ID3D11Device> = None;
@@ -2144,7 +2142,7 @@ fn create_d3d_device() -> Result<ID3D11Device> {
                 None,
                 driver,
                 Default::default(),
-                // BGRA_SUPPORT ist Pflicht fuer Direct2D-Interop.
+                // BGRA_SUPPORT is mandatory for Direct2D interop.
                 D3D11_CREATE_DEVICE_BGRA_SUPPORT,
                 None,
                 D3D11_SDK_VERSION,
@@ -2170,7 +2168,7 @@ fn text_format(
     rtl: bool,
 ) -> Result<IDWriteTextFormat> {
     unsafe {
-        // "Segoe UI Variable Text" ist die Windows-11-Systemschrift; auf
+        // "Segoe UI Variable Text" is the Windows 11 system font; on
         // aelteren Systemen faellt DirectWrite selbsttaetig auf Segoe UI zurueck.
         let format = dwrite.CreateTextFormat(
             w!("Segoe UI Variable Text"),
@@ -2182,8 +2180,8 @@ fn text_format(
             w!("de-DE"),
         )?;
         // Bei RTL-Leserichtung dreht DirectWrite die Bedeutung von LEADING
-        // und TRAILING selbst um — "vorn" ist dann rechts. Deshalb bleibt der
-        // Layoutcode unveraendert und muss keine Ausrichtungen tauschen.
+        // swaps LEADING and TRAILING itself — "leading" is then the right.
+        // So the layout code stays as it is and never swaps alignments.
         if rtl {
             format.SetReadingDirection(DWRITE_READING_DIRECTION_RIGHT_TO_LEFT)?;
         }
@@ -2191,7 +2189,7 @@ fn text_format(
         format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
         format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
 
-        // Ueberlaufender Text endet in "…" statt hart abgeschnitten zu werden.
+        // Overflowing text ends in "…" rather than being cut off hard.
         let sign = dwrite.CreateEllipsisTrimmingSign(&format)?;
         let trimming = DWRITE_TRIMMING {
             granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER,
@@ -2203,7 +2201,7 @@ fn text_format(
     }
 }
 
-/// Mehrzeilig mit Wortumbruch und ohne Kuerzung.
+/// Multi-line with word wrapping and no truncation.
 fn tooltip_format(dwrite: &IDWriteFactory, size: f32, rtl: bool) -> Result<IDWriteTextFormat> {
     unsafe {
         let format = dwrite.CreateTextFormat(
@@ -2219,7 +2217,7 @@ fn tooltip_format(dwrite: &IDWriteFactory, size: f32, rtl: bool) -> Result<IDWri
             format.SetReadingDirection(DWRITE_READING_DIRECTION_RIGHT_TO_LEFT)?;
         }
         format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING)?;
-        // Oben ausgerichtet: die Hoehe wird aus dem Inhalt bestimmt, nicht
+        // Aligned to the top: the height is derived from the content, not
         // umgekehrt.
         format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR)?;
         Ok(format)
@@ -2243,10 +2241,11 @@ fn icon_format(dwrite: &IDWriteFactory, size: f32) -> Result<IDWriteTextFormat> 
     }
 }
 
-/// Drehung um einen Punkt, in Radiant.
+/// Rotation about a point, in radians.
 ///
-/// Selbst gerechnet statt ueber `Matrix3x2::rotation_around`, weil dort die
-/// Winkeleinheit (Grad vs. Radiant) nicht aus der Signatur hervorgeht.
+/// Computed by hand rather than through `Matrix3x2::rotation_around`, because
+/// there the angle unit (degrees or radians) is not evident from the
+/// signature.
 /// D2D verwendet Zeilenvektoren: `[x y 1] · M`.
 fn rotation(rad: f32, cx: f32, cy: f32) -> Matrix3x2 {
     let (s, c) = rad.sin_cos();

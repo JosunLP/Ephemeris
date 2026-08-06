@@ -404,9 +404,167 @@ pub fn trim_working_set() {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_hotkey;
+    use super::{autostart_enabled, parse_hotkey, set_autostart, set_clipboard_text};
+    use windows::core::PCWSTR;
+
+    /// Autostart is a registry write, so reading the code proves nothing about
+    /// whether Windows accepts it. This drives the real key.
+    ///
+    /// The user's own setting is captured and put back verbatim, including the
+    /// case where it was absent — a test must not leave an entry behind that
+    /// launches the *test binary* at every logon.
+    #[test]
+    fn autostart_writes_and_removes_the_real_registry_value() {
+        let was_enabled = autostart_enabled();
+        let previous = read_run_value();
+
+        set_autostart(true);
+        assert!(autostart_enabled(), "the value was not written");
+        let written = read_run_value().expect("the value is missing after writing");
+        assert!(
+            written.starts_with('"') && written.ends_with('"'),
+            "the path must be quoted or Windows splits it at spaces: {written}"
+        );
+        assert!(
+            written.trim_matches('"').ends_with(".exe"),
+            "an executable path was expected: {written}"
+        );
+
+        set_autostart(false);
+        assert!(!autostart_enabled(), "the value was not removed");
+
+        // Put the machine back exactly as it was found.
+        match previous {
+            Some(value) if was_enabled => write_run_value(&value),
+            _ => {}
+        }
+        assert_eq!(
+            autostart_enabled(),
+            was_enabled,
+            "the prior state was not restored"
+        );
+    }
+
+    /// Reads the autostart value as a string, or `None` when it is absent.
+    fn read_run_value() -> Option<String> {
+        use windows::Win32::System::Registry::{
+            HKEY, HKEY_CURRENT_USER, KEY_READ, RegCloseKey, RegOpenKeyExW, RegQueryValueExW,
+        };
+        unsafe {
+            let mut key = HKEY::default();
+            let sub = super::wide(super::RUN_KEY);
+            RegOpenKeyExW(
+                HKEY_CURRENT_USER,
+                PCWSTR(sub.as_ptr()),
+                None,
+                KEY_READ,
+                &mut key,
+            )
+            .ok()
+            .ok()?;
+            let name = super::wide(super::RUN_VALUE);
+            let mut size = 0u32;
+            let probe = RegQueryValueExW(
+                key,
+                PCWSTR(name.as_ptr()),
+                None,
+                None,
+                None,
+                Some(&mut size),
+            );
+            let result = if probe.is_ok() {
+                let mut buf = vec![0u8; size as usize];
+                let ok = RegQueryValueExW(
+                    key,
+                    PCWSTR(name.as_ptr()),
+                    None,
+                    None,
+                    Some(buf.as_mut_ptr()),
+                    Some(&mut size),
+                )
+                .is_ok();
+                ok.then(|| {
+                    let units: Vec<u16> = buf
+                        .chunks_exact(2)
+                        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                        .take_while(|&u| u != 0)
+                        .collect();
+                    String::from_utf16_lossy(&units)
+                })
+            } else {
+                None
+            };
+            let _ = RegCloseKey(key);
+            result
+        }
+    }
+
+    /// Restores a captured autostart value verbatim.
+    fn write_run_value(value: &str) {
+        use windows::Win32::System::Registry::{
+            HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_SZ, RegCloseKey, RegOpenKeyExW,
+            RegSetValueExW,
+        };
+        unsafe {
+            let mut key = HKEY::default();
+            let sub = super::wide(super::RUN_KEY);
+            if RegOpenKeyExW(
+                HKEY_CURRENT_USER,
+                PCWSTR(sub.as_ptr()),
+                None,
+                KEY_SET_VALUE,
+                &mut key,
+            )
+            .is_err()
+            {
+                return;
+            }
+            let name = super::wide(super::RUN_VALUE);
+            let wide_value = super::wide(value);
+            let bytes = std::slice::from_raw_parts(
+                wide_value.as_ptr() as *const u8,
+                wide_value.len() * std::mem::size_of::<u16>(),
+            );
+            let _ = RegSetValueExW(key, PCWSTR(name.as_ptr()), None, REG_SZ, Some(bytes));
+            let _ = RegCloseKey(key);
+        }
+    }
 
     /// Virtual key codes: 'K' is 0x4B, F5 is 0x74.
+    /// Round trip through the real clipboard.
+    ///
+    /// "Copy agenda" is only reachable from the context menu, which a test
+    /// cannot open, so the clipboard call itself is verified here instead —
+    /// including that non-ASCII survives, since the day's agenda is full of it.
+    #[test]
+    fn text_survives_a_round_trip_through_the_clipboard() {
+        use windows::Win32::System::DataExchange::{
+            CloseClipboard, GetClipboardData, OpenClipboard,
+        };
+        use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
+        use windows::Win32::System::Ole::CF_UNICODETEXT;
+
+        let sample = "Tuesday - 09:00 Sprint Review - überfällig - 予定 - ✓";
+        assert!(set_clipboard_text(sample), "clipboard was not writable");
+
+        let read_back = unsafe {
+            assert!(OpenClipboard(None).is_ok(), "could not open the clipboard");
+            let handle = GetClipboardData(CF_UNICODETEXT.0 as u32).expect("no text on clipboard");
+            let ptr = GlobalLock(windows::Win32::Foundation::HGLOBAL(handle.0)) as *const u16;
+            assert!(!ptr.is_null(), "clipboard memory could not be locked");
+            let mut len = 0usize;
+            while *ptr.add(len) != 0 {
+                len += 1;
+            }
+            let text = String::from_utf16_lossy(std::slice::from_raw_parts(ptr, len));
+            let _ = GlobalUnlock(windows::Win32::Foundation::HGLOBAL(handle.0));
+            let _ = CloseClipboard();
+            text
+        };
+
+        assert_eq!(read_back, sample);
+    }
+
     #[test]
     fn common_combinations_parse() {
         let (m, k) = parse_hotkey("Win+Alt+K").unwrap();

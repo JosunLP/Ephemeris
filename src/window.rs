@@ -1,25 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 TPMPlaner contributors
-//! Das Widget-Fenster.
+//! The widget window.
 //!
-//! Verhalten wie ein Vista-Gadget:
+//! It behaves like a Vista gadget:
 //!
-//! * `WS_EX_NOREDIRECTIONBITMAP` — Voraussetzung fuer die DirectComposition-
-//!   Oberflaeche mit echtem Per-Pixel-Alpha.
-//! * `WS_EX_TOOLWINDOW` — kein Eintrag in Taskleiste und Alt-Tab.
-//! * `WS_EX_NOACTIVATE` — ein Klick auf das Widget nimmt der laufenden
-//!   Anwendung nicht den Fokus. Genau das macht den Unterschied zwischen
-//!   "Gadget" und "stoerendes Fenster".
-//! * Erzwungenes `HWND_BOTTOM` in `WM_WINDOWPOSCHANGING` — das Widget bleibt
-//!   unter allen normalen Fenstern, aber ueber dem Desktop und damit klickbar.
+//! * `WS_EX_NOREDIRECTIONBITMAP` — the prerequisite for the DirectComposition
+//!   surface with true per-pixel alpha.
+//! * `WS_EX_TOOLWINDOW` — no entry in the taskbar or in Alt-Tab.
+//! * `WS_EX_NOACTIVATE` — clicking the widget never takes focus away from the
+//!   application you are working in. That is exactly what separates a "gadget"
+//!   from "a window in the way".
+//! * `HWND_BOTTOM` forced in `WM_WINDOWPOSCHANGING` — the widget stays below
+//!   every normal window, but above the desktop and therefore clickable.
 //!
-//! Das Fenster ist rundum um [`Metrics::shadow`] groesser als der sichtbare
-//! Glaskoerper; in diesem Rand zeichnet der Renderer den Schlagschatten.
+//! The window is larger than the visible glass body by [`Metrics::shadow`] on
+//! every side; the renderer draws the drop shadow in that margin.
 //!
-//! Drei Timer, jeder nur so lange aktiv wie noetig:
-//! Minutentakt (Uhr, Sync-Faelligkeit, Konfigurationspruefung), ~60 Hz
-//! waehrend einer Animation, 100 ms waehrend einer laufenden Bedenkzeit
-//! zum Rueckgaengigmachen.
+//! Three timers, each alive only as long as it is needed: the minute tick
+//! (clock, sync due, configuration check), ~60 Hz during an animation, and
+//! 100 ms while an undo grace period is running.
 
 use crate::platform;
 use crate::render::{self, Frame, Hit, HitRegion, Renderer, UndoView};
@@ -54,19 +53,19 @@ const TIMER_TICK: usize = 1;
 const TIMER_ANIM: usize = 2;
 const TIMER_UNDO: usize = 3;
 const TIMER_PEEK: usize = 4;
-/// Kennung der globalen Tastenkombination.
+/// Identifier of the global hotkey.
 const HOTKEY_PEEK: i32 = 1;
 
 /// Posted by the sync thread when a command finished. The core knows nothing
 /// about window messages; `WindowWaker` turns its wake call into this.
 const WM_APP_SYNC_DONE: u32 = WM_APP + 1;
-/// ~60 Hz. Laeuft ausschliesslich, solange etwas in Bewegung ist.
+/// ~60 Hz. Runs only while something is actually moving.
 const ANIM_INTERVAL_MS: u32 = 16;
-/// Zehn Schritte pro Sekunde reichen fuer einen Ablaufbalken voellig.
+/// Ten steps a second is plenty for a countdown bar.
 const UNDO_INTERVAL_MS: u32 = 100;
 
-/// DWM meldet eine geaenderte Akzentfarbe. In `WindowsAndMessaging` nicht
-/// definiert, aber dokumentiert.
+/// DWM reporting a changed accent colour. Not defined in
+/// `WindowsAndMessaging`, but documented.
 const WM_DWMCOLORIZATIONCOLORCHANGED: u32 = 0x0320;
 
 const CMD_SYNC: usize = 1001;
@@ -79,16 +78,15 @@ const CMD_RESET_POS: usize = 1007;
 const CMD_COPY: usize = 1009;
 const CMD_UPDATE: usize = 1011;
 const CMD_QUIT: usize = 1010;
-/// Kennungsbereiche fuer die dynamisch erzeugten Quellen-Eintraege.
+/// Identifier ranges for the dynamically created source entries.
 const CMD_CALENDAR_BASE: usize = 2000;
 const CMD_TASKLIST_BASE: usize = 3000;
 
-/// Kante(n) des Glaskoerpers unter dem Mauszeiger.
+/// The edge or edges of the glass body under the mouse pointer.
 ///
-/// Das Fenster hat keinen Rahmen (`WS_POPUP` ohne `WS_THICKFRAME`), also gibt
-/// es auch keine Groessenaenderung vom System. Die paar Zeilen hier ersetzen
-/// sie — sonst muesste man fuer jede Breitenaenderung die JSON-Datei
-/// bearbeiten.
+/// The window has no frame (`WS_POPUP` without `WS_THICKFRAME`), so the system
+/// provides no resizing either. The few lines here stand in for it — without
+/// them every change of width would mean editing the JSON file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Edges {
     left: bool,
@@ -109,7 +107,7 @@ impl Edges {
         self.left || self.right || self.top || self.bottom
     }
 
-    /// Passender Mauszeiger: diagonal an den Ecken, sonst waagerecht/senkrecht.
+    /// The matching cursor: diagonal at the corners, otherwise horizontal or vertical.
     fn cursor(&self) -> PCWSTR {
         match (self.left, self.right, self.top, self.bottom) {
             (true, _, true, _) | (_, true, _, true) => IDC_SIZENWSE,
@@ -121,16 +119,16 @@ impl Edges {
     }
 }
 
-/// Wie weit von der Glaskante entfernt der Griff noch anspricht (in DIPs).
+/// How far from the glass edge the grip still responds (in DIPs).
 const RESIZE_GRIP: f32 = 6.0;
-/// Kleinste sinnvolle Groesse des Glaskoerpers in DIPs.
+/// The smallest sensible size of the glass body, in DIPs.
 const MIN_PANEL: (f32, f32) = (240.0, 180.0);
 
-/// Abhaken, das noch nicht abgeschickt wurde.
+/// A tick that has not been sent yet.
 ///
-/// Ein Klick auf einen 14 Pixel grossen Kreis passiert auf dem Desktop auch
-/// mal versehentlich. Ohne Bedenkzeit waere die Aufgabe sofort und ohne
-/// Rueckweg erledigt — deshalb wandert sie erst nach Ablauf zur API.
+/// A click on a circle 14 pixels across happens by accident on a desktop.
+/// Without a grace period the task would be done immediately and with no way
+/// back — so it only travels to the API once the period has elapsed.
 struct Pending {
     account_id: String,
     task_id: String,
@@ -149,11 +147,11 @@ struct State {
     hits: Vec<HitRegion>,
     hover: Option<Hit>,
     tracking_mouse: bool,
-    /// Ziehen mit gedrueckter linker Maustaste.
+    /// Dragging with the left mouse button held down.
     drag: Option<(POINT, POINT)>,
-    /// Groessenaenderung: Startzustand von Cursor und Fensterrechteck.
+    /// Resizing: the starting state of the cursor and the window rectangle.
     resize: Option<(Edges, POINT, RECT)>,
-    /// Kante unter dem Mauszeiger, fuer den Mauszeigerwechsel.
+    /// The edge under the pointer, for switching the cursor.
     hover_edge: Edges,
 
     anim: Animations,
@@ -163,7 +161,7 @@ struct State {
     viewport_height: f32,
 
     pending: Option<Pending>,
-    /// Laeuft gerade ein "Kurz zeigen"? Solange bleibt das Fenster oben.
+    /// Is a peek running? While it is, the window stays on top.
     peeking: bool,
 
     next_sync_at: DateTime<Local>,
@@ -176,16 +174,16 @@ struct State {
     metrics: Metrics,
     config_mtime: Option<SystemTime>,
     loc: Locale,
-    /// Zuletzt gelesene Darstellungseinstellungen von Windows. Wird bei
-    /// `WM_SETTINGCHANGE` neu bestimmt und dient zugleich als Vergleichswert,
-    /// damit ein unbeteiligter Systemhinweis kein Neuzeichnen ausloest.
+    /// The appearance settings last read from Windows. Re-read on
+    /// `WM_SETTINGCHANGE`, and also kept as the value to compare against, so
+    /// an unrelated system notification does not trigger a redraw.
     visuals: tpmplaner_core::theme::SystemVisuals,
 }
 
 pub fn run() -> Result<()> {
     unsafe {
-        // Muss vor der ersten Fenstererzeugung passieren, sonst skaliert
-        // Windows das Fenster auf Monitoren mit anderer DPI unscharf hoch.
+        // Has to happen before the first window is created, or Windows scales
+        // the window up blurrily on monitors with a different DPI.
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
         let (cfg, config_error) = Config::load();
@@ -194,8 +192,8 @@ pub fn run() -> Result<()> {
         }
         let metrics = metrics_for(&cfg);
         let loc = Locale::resolve(&cfg.language);
-        // Sync-Thread und Notausgang haben keinen Zugriff auf diese Instanz
-        // und greifen deshalb auf den globalen Katalog zu.
+        // The sync thread and the emergency exit have no access to this
+        // instance, so they reach for the global catalogue instead.
         tpmplaner_core::i18n::set_global(loc.cat);
         let visuals = platform::system_visuals();
         let palette = Palette::resolve(ThemePref::parse(&cfg.theme), &cfg.accent, visuals);
@@ -236,8 +234,8 @@ pub fn run() -> Result<()> {
                 agenda: if demo {
                     tpmplaner_core::demo::agenda()
                 } else {
-                    // Letzter bekannter Stand, damit beim Start nicht erst
-                    // eine leere Flaeche steht.
+                    // The last known state, so start-up does not begin with a
+                    // blank surface.
                     sync::read_cache().unwrap_or_default()
                 },
                 status: if demo { Status::Idle } else { Status::Syncing },
@@ -275,8 +273,8 @@ pub fn run() -> Result<()> {
         });
         let shared = state.shared.clone();
 
-        // Vorlaeufige Groesse; die echte DPI kennen wir erst, wenn das Fenster
-        // auf einem konkreten Monitor liegt.
+        // A provisional size; the real DPI is only known once the window sits
+        // on an actual monitor.
         let hwnd = CreateWindowExW(
             WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
             w!("TPMPlanerWidget"),
@@ -318,9 +316,9 @@ pub fn run() -> Result<()> {
             st.loc.rtl,
         )?);
 
-        // Im Vorschaumodus laeuft bewusst kein Sync-Thread — sonst wuerde der
-        // fehlende Google-Zugang die Beispieldaten sofort mit einer
-        // Fehlermeldung ueberdecken.
+        // Demo mode deliberately runs no sync thread — otherwise the missing
+        // Google credentials would immediately bury the sample data under an
+        // error message.
         if !demo {
             st.sync = Some(sync::spawn(
                 shared,
@@ -334,7 +332,7 @@ pub fn run() -> Result<()> {
         }
         st.anim.enabled = palette.animations;
         st.next_sync_at = Local::now() + ChronoDuration::minutes(cfg.sync_minutes as i64);
-        // Zwischengespeicherte Daten sind sofort da: gleich sichtbar machen.
+        // Cached data is there immediately: show it straight away.
         if sync::lock(&st.shared).agenda.fetched_at.is_some() {
             st.anim.restart_reveal();
         } else {
@@ -356,15 +354,15 @@ pub fn run() -> Result<()> {
     }
 }
 
-/// Masse zur Konfiguration: im Acryl-Modus ohne Schattenrand.
+/// Metrics for a configuration: no shadow margin in acrylic mode.
 fn metrics_for(cfg: &Config) -> Metrics {
     Metrics::with_shadow(cfg.scale, cfg.backdrop != "acrylic")
 }
 
-/// Fensterposition und -groesse in physischen Pixeln.
+/// Window position and size in physical pixels.
 ///
-/// `cfg.width`/`cfg.height` beschreiben den sichtbaren Glaskoerper; das
-/// Fenster ist rundum um den Schattenrand groesser.
+/// `cfg.width`/`cfg.height` describe the visible glass body; the window is
+/// larger than that by the shadow margin on every side.
 fn target_geometry(cfg: &Config, m: Metrics, dpi: f32) -> (i32, i32, i32, i32) {
     let scale = dpi / 96.0;
     let shadow_px = (m.shadow * scale).round() as i32;
@@ -374,8 +372,8 @@ fn target_geometry(cfg: &Config, m: Metrics, dpi: f32) -> (i32, i32, i32, i32) {
     let (px, py) = match (cfg.x, cfg.y) {
         (Some(x), Some(y)) => (x, y),
         _ => {
-            // Oben rechts wie die Vista-Sidebar. Der Abstand gilt fuer die
-            // sichtbare Glaskante, nicht fuer den unsichtbaren Schattenrand.
+            // Top right, like the Vista sidebar. The gap applies to the
+            // visible glass edge, not to the invisible shadow margin.
             let margin = (24.0 * scale).round() as i32;
             match platform::primary_work_area() {
                 Some(w) => (
@@ -389,18 +387,18 @@ fn target_geometry(cfg: &Config, m: Metrics, dpi: f32) -> (i32, i32, i32, i32) {
     (px, py, pw, ph)
 }
 
-/// Fensterattribute des Desktopfenster-Managers.
+/// Desktop Window Manager attributes for the window.
 ///
-/// **Wichtig:** `DWMWA_SYSTEMBACKDROP_TYPE` faerbt das *gesamte*
-/// Fensterrechteck. Dieses Fenster ist rundum um den Schattenrand groesser
-/// als der sichtbare Glaskoerper, und die Ecken laesst es sich selbst zeichnen
-/// — eine Systembackdrop legt deshalb einen deckenden, *eckigen* Kasten um
-/// das runde Panel. Genau das war sichtbar, solange hier Acryl gesetzt wurde.
+/// **Important:** `DWMWA_SYSTEMBACKDROP_TYPE` colours the *entire* window
+/// rectangle. This window is larger than the visible glass body by the shadow
+/// margin on every side, and it draws its own corners — so a system backdrop
+/// lays an opaque, *square* box around the rounded panel. That is exactly what
+/// was visible for as long as acrylic was set here.
 ///
-/// Der Normalfall ist daher `DWMSBT_NONE`, explizit gesetzt statt nur
-/// weggelassen: die Vorgabe `DWMSBT_AUTO` ueberlaesst die Entscheidung dem
-/// System und kann dasselbe Ergebnis liefern. Das Glas zeichnet der Renderer
-/// ohnehin selbst.
+/// The normal case is therefore `DWMSBT_NONE`, set explicitly rather than
+/// merely omitted: the default `DWMSBT_AUTO` leaves the decision to the system
+/// and can produce the same result. The renderer draws the glass itself in any
+/// case.
 fn apply_backdrop(hwnd: HWND, cfg: &Config, dark: bool) {
     unsafe {
         let dark_flag: i32 = dark as i32;
@@ -411,10 +409,10 @@ fn apply_backdrop(hwnd: HWND, cfg: &Config, dark: bool) {
             4,
         );
 
-        // Ohne Systembackdrop zeichnet der Renderer die Ecken selbst mit
-        // Per-Pixel-Alpha; DWM darf dann nicht zusaetzlich runden, sonst
-        // entsteht ein doppelter Radius. Mit Acryl ist es umgekehrt: dort
-        // muss DWM runden, weil es die Flaeche fuellt.
+        // With no system backdrop the renderer draws the corners itself using
+        // per-pixel alpha, and DWM must not round them as well or the radius
+        // is applied twice. With acrylic it is the other way round: there DWM
+        // has to round, because it fills the surface.
         let corner = if cfg.backdrop == "acrylic" {
             DWMWCP_ROUND.0
         } else {
@@ -427,9 +425,9 @@ fn apply_backdrop(hwnd: HWND, cfg: &Config, dark: bool) {
             4,
         );
 
-        // Acryl nur, wenn ausdruecklich gewuenscht — und dann ohne
-        // Schattenrand, sonst entsteht der Kasten erneut. Siehe
-        // `Metrics::new`, wo der Rand in diesem Fall auf null geht.
+        // Acrylic only when explicitly asked for — and then without the
+        // shadow margin, or the box comes back. See `Metrics::new`, where the
+        // margin drops to zero in that case.
         let backdrop = if cfg.backdrop == "acrylic" {
             DWMSBT_TRANSIENTWINDOW.0
         } else {
@@ -456,8 +454,8 @@ fn arm_tick(hwnd: HWND) {
 
 // --- Animationsantrieb ------------------------------------------------------
 
-/// Startet den Animationstimer (falls noetig) und macht sofort einen Schritt,
-/// damit die Reaktion nicht um bis zu 16 ms verzoegert wirkt.
+/// Starts the animation timer if needed and takes a step immediately, so the
+/// response does not feel delayed by up to 16 ms.
 fn kick(st: &mut State) {
     if !st.animating {
         st.animating = true;
@@ -468,8 +466,8 @@ fn kick(st: &mut State) {
     pump(st);
 }
 
-/// Ein Animationsschritt. Sobald nichts mehr in Bewegung ist, wird der Timer
-/// abgeschaltet — ab da kostet das Widget wieder nichts.
+/// One animation step. As soon as nothing is moving any more the timer is
+/// switched off — from then on the widget costs nothing again.
 fn pump(st: &mut State) {
     let active = st.anim.tick();
     redraw(st);
@@ -498,26 +496,26 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         match msg {
             WM_WINDOWPOSCHANGING => {
                 let wp = &mut *(lparam.0 as *mut WINDOWPOS);
-                // Normalerweise immer ganz nach hinten. `SWP_NOZORDER` muss
-                // dafuer weg, sonst ignoriert Windows `hwndInsertAfter`.
-                // Waehrend eines Peeks gilt das Gegenteil, sonst faellt das
-                // Fenster sofort wieder hinter alles zurueck.
+                // Normally always right to the back. `SWP_NOZORDER` has to go
+                // for that, or Windows ignores `hwndInsertAfter`. During a
+                // peek the opposite applies, or the window drops straight back
+                // behind everything.
                 wp.hwndInsertAfter = if st.peeking {
                     HWND_TOPMOST
                 } else {
                     HWND_BOTTOM
                 };
                 wp.flags &= !SWP_NOZORDER;
-                // "Desktop anzeigen" (Win+D) versucht das Fenster zu
-                // verstecken — wir bestehen darauf, sichtbar zu bleiben.
+                // "Show desktop" (Win+D) tries to hide the window — we insist
+                // on staying visible.
                 wp.flags &= !SWP_HIDEWINDOW;
                 LRESULT(0)
             }
 
-            // Ein Gadget wird nie minimiert.
+            // A gadget is never minimised.
             WM_SYSCOMMAND if (wparam.0 & 0xFFF0) == SC_MINIMIZE as usize => LRESULT(0),
 
-            // Nicht aktivieren lassen, auch wenn jemand es versucht.
+            // Refuse activation, even if something tries.
             WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
 
             WM_PAINT => {
@@ -559,9 +557,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 LRESULT(0)
             }
 
-            // Systemzeit oder Zeitzone geaendert (Reise, Sommerzeit): die
-            // gesamte Agenda haengt an der lokalen Tagesgrenze und an
-            // Relativzeiten, also neu holen.
+            // The system time or time zone changed (travel, daylight saving):
+            // the whole agenda hangs off the local day boundary and off
+            // relative times, so fetch it again.
             WM_TIMECHANGE => {
                 log::info("System time changed — resyncing");
                 st.last_minute = u32::MAX;
@@ -569,24 +567,23 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 LRESULT(0)
             }
 
-            // Windows faehrt herunter oder meldet ab: `WM_DESTROY` kommt dann
-            // nicht mehr zuverlaessig, eine wartende Erledigung ginge verloren.
+            // Windows is shutting down or logging off: `WM_DESTROY` no longer
+            // arrives reliably, and a waiting completion would be lost.
             WM_ENDSESSION => {
                 commit_pending(st);
                 LRESULT(0)
             }
 
-            // Monitor abgezogen oder Aufloesung geaendert: Position pruefen.
+            // A monitor was unplugged or the resolution changed: check the position.
             WM_DISPLAYCHANGE => {
                 rescue_offscreen(st);
                 LRESULT(0)
             }
 
-            // Windows hat auf hell/dunkel umgeschaltet oder die Akzentfarbe
-            // geaendert. `WM_SETTINGCHANGE` traegt zwar den Grund im lParam,
-            // aber die Palette neu aufzuloesen ist so billig (ein
-            // Registry-Wert plus ein DWM-Aufruf), dass sich das Auswerten des
-            // Strings nicht lohnt.
+            // Windows switched between light and dark, or changed the accent
+            // colour. `WM_SETTINGCHANGE` does carry the reason in lParam, but
+            // resolving the palette again is so cheap (one registry value plus
+            // one DWM call) that parsing the string is not worth it.
             WM_SETTINGCHANGE | WM_THEMECHANGED | WM_DWMCOLORIZATIONCOLORCHANGED => {
                 refresh_palette(st);
                 LRESULT(0)
@@ -624,15 +621,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 LRESULT(0)
             }
 
-            // Aus dem Standby zurueck: sofort abgleichen statt bis zum
-            // naechsten Intervall veraltete Daten zu zeigen.
+            // Back from standby: sync at once rather than showing stale data
+            // until the next interval.
             WM_POWERBROADCAST => {
                 if wparam.0 as u32 == PBT_APMRESUMEAUTOMATIC
                     || wparam.0 as u32 == PBT_APMRESUMESUSPEND
                 {
-                    log::info("Aus dem Energiesparmodus zurueck — Sofortabgleich");
-                    // Der Bildschirm kann sich waehrend des Schlafs geaendert
-                    // haben (Dock ab-/angesteckt).
+                    log::info("Back from standby — syncing now");
+                    // The display may have changed while asleep (a dock
+                    // plugged in or unplugged).
                     rescue_offscreen(st);
                     request_sync(st);
                 }
@@ -669,8 +666,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 LRESULT(0)
             }
 
-            // Ohne das setzt Windows den Klassenzeiger zurueck, sobald die
-            // Maus sich bewegt, und der Groessen-Cursor flackert.
+            // Without this Windows resets the class cursor as soon as the
+            // mouse moves, and the resize cursor flickers.
             WM_SETCURSOR if st.hover_edge.any() => {
                 if let Ok(cursor) = LoadCursorW(None, st.hover_edge.cursor()) {
                     SetCursor(Some(cursor));
@@ -699,8 +696,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             }
 
             WM_DESTROY => {
-                // Eine noch nicht abgeschickte Erledigung darf nicht verloren
-                // gehen, nur weil das Widget geschlossen wird.
+                // A completion that has not been sent yet must not be lost
+                // merely because the widget is closing.
                 commit_pending(st);
                 if let Some(s) = st.sync.as_ref() {
                     s.send(Command::Quit);
@@ -710,7 +707,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 KillTimer(Some(hwnd), TIMER_UNDO).ok();
                 KillTimer(Some(hwnd), TIMER_PEEK).ok();
                 let _ = UnregisterHotKey(Some(hwnd), HOTKEY_PEEK);
-                log::info("Beendet");
+                log::info("Shut down");
                 PostQuitMessage(0);
                 LRESULT(0)
             }
@@ -722,18 +719,17 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 
 // --- Rueckgaengig -----------------------------------------------------------
 
-/// Merkt das Abhaken vor und startet die Bedenkzeit.
+/// Records the tick provisionally and starts the grace period.
 fn begin_pending(st: &mut State, idx: usize) {
-    // Nur eine Aufgabe gleichzeitig in der Warteschleife: eine zweite
-    // Erledigung bestaetigt die erste sofort.
+    // Only one task waits at a time: a second completion confirms the first
+    // immediately.
     commit_pending(st);
 
     let seconds = sync::lock(&st.shared).config.undo_seconds;
     let ids = {
         let mut guard = sync::lock(&st.shared);
         guard.agenda.tasks.get_mut(idx).map(|t| {
-            // Sofort optisch quittieren, damit der Klick sich unmittelbar
-            // anfuehlt.
+            // Acknowledge visually at once, so the click feels immediate.
             t.completing = true;
             (t.account_id.clone(), t.tasklist_id.clone(), t.id.clone())
         })
@@ -773,7 +769,7 @@ fn on_undo_tick(st: &mut State) {
     redraw(st);
 }
 
-/// Schickt eine wartende Erledigung ab und beendet die Bedenkzeit.
+/// Sends a waiting completion and ends the grace period.
 fn commit_pending(st: &mut State) {
     let Some(p) = st.pending.take() else { return };
     stop_undo_timer(st);
@@ -789,7 +785,7 @@ fn cancel_pending(st: &mut State) {
         t.completing = false;
     }
     drop(guard);
-    log::info("Abhaken zurueckgenommen");
+    log::info("Task completion undone");
     redraw(st);
 }
 
@@ -809,13 +805,13 @@ fn send_completion(st: &State, account_id: &str, tasklist_id: &str, task_id: &st
     }
 }
 
-/// Schaltet einen Kalender bzw. eine Aufgabenliste an oder ab.
+/// Switches a calendar or task list on or off.
 ///
-/// Eine leere Liste in der Konfiguration bedeutet "alle". Wird aus diesem
-/// Zustand heraus eine Quelle abgewaehlt, muss die Auswahl erst ausgeschrieben
-/// werden — sonst waere das Ergebnis wieder "alle". Umgekehrt wird eine
-/// vollstaendige Auswahl zurueck auf "leer" normalisiert, damit ein spaeter
-/// hinzugefuegter Kalender automatisch mitkommt.
+/// An empty list in the configuration means "all of them". Deselecting a
+/// source from that state means the selection has to be written out in full
+/// first — otherwise the result would be "all" again. Conversely a complete
+/// selection is normalised back to "empty", so a calendar added later comes
+/// along automatically.
 fn toggle_source(st: &mut State, is_calendar: bool, index: usize) {
     {
         let mut guard = sync::lock(&st.shared);
@@ -837,8 +833,8 @@ fn toggle_source(st: &mut State, is_calendar: bool, index: usize) {
         if selected.is_empty() {
             *selected = all.iter().filter(|i| **i != id).cloned().collect();
         } else if selected.contains(&id) {
-            // Die letzte Quelle darf nicht verschwinden: eine leere Auswahl
-            // hiesse wieder "alle", also genau das Gegenteil.
+            // The last source must not disappear: an empty selection would
+            // mean "all" again, which is exactly the opposite.
             if selected.len() > 1 {
                 selected.retain(|i| *i != id);
             }
@@ -892,7 +888,7 @@ fn start_update(st: &mut State) {
     }
 }
 
-/// Legt den Tagesplan als Text in die Zwischenablage.
+/// Puts the day's plan on the clipboard as text.
 fn copy_agenda(st: &mut State) {
     let guard = sync::lock(&st.shared);
     let loc = &st.loc;
@@ -963,7 +959,7 @@ fn copy_agenda(st: &mut State) {
             Some(d) => loc.day_month(d),
             None => "-".into(),
         };
-        // Unteraufgaben eingerueckt, wie in der Anzeige.
+        // Subtasks indented, as they are on screen.
         let indent = "  ".repeat(task.depth as usize + 1);
         out.push_str(&format!(
             "{indent}[ ] {due}  {}
@@ -976,7 +972,7 @@ fn copy_agenda(st: &mut State) {
     if platform::set_clipboard_text(&out) {
         log::info("Agenda in die Zwischenablage kopiert");
     } else {
-        log::warn("Zwischenablage nicht verfuegbar");
+        log::warn("Clipboard is not available");
     }
 }
 
@@ -1041,11 +1037,12 @@ fn try_register(hwnd: HWND, modifiers: u32, key: u32) -> bool {
     }
 }
 
-/// Holt das Widget fuer ein paar Sekunden nach vorn.
+/// Brings the widget forward for a few seconds.
 ///
-/// Das ist der Ausgleich fuer die Bottom-Most-Lage: das Widget stoert nie,
-/// ist dadurch aber beim Arbeiten auch nie zu sehen. Ein Tastendruck genuegt,
-/// danach sinkt es von selbst zurueck — ohne Klick, ohne Fokuswechsel.
+/// This is what makes the bottom-most position workable: the widget is never
+/// in the way, which also means it is never visible while you work. One key
+/// press is enough, and it sinks back on its own afterwards — no click, no
+/// change of focus.
 fn begin_peek(st: &mut State) {
     let seconds = sync::lock(&st.shared).config.peek_seconds.max(1);
     st.peeking = true;
@@ -1061,7 +1058,7 @@ fn begin_peek(st: &mut State) {
         );
         SetTimer(Some(st.hwnd), TIMER_PEEK, seconds * 1000, None);
     }
-    // Aufblenden wie bei neuen Daten: der Blick soll gefuehrt werden.
+    // Fade in as for new data: the eye should be led to it.
     st.anim.restart_reveal();
     kick(st);
 }
@@ -1088,7 +1085,7 @@ fn end_peek(st: &mut State) {
 fn on_tick(st: &mut State) {
     let now = Local::now();
 
-    // Tageswechsel: die gesamte Agenda ist ungueltig geworden.
+    // The day rolled over: the whole agenda has become invalid.
     let stale_day = {
         let guard = sync::lock(&st.shared);
         guard
@@ -1104,7 +1101,7 @@ fn on_tick(st: &mut State) {
 
     reload_config_if_changed(st);
 
-    // Uhr und Relativzeiten haengen an der Minute.
+    // The clock and the relative times hang off the minute.
     if now.minute() != st.last_minute {
         st.last_minute = now.minute();
         redraw(st);
@@ -1117,16 +1114,16 @@ fn request_sync(st: &mut State) {
     }
     st.anim.spinning = true;
     kick(st);
-    // Vorlaeufig weitersetzen; `on_sync_done` korrigiert nach Ergebnis.
+    // Set provisionally; `on_sync_done` corrects it once the result is in.
     let interval = sync::lock(&st.shared).config.sync_minutes as i64;
     st.next_sync_at = Local::now() + ChronoDuration::minutes(interval);
 }
 
-/// Nach jedem Sync-Ergebnis den naechsten Termin festlegen.
+/// Decides when the next sync happens, after every result.
 ///
-/// Bei Fehlern exponentiell zurueckrudern (1, 2, 4, 8 … Minuten), gedeckelt
-/// auf das regulaere Intervall. So haemmert das Widget bei laengerer
-/// Netzstoerung nicht dauernd gegen die API-Quote.
+/// On failure it backs off exponentially (1, 2, 4, 8 … minutes), capped at
+/// the regular interval. That way a longer network outage does not have the
+/// widget hammering away at the API quota.
 fn on_sync_done(st: &mut State) {
     let (status, interval, stamp) = {
         let guard = sync::lock(&st.shared);
@@ -1153,12 +1150,12 @@ fn on_sync_done(st: &mut State) {
         }
     }
 
-    // Nur bei tatsaechlich neuen Daten einblenden — ein fehlgeschlagener
-    // Versuch soll die Liste nicht grundlos aufblitzen lassen.
+    // Only fade in for genuinely new data — a failed attempt should not make
+    // the list flash for no reason.
     if stamp != st.last_stamp {
         st.last_stamp = stamp;
         st.anim.restart_reveal();
-        // Neue Liste, alte Scrollposition kann ins Leere zeigen.
+        // A new list, so the old scroll position may point at nothing.
         st.scroll_target = 0.0;
         st.anim.scroll.set(0.0);
     }
@@ -1178,7 +1175,7 @@ fn reload_config_if_changed(st: &mut State) {
     if let Some(e) = &error {
         log::warn(e);
     } else {
-        log::info("Konfiguration neu geladen");
+        log::info("Configuration reloaded");
     }
 
     let scale_changed = (cfg.scale - st.scale).abs() > f32::EPSILON;
@@ -1186,9 +1183,8 @@ fn reload_config_if_changed(st: &mut State) {
     let palette = Palette::resolve(ThemePref::parse(&cfg.theme), &cfg.accent, st.visuals);
     st.anim.enabled = palette.animations;
 
-    // Die Leserichtung steckt in den DirectWrite-Formaten; ein Wechsel
-    // zwischen LTR und RTL erzwingt daher denselben Neuaufbau wie eine
-    // geaenderte Skalierung.
+    // Reading direction lives in the DirectWrite formats, so switching
+    // between LTR and RTL forces the same rebuild as a change of scale.
     let new_loc = Locale::resolve(&cfg.language);
     let direction_changed = new_loc.rtl != st.loc.rtl;
     tpmplaner_core::i18n::set_global(new_loc.cat);
@@ -1216,9 +1212,8 @@ fn reload_config_if_changed(st: &mut State) {
         );
     }
 
-    // Die Schriftgroessen stecken in den DirectWrite-Formaten und lassen sich
-    // nicht nachtraeglich aendern — bei geaenderter Skalierung muss der
-    // Renderer komplett neu aufgebaut werden.
+    // Font sizes live in the DirectWrite formats and cannot be changed after
+    // the fact — a change of scale means rebuilding the renderer completely.
     if scale_changed || direction_changed {
         recreate_renderer(st, pw.max(1) as u32, ph.max(1) as u32, palette);
     } else if let Some(r) = st.renderer.as_mut() {
@@ -1227,12 +1222,11 @@ fn reload_config_if_changed(st: &mut State) {
     redraw(st);
 }
 
-/// Systemdesign, Akzentfarbe, Kontrastmodus oder Bewegungseinstellung haben
-/// sich geaendert.
+/// The system theme, accent colour, contrast mode or motion setting changed.
 ///
-/// `WM_SETTINGCHANGE` kommt aus vielerlei Anlaessen; ohne den Vergleich mit
-/// dem letzten Stand wuerde jedes fremde Systemereignis ein Neuzeichnen
-/// ausloesen.
+/// `WM_SETTINGCHANGE` arrives for all sorts of reasons; without comparing
+/// against the last known state, every unrelated system event would trigger a
+/// redraw.
 fn refresh_palette(st: &mut State) {
     let visuals = platform::system_visuals();
     if visuals == st.visuals {
@@ -1301,8 +1295,8 @@ fn on_mouse_move(st: &mut State, lparam: LPARAM) {
 
     let (x, y) = client_dip(st, lparam);
 
-    // Kante hat Vorrang vor der Zeilen-Hervorhebung: sonst konkurriert der
-    // Griff mit dem Hover der darunterliegenden Zeile.
+    // The edge outranks row highlighting: otherwise the grip competes with
+    // the hover state of the row underneath.
     let edge = edge_at(st, x, y);
     if edge != st.hover_edge {
         st.hover_edge = edge;
@@ -1349,7 +1343,7 @@ fn on_left_down(st: &mut State, lparam: LPARAM) {
     match hit_at(st, x, y) {
         Some(Hit::Refresh) => request_sync(st),
 
-        // Liegt oben auf der Zeile, solange die Bedenkzeit laeuft.
+        // Sits on top of the row for as long as the grace period runs.
         Some(Hit::Undo(_)) => cancel_pending(st),
 
         Some(Hit::TaskCheck(idx)) => begin_pending(st, idx),
@@ -1379,7 +1373,7 @@ fn on_left_down(st: &mut State, lparam: LPARAM) {
                         st.anim.spinning = true;
                         kick(st);
                     }
-                    // Bei einem Sync-Fehler steht der volle Text im Protokoll.
+                    // On a sync failure the full text is in the log.
                     Status::Error(_) => platform::open_path(&log::file_path()),
                     _ => request_sync(st),
                 }
@@ -1404,7 +1398,7 @@ fn on_left_down(st: &mut State, lparam: LPARAM) {
     }
 }
 
-/// Oeffnet einen Termin im Google-Kalender.
+/// Opens an event in its calendar.
 fn open_event(st: &State, idx: usize, tomorrow: bool) {
     let guard = sync::lock(&st.shared);
     let list = if tomorrow {
@@ -1419,14 +1413,14 @@ fn open_event(st: &State, idx: usize, tomorrow: bool) {
     }
 }
 
-/// Welche Kante liegt unter dem Mauszeiger? Koordinaten in DIPs.
+/// Which edge is under the pointer? Coordinates in DIPs.
 fn edge_at(st: &State, x: f32, y: f32) -> Edges {
     let Some(r) = st.renderer.as_ref() else {
         return Edges::NONE;
     };
     let (w, h) = r.size_dip();
-    // Der Glaskoerper ist um den Schattenrand eingerueckt; der Griff sitzt an
-    // *seiner* Kante, nicht an der unsichtbaren Fensterkante.
+    // The glass body is inset by the shadow margin; the grip sits on *its*
+    // edge, not on the invisible window edge.
     let s = st.metrics.shadow;
     let (l, t, rgt, b) = (s, s, w - s, h - s);
     if x < l - RESIZE_GRIP || x > rgt + RESIZE_GRIP || y < t - RESIZE_GRIP || y > b + RESIZE_GRIP {
@@ -1440,7 +1434,7 @@ fn edge_at(st: &State, x: f32, y: f32) -> Edges {
     }
 }
 
-/// Zieht das Fenster an der gefassten Kante auf die neue Groesse.
+/// Drags the window to its new size by the edge that was grabbed.
 fn apply_resize(st: &mut State) {
     let Some((edges, start_cursor, start_rect)) = st.resize else {
         return;
@@ -1456,8 +1450,8 @@ fn apply_resize(st: &mut State) {
 
         let mut r = start_rect;
         if edges.left {
-            // Beim Ziehen an der linken Kante wandert der Ursprung mit; die
-            // Mindestbreite muss deshalb den *linken* Rand begrenzen.
+            // Dragging the left edge moves the origin with it, so the minimum
+            // width has to constrain the *left* side.
             r.left = (r.left + dx).min(r.right - min_w);
         }
         if edges.right {
@@ -1482,7 +1476,7 @@ fn apply_resize(st: &mut State) {
     }
 }
 
-/// Neue Groesse dauerhaft merken — in DIPs und ohne den Schattenrand.
+/// Stores the new size — in DIPs, and without the shadow margin.
 fn save_geometry(st: &mut State) {
     unsafe {
         let mut wr = RECT::default();
@@ -1500,9 +1494,9 @@ fn save_geometry(st: &mut State) {
     st.config_mtime = config_mtime();
 }
 
-/// Trefferpruefung von hinten nach vorn: zuletzt gezeichnete (obenliegende)
-/// Regionen gewinnen — so schlaegt der Abhaken-Kreis die Aufgabenzeile und
-/// die Rueckgaengig-Flaeche beide.
+/// Hit testing back to front: the regions drawn last (those on top) win —
+/// which is how the tick circle beats the task row, and the undo area beats
+/// them both.
 fn hit_at(st: &State, x: f32, y: f32) -> Option<Hit> {
     st.hits
         .iter()
@@ -1511,7 +1505,7 @@ fn hit_at(st: &State, x: f32, y: f32) -> Option<Hit> {
         .map(|r| r.hit)
 }
 
-/// Mausposition aus `LPARAM` (physische Pixel) in DIPs umrechnen.
+/// Converts a mouse position from `LPARAM` (physical pixels) into DIPs.
 fn client_dip(st: &State, lparam: LPARAM) -> (f32, f32) {
     let x = (lparam.0 & 0xFFFF) as i16 as f32;
     let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as f32;
@@ -1529,18 +1523,18 @@ fn save_position(st: &mut State) {
             guard.config.save();
         }
     }
-    // Eigenes Speichern nicht als Fremdaenderung missdeuten.
+    // Do not mistake our own save for someone else's edit.
     st.config_mtime = config_mtime();
 }
 
-/// Holt das Fenster zurueck, wenn seine Position auf keinem Monitor mehr liegt.
+/// Brings the window back when its position is no longer on any monitor.
 fn rescue_offscreen(st: &mut State) {
     unsafe {
         let mut wr = RECT::default();
         if GetWindowRect(st.hwnd, &mut wr).is_err() || platform::is_on_screen(&wr) {
             return;
         }
-        log::warn("Fensterposition liegt auf keinem Monitor — zurueckgesetzt");
+        log::warn("Window position is off every monitor — reset");
         let cfg = {
             let mut guard = sync::lock(&st.shared);
             guard.config.x = None;
@@ -1566,9 +1560,9 @@ fn rescue_offscreen(st: &mut State) {
 // --- Zeichnen ---------------------------------------------------------------
 
 fn redraw(st: &mut State) {
-    // Den Arc kopieren, nicht den Inhalt: waehrend einer Animation laeuft das
-    // hier 60-mal pro Sekunde, und ein voller Klon der Agenda waere dabei
-    // tausende Allokationen pro Sekunde fuer Daten, die sich nicht aendern.
+    // Copy the Arc, not the contents: during an animation this runs 60 times
+    // a second, and a full clone of the agenda would mean thousands of
+    // allocations per second for data that is not changing.
     let shared = st.shared.clone();
     let guard = sync::lock(&shared);
 
@@ -1608,8 +1602,8 @@ fn redraw(st: &mut State) {
         Ok(result) => {
             st.content_height = result.content_height;
             st.viewport_height = result.viewport_height;
-            // Nach dem Loeschen von Zeilen kann der Scroll-Offset ins Leere
-            // zeigen — dann zurueckziehen.
+            // After rows are removed the scroll offset can point at nothing —
+            // pull it back in that case.
             let overflow = (st.content_height - st.viewport_height).max(0.0);
             if st.scroll_target > overflow {
                 st.scroll_target = overflow;
@@ -1617,10 +1611,10 @@ fn redraw(st: &mut State) {
             }
         }
         Err(e) if render::is_device_lost(e.code()) => {
-            // Treiberwechsel, GPU-Reset oder Wechsel in eine RDP-Sitzung: die
-            // komplette Geraetekette ist ungueltig. Neu aufbauen und beim
-            // naechsten Anlass wieder zeichnen.
-            log::warn(&format!("Grafikgeraet verloren ({e}) — Neuaufbau"));
+            // A driver change, a GPU reset or a move into an RDP session: the
+            // entire device chain is invalid. Rebuild it and draw again at the
+            // next opportunity.
+            log::warn(&format!("Graphics device lost ({e}) — rebuilding"));
             let (w, h) = current_size_px(st.hwnd);
             let pal = st.renderer.as_ref().map(|r| r.palette());
             let cfg = sync::lock(&st.shared).config.clone();
@@ -1634,8 +1628,8 @@ fn redraw(st: &mut State) {
 }
 
 fn recreate_renderer(st: &mut State, width_px: u32, height_px: u32, pal: Palette) {
-    // Erst freigeben: Swapchain und Composition-Target halten sonst noch
-    // Referenzen auf das verlorene Geraet.
+    // Release first: otherwise the swapchain and the composition target still
+    // hold references to the lost device.
     st.renderer = None;
     st.renderer = Renderer::new(
         st.hwnd,
@@ -1648,7 +1642,7 @@ fn recreate_renderer(st: &mut State, width_px: u32, height_px: u32, pal: Palette
     )
     .ok();
     if st.renderer.is_none() {
-        log::error("Renderer konnte nicht neu aufgebaut werden");
+        log::error("The renderer could not be rebuilt");
     }
 }
 
@@ -1674,8 +1668,8 @@ fn show_menu(st: &mut State) {
         let autostart = platform::autostart_enabled();
         let c = st.loc.cat;
 
-        // Die Beschriftungen kommen aus dem Katalog und muessen deshalb zur
-        // Laufzeit nach UTF-16 gewandelt werden; `w!()` kann nur Literale.
+        // The labels come from the catalogue and therefore have to be
+        // converted to UTF-16 at run time; `w!()` only handles literals.
         let item = |flags: MENU_ITEM_FLAGS, id: usize, label: &str| {
             let text = platform::wide(label);
             let _ = AppendMenuW(menu, flags, id, PCWSTR(text.as_ptr()));
@@ -1691,9 +1685,9 @@ fn show_menu(st: &mut State) {
             CMD_AUTOSTART,
             c.menu_autostart,
         );
-        // Quellen direkt im Menue an- und abwaehlen. Die IDs sind lange
-        // E-Mail-aehnliche Zeichenketten; sie von Hand in die JSON zu
-        // uebertragen war die unangenehmste Stelle der Einrichtung.
+        // Select and deselect sources straight from the menu. The ids are
+        // long, email-like strings, and copying them into the JSON by hand was
+        // the most unpleasant part of the setup.
         let (calendars, tasklists, selected_cal, selected_list) = {
             let g = sync::lock(&st.shared);
             (
@@ -1728,7 +1722,7 @@ fn show_menu(st: &mut State) {
         for (label, entries, selected, base) in sources {
             let Ok(sub) = CreatePopupMenu() else { continue };
             for (i, (id, name)) in entries.iter().enumerate() {
-                // Leere Auswahl bedeutet "alle" — dann sind alle angehakt.
+                // An empty selection means "all" — so everything is ticked.
                 let checked = selected.is_empty() || selected.contains(id);
                 let text = platform::wide(name);
                 let _ = AppendMenuW(
@@ -1764,12 +1758,12 @@ fn show_menu(st: &mut State) {
         let mut pt = POINT::default();
         let _ = GetCursorPos(&mut pt);
 
-        // Ohne Vordergrundfenster bliebe das Menue nach einem Klick daneben
-        // offen stehen; die WM_NULL-Nachricht danach ist der dokumentierte
-        // Begleit-Workaround.
+        // Without a foreground window the menu would stay open after a click
+        // beside it; the WM_NULL message afterwards is the documented
+        // companion workaround.
         let _ = SetForegroundWindow(st.hwnd);
-        // Bei rechts-nach-links-Leserichtung klappt das Menue an der rechten
-        // Kante des Mauszeigers auf, wie es das System auch tut.
+        // With right-to-left reading the menu opens at the right edge of the
+        // pointer, the way the system does it too.
         let align = if st.loc.rtl {
             TPM_RIGHTALIGN | TPM_LAYOUTRTL
         } else {
@@ -1801,8 +1795,8 @@ fn show_menu(st: &mut State) {
                 });
             }
             CMD_CONFIG => {
-                // Sicherstellen, dass die Datei existiert, bevor sie geoeffnet
-                // wird — der Editor soll nicht "nicht gefunden" melden.
+                // Make sure the file exists before opening it — the editor
+                // should not report "not found".
                 sync::lock(&st.shared).config.save();
                 st.config_mtime = config_mtime();
                 platform::open_path(&config::config_path());

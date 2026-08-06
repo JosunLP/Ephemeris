@@ -504,7 +504,7 @@ fn apply_sync_result(
             Err(e) => {
                 // The full text does not fit the status line, but it still
                 // belongs in the log.
-                log::error(&format!("Sync fehlgeschlagen: {e}"));
+                log::error(&format!("Sync failed: {e}"));
                 // Deliberately discard *no* data: a dropped wireless
                 // connection should tint the status line, not empty the
                 // widget.
