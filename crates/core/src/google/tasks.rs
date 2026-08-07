@@ -4,16 +4,20 @@
 //!
 //! Two quirks of this API the widget has to allow for:
 //!
-//! 1. `due` is effectively a plain date — the time is normalised server side
-//!    to `T00:00:00.000Z`. See [`crate::model::parse_task_due`].
+//! 1. `due` is documented as a plain date, normalised server side to
+//!    `T00:00:00.000Z` — but the app lets a task carry a time of day, and such
+//!    a value comes back as a real instant. Which day that is depends on the
+//!    zone; see [`crate::model::parse_task_due`].
 //! 2. As soon as `dueMin` or `dueMax` is set, tasks **without** a due date
 //!    vanish from the response entirely. Seeing them means querying unfiltered
 //!    and sieving on the client.
+//! 3. Neither bound documents whether it is inclusive, which is why
+//!    [`due_bound`] does not put one on the day being asked about.
 
 use super::auth::Auth;
 use super::{Result, agent, api_error, urlencode};
 use crate::model::{Task, parse_task_due};
-use chrono::NaiveDate;
+use chrono::{Duration, NaiveDate};
 use serde::Deserialize;
 use std::collections::HashMap;
 
@@ -85,7 +89,7 @@ pub fn list_tasklists(auth: &mut Auth) -> Result<Vec<TaskListRef>> {
         .collect())
 }
 
-/// Offene Aufgaben einer Liste.
+/// The open tasks of one list.
 ///
 /// With `include_undated` off the server filters through `dueMax`, so the
 /// "not due for three weeks" tasks never go over the wire at all. Otherwise
@@ -96,10 +100,7 @@ pub fn list_tasks(
     today: NaiveDate,
     include_undated: bool,
 ) -> Result<Vec<Task>> {
-    // The upper bound is deliberately 23:59:59 of the same day: it sits
-    // between today's and tomorrow's midnight and therefore works whether
-    // Google treats the bound as inclusive or exclusive.
-    let due_max = format!("{}T23:59:59.999Z", today.format("%Y-%m-%d"));
+    let due_max = due_bound(today);
 
     let mut raw: Vec<TaskEntry> = Vec::new();
     let mut page_token: Option<String> = None;
@@ -158,6 +159,27 @@ pub fn list_tasks(
     Ok(tasks)
 }
 
+/// The `dueMax` sent to the server: the end of **tomorrow**, not of today.
+///
+/// A day of slack, deliberately. Google documents neither whether the bound is
+/// inclusive nor what it does with the time of day, and a task due today sits
+/// exactly on a bound of today — an off-by-one there drops precisely the tasks
+/// due today while leaving the overdue ones in place, which is what was
+/// reported. Due dates that carry a time carry a zone with them as well, and
+/// local midnight is up to fourteen hours away from the UTC one, so the bound
+/// has to clear that too.
+///
+/// This filter is an optimisation, nothing more: it keeps the "not due for
+/// three weeks" bulk off the wire. Which tasks are actually shown is decided by
+/// [`crate::model::filter_tasks_for_today`], so a day of extra data costs one
+/// filter pass and cannot put a future task on screen.
+fn due_bound(today: NaiveDate) -> String {
+    format!(
+        "{}T23:59:59.999Z",
+        (today + Duration::days(1)).format("%Y-%m-%d")
+    )
+}
+
 /// Nesting depth, guarded against cycles and capped at three levels.
 fn depth_of(entry: &TaskEntry, by_id: &HashMap<&str, &TaskEntry>) -> u8 {
     let mut depth = 0u8;
@@ -202,4 +224,21 @@ fn request(auth: &mut Auth, method: &str, url: &str, body: Option<&str>) -> Resu
         return Err(api_error(status, &text));
     }
     Ok(text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_due_bound_clears_today_by_a_full_day() {
+        let today = NaiveDate::from_ymd_opt(2026, 8, 7).unwrap();
+        assert_eq!(due_bound(today), "2026-08-08T23:59:59.999Z");
+    }
+
+    #[test]
+    fn the_due_bound_crosses_a_month_end() {
+        let today = NaiveDate::from_ymd_opt(2026, 8, 31).unwrap();
+        assert_eq!(due_bound(today), "2026-09-01T23:59:59.999Z");
+    }
 }

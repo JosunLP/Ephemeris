@@ -3,7 +3,7 @@ members = ["crates/core"]
 
 [package]
 name = "tpmplaner"
-version = "1.0.1"
+version = "1.0.2"
 edition = "2024"
 license = "GPL-3.0-or-later"
 description = "A desktop widget showing today's calendar events and due tasks"
@@ -19,9 +19,9 @@ quick-xml = "0.41.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.11.0"
-# `win-system-proxy` uebernimmt die Proxy-Einstellungen aus den
-# Windows-Internetoptionen — ohne das schlaegt jeder Abruf in Netzen fehl,
-# die nur ueber einen Unternehmensproxy hinauskommen.
+# `win-system-proxy` picks the proxy settings up from the Windows internet
+# options — without it every request fails on a network that only gets out
+# through a corporate proxy.
 ureq = { version = "3.3.0", default-features = false, features = [
     "rustls",
     "json",
@@ -58,7 +58,7 @@ windows = { version = "0.62.2", features = [
 ] }
 windows-numerics = "0.3.1"
 
-# Auf kleine Binaergroesse und niedrigen Idle-Footprint getrimmt.
+# Trimmed for a small binary and a low idle footprint.
 [profile.release]
 opt-level = "z"
 lto = "fat"

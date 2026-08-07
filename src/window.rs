@@ -442,7 +442,7 @@ fn apply_backdrop(hwnd: HWND, cfg: &Config, dark: bool) {
     }
 }
 
-/// Minutentimer auf die naechste volle Minute stellen.
+/// Sets the minute timer to the next full minute.
 fn arm_tick(hwnd: HWND) {
     let now = Local::now();
     let ms_to_next_minute = 60_000 - (now.second() * 1000 + now.timestamp_subsec_millis()) as i32;
@@ -682,7 +682,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 if (next - st.scroll_target).abs() > 0.01 {
                     st.scroll_target = next;
                     st.anim.scroll.set(next);
-                    // Scrollbalken einblenden; er verblasst danach von selbst.
+                    // Show the scrollbar; it fades out again by itself.
                     st.anim.scrollbar.jump(1.0);
                     st.anim.scrollbar.set(0.0);
                     kick(st);
@@ -776,7 +776,7 @@ fn commit_pending(st: &mut State) {
     send_completion(st, &p.account_id, &p.tasklist_id, &p.task_id);
 }
 
-/// Nimmt die Erledigung zurueck — es wurde nie etwas an Google gesendet.
+/// Takes the completion back — nothing was ever sent to Google.
 fn cancel_pending(st: &mut State) {
     let Some(p) = st.pending.take() else { return };
     stop_undo_timer(st);

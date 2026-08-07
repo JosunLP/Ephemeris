@@ -86,10 +86,24 @@ a local fault into a total failure.
 
 These are the places where the obvious implementation is wrong.
 
-**Task due dates are dates, not instants.** Every task API returns
-`2026-08-05T00:00:00.000Z`. Parsing that as UTC and converting to local time
-moves it a day in most of the world. `model::parse_task_due` reads ten
-characters and never converts.
+**A plain task due date is a date, not an instant.** Every task API returns
+`2026-08-05T00:00:00.000Z` for it. Parsing that as UTC and converting to local
+time moves it a day in most of the world, so `model::parse_task_due` reads ten
+characters and does not convert.
+
+**A due date with a time of day is the opposite.** Google Tasks lets a task
+carry a time, and then the value is a real instant: `2026-08-06T22:30:00.000Z`
+is half past midnight on the 7th in Berlin. Reading ten characters files it as
+overdue since yesterday. The two cases are told apart by the time of day —
+midnight is a calendar day, anything else is an instant and is converted.
+
+**A server side due-date bound must not sit on the day you are asking about.**
+`dueMax` at the end of today put every task due today exactly on the bound, and
+Google documents neither whether the bound is inclusive nor what it does with
+the time of day. The result was a task list showing nothing but overdue
+entries. `google::tasks::due_bound` clears the day by a full day and lets
+`model::filter_tasks_for_today` decide the real cutoff — the server filter
+exists to save bandwidth, not to be exact.
 
 **Recurring events must be expanded by the server.** Google needs
 `singleEvents=true`, Graph needs `calendarView` rather than `events`, CalDAV

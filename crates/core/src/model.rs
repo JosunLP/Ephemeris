@@ -12,14 +12,14 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Event {
     pub title: String,
-    /// `None` bei Ganztagesterminen.
+    /// `None` for all-day events.
     pub start: Option<DateTime<Local>>,
     pub end: Option<DateTime<Local>>,
     pub all_day: bool,
     pub location: Option<String>,
     /// Link into the web calendar, opened on click.
     pub html_link: Option<String>,
-    /// Beitrittslink einer Online-Besprechung (Teams, Meet, Zoom).
+    /// Join link of an online meeting (Teams, Meet, Zoom).
     ///
     /// For a meeting that is running, "join" is the action actually wanted,
     /// so a click on the row takes this link when there is one and falls back
@@ -91,7 +91,7 @@ impl Task {
     }
 }
 
-/// Der komplette Anzeigezustand eines Sync-Laufs.
+/// The complete display state of one sync run.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Agenda {
@@ -110,13 +110,31 @@ pub struct Agenda {
 }
 
 /// Google Tasks and Microsoft To Do both return `due` as an RFC 3339
-/// timestamp, but the time of day is **meaningless**: the API normalises every
-/// due date to `YYYY-MM-DDT00:00:00.000Z`. Parsing that as a real UTC instant
-/// and converting it to the local zone lands a day early in every zone east of
-/// UTC — "due today" silently becomes "due yesterday".
+/// timestamp, and for a plain due date the time of day is **meaningless**: the
+/// API normalises it to `YYYY-MM-DDT00:00:00.000Z`. Parsing that as a real UTC
+/// instant and converting it to the local zone lands a day early in every zone
+/// east of UTC — "due today" silently becomes "due yesterday".
 ///
-/// Hence: read the first ten characters only, and never convert time zones.
+/// So midnight is read as a bare calendar day, from the first ten characters,
+/// with no time zone conversion at all.
+///
+/// A timestamp that carries a **different** time of day is the opposite case:
+/// the task has a time, the value is a genuine instant, and only the local zone
+/// says which day it falls on. `2026-08-06T22:30:00Z` is half past midnight on
+/// the 7th in Berlin, and taking the first ten characters would file it as
+/// overdue since yesterday.
 pub fn parse_task_due(raw: &str) -> Option<NaiveDate> {
+    parse_task_due_in(raw, &Local)
+}
+
+/// The zone is a parameter only so both branches can be tested without
+/// depending on where the machine running the tests happens to stand.
+fn parse_task_due_in<Tz: chrono::TimeZone>(raw: &str, zone: &Tz) -> Option<NaiveDate> {
+    if let Ok(dt) = DateTime::parse_from_rfc3339(raw)
+        && dt.time() != NaiveTime::MIN
+    {
+        return Some(dt.with_timezone(zone).date_naive());
+    }
     let date_part = raw.get(..10)?;
     NaiveDate::parse_from_str(date_part, "%Y-%m-%d").ok()
 }
@@ -221,6 +239,47 @@ mod tests {
     fn due_date_accepts_plain_date() {
         let d = parse_task_due("2026-08-04").unwrap();
         assert_eq!(d, NaiveDate::from_ymd_opt(2026, 8, 4).unwrap());
+    }
+
+    #[test]
+    fn midnight_keeps_its_calendar_day_in_every_zone() {
+        // The plain due date, written the three ways the services use it. None
+        // of them may move, wherever the reader stands.
+        let berlin = chrono::FixedOffset::east_opt(2 * 3600).expect("valid offset");
+        let chicago = chrono::FixedOffset::west_opt(5 * 3600).expect("valid offset");
+        for raw in [
+            "2026-08-04T00:00:00.000Z",
+            "2026-08-04T00:00:00+02:00",
+            "2026-08-04T00:00:00-05:00",
+        ] {
+            for zone in [berlin, chicago] {
+                assert_eq!(
+                    parse_task_due_in(raw, &zone).unwrap(),
+                    NaiveDate::from_ymd_opt(2026, 8, 4).unwrap(),
+                    "{raw} was shifted in {zone}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_due_time_lands_on_the_local_day_not_the_utc_one() {
+        let aug_7 = NaiveDate::from_ymd_opt(2026, 8, 7).unwrap();
+
+        // Half past midnight on the 7th in Berlin. Reading the first ten
+        // characters files it as due on the 6th — overdue since yesterday.
+        let berlin = chrono::FixedOffset::east_opt(2 * 3600).expect("valid offset");
+        assert_eq!(
+            parse_task_due_in("2026-08-06T22:30:00.000Z", &berlin).unwrap(),
+            aug_7
+        );
+
+        // And the mirror image west of UTC: late on the 7th in Chicago.
+        let chicago = chrono::FixedOffset::west_opt(5 * 3600).expect("valid offset");
+        assert_eq!(
+            parse_task_due_in("2026-08-08T02:00:00.000Z", &chicago).unwrap(),
+            aug_7
+        );
     }
 
     fn task(title: &str, due: Option<&str>) -> Task {

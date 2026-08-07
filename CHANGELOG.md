@@ -4,6 +4,49 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.2] - 2026-08-07
+
+### Fixed
+
+- Google tasks due **today** never appeared, while overdue ones did — which
+  turns the task section into a list of nothing but arrears, the opposite of
+  what it is for. The request bounded `dueMax` at the end of today, so a task
+  due today sat exactly on the bound while everything overdue sat safely below
+  it. Google documents neither whether that bound is inclusive nor what it does
+  with the time of day, and a bound on the very day being asked about has no
+  margin for either answer. It now clears that day by a full day. Nothing extra
+  reaches the screen: the server side filter was only ever there to keep the
+  bulk of future tasks off the wire, and which tasks are shown has always been
+  decided on the client.
+- A due date that carries a time of day was filed a day early east of UTC. Such
+  a value is a real instant, not a calendar day, and it was read as the first
+  ten characters of the timestamp — so a task due half past midnight in Central
+  Europe arrives as `22:30Z` the evening before and was shown as overdue since
+  yesterday. Timestamps with a time of day are now converted into the local
+  zone. A plain due date still is not: it always arrives as midnight, and
+  converting that is what put tasks on the wrong day to begin with.
+
+### Documentation
+
+- Troubleshooting explains why a task created from Google Calendar can show up
+  under *Schedule* rather than under *Tasks*. Such a task carries two
+  independent dates — a time block, which is a genuine calendar entry, and a
+  separate deadline, which is the due date the task list works from. Leaving
+  the deadline empty leaves the task undated, and undated tasks are hidden
+  unless `show_undated_tasks` says otherwise.
+
+### Internal
+
+- Both defects had been reasoned about in comments rather than tested, and the
+  reasoning was wrong in each case — the `dueMax` bound was documented as
+  working "whether Google treats the bound as inclusive or exclusive", which is
+  precisely what it did not do. The bound and the parsing of a due date are now
+  covered by tests, and the ones for the parsing take the time zone as a
+  parameter so the cases east and west of UTC do not depend on where the test
+  machine stands.
+- The remaining German comments and the manifest are in English, so the whole
+  source reads in one language.
+
 ## [1.0.1] - 2026-08-07
 
 ### Fixed
@@ -96,5 +139,6 @@ First public release.
 - File log with rotation; panics are recorded before the process ends.
 - Settings are reloaded without a restart.
 
+[1.0.2]: https://github.com/JosunLP/TPMPlaner/releases/tag/v1.0.2
 [1.0.1]: https://github.com/JosunLP/TPMPlaner/releases/tag/v1.0.1
 [1.0.0]: https://github.com/JosunLP/TPMPlaner/releases/tag/v1.0.0

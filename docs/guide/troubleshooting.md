@@ -67,13 +67,40 @@ Not running at all? Start it from the Start menu.
 
 ## Tasks appear on the wrong day
 
-Fixed, but worth knowing what it was: task APIs return a due date as a
-timestamp at midnight UTC, and the time is meaningless. Reading it as a real
+Fixed, but worth knowing what it was: task APIs return a plain due date as a
+timestamp at midnight UTC, where the time is meaningless. Reading it as a real
 instant and converting to local time lands a day early everywhere east of UTC.
-The widget compares calendar dates and never converts.
+Midnight is therefore read as the bare calendar day and never converted.
+
+A due date that carries a *time* is the opposite case — that is a real instant,
+and the local zone decides which day it falls on. The widget tells the two
+apart by the time of day.
 
 If you still see a task on the wrong day, the log plus the raw value from the
 provider will settle it — please open an issue.
+
+## A task shows up under Schedule instead of under Tasks
+
+That is a Google task with a **time block**, and both halves of it are working
+as intended.
+
+Creating a task from Google Calendar, on the *Task* tab, offers two different
+dates:
+
+- **Start date and duration** — when you plan to work on it. That is a block on
+  your calendar, so it arrives through the calendar API and the widget lists it
+  under *Schedule*, at its time, like any other commitment.
+- **Deadline** — the actual due date, a separate field further down the dialog.
+  This is the one the tasks API reports as the due date, and it is what the
+  *Tasks* section sorts and colours by.
+
+Set a deadline and the task appears in both places: as a block in the timeline
+and as a dated entry in the task list. Leave it empty and the task has no due
+date at all, which means the *Tasks* section only shows it once you turn on
+`show_undated_tasks` — see [configuration](/guide/configuration).
+
+A task created in the Google Tasks app has no time block, only a due date, so
+it appears under *Tasks* alone.
 
 ## Times are hours off (Microsoft)
 

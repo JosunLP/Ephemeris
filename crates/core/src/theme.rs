@@ -117,7 +117,7 @@ impl ThemePref {
     }
 }
 
-/// Alle Farben eines Erscheinungsbilds.
+/// Every colour of one appearance.
 #[derive(Debug, Clone, Copy)]
 pub struct Palette {
     pub dark: bool,

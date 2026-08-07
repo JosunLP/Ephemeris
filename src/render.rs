@@ -2005,7 +2005,7 @@ impl Renderer {
         Ok(())
     }
 
-    /// Tatsaechliche Breite eines Textes in DIPs.
+    /// The actual width of a text in DIPs.
     ///
     /// Fixed column widths are the classic internationalisation trap: what is
     /// enough for "gestern" truncates "yesterday", and "المتأخرة" all the more.
@@ -2086,7 +2086,7 @@ pub fn is_device_lost(code: HRESULT) -> bool {
     )
 }
 
-/// Endzeit eines Termins in Minuten seit Mitternacht.
+/// End time of an event in minutes since midnight.
 ///
 /// With no end time an hour is assumed; if the event runs past midnight the
 /// raw time would point backwards, so it is clamped to the end of the day.
@@ -2168,8 +2168,8 @@ fn text_format(
     rtl: bool,
 ) -> Result<IDWriteTextFormat> {
     unsafe {
-        // "Segoe UI Variable Text" is the Windows 11 system font; on
-        // aelteren Systemen faellt DirectWrite selbsttaetig auf Segoe UI zurueck.
+        // "Segoe UI Variable Text" is the Windows 11 system font; on older
+        // systems DirectWrite falls back to Segoe UI by itself.
         let format = dwrite.CreateTextFormat(
             w!("Segoe UI Variable Text"),
             None,
@@ -2179,8 +2179,8 @@ fn text_format(
             size,
             w!("de-DE"),
         )?;
-        // Bei RTL-Leserichtung dreht DirectWrite die Bedeutung von LEADING
-        // swaps LEADING and TRAILING itself — "leading" is then the right.
+        // With a right-to-left reading direction DirectWrite swaps the meaning
+        // of LEADING and TRAILING itself — "leading" is then the right edge.
         // So the layout code stays as it is and never swaps alignments.
         if rtl {
             format.SetReadingDirection(DWRITE_READING_DIRECTION_RIGHT_TO_LEFT)?;
