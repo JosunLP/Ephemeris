@@ -24,7 +24,7 @@ function Write-Note($text) { Write-Host "    $text" -ForegroundColor DarkGray }
 
 if (-not $Force) {
     $what = if ($Purge) { 'TPMPlaner including all settings and credentials' } else { 'TPMPlaner' }
-    $answer = Read-Host "Remove $what? [y/N]"
+    $answer = Read-Host ('Remove {0}? [y/N]' -f $what)
     if ($answer -notmatch '^[yY]') {
         Write-Host 'Cancelled.'
         return

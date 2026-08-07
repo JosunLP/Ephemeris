@@ -54,9 +54,24 @@ try {
 
     # Verify before anything is written to the install directory. A truncated
     # download or a swapped asset must never reach disk as an executable.
+    #
+    # The checksum is fetched to a file rather than read from `.Content`.
+    # GitHub serves release assets as application/octet-stream, and for a
+    # non-text content type `.Content` is not the text of the file: PowerShell
+    # 7 hands back a Byte[] (so the parse below yielded "48", the first byte of
+    # "0" in decimal) and Windows PowerShell 5.1 hands back an empty string.
+    # Either way the comparison failed on a release that was in fact intact.
+    # `-OutFile` bypasses the content-type handling entirely.
     Write-Step 'Verifying checksum'
-    $expectedLine = (Invoke-WebRequest -Uri "$base/$assetName.sha256" -UseBasicParsing).Content
+    $sumFile = Join-Path $temp "$assetName.sha256"
+    Invoke-WebRequest -Uri "$base/$assetName.sha256" -OutFile $sumFile -UseBasicParsing
+    $expectedLine = (Get-Content $sumFile -Raw)
     $expected = ($expectedLine -split '\s+')[0].ToLower()
+    # Distinguish "the checksum file did not arrive" from "the binary is wrong",
+    # so the next such failure names its own cause instead of blaming the asset.
+    if ($expected -notmatch '^[0-9a-f]{64}$') {
+        throw "Could not read the published checksum for $assetName. Nothing was installed."
+    }
     $actual = (Get-FileHash $downloaded -Algorithm SHA256).Hash.ToLower()
     if ($expected -ne $actual) {
         throw "Checksum mismatch. Expected $expected, got $actual. Nothing was installed."
@@ -87,7 +102,18 @@ try {
 
     if (-not $NoAutostart) {
         Write-Step 'Enabling autostart'
-        New-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' `
+        # `-Force` on New-ItemProperty overwrites an existing value, but it
+        # does not create a missing key, and the Run key is absent on a
+        # profile where nothing has ever registered for autostart. Without
+        # this the install aborts here, after the binary is already in place.
+        #
+        # The Test-Path is not redundant, unlike in the uninstall entry below:
+        # `New-Item -Force` on a registry key that is already there recreates
+        # it and drops its values, which for this key means unregistering
+        # every other program's autostart.
+        $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+        if (-not (Test-Path $runKey)) { New-Item -Path $runKey -Force | Out-Null }
+        New-ItemProperty -Path $runKey `
             -Name 'TPMPlaner' -Value "`"$exePath`"" -PropertyType String -Force | Out-Null
     }
 
@@ -125,7 +151,11 @@ try {
     Write-Host 'TPMPlaner installed.' -ForegroundColor Green
     Write-Note "Binary:   $exePath"
     Write-Note "Settings: $env:APPDATA\TPMPlaner"
-    Write-Note 'Next step: connect a calendar — right-click the widget.'
+    # Kept to plain ASCII on purpose. This file has no BOM, so Windows
+    # PowerShell 5.1 reads it as the system ANSI codepage and `irm | iex`
+    # decodes it from an HTTP response that carries no charset -- either way a
+    # UTF-8 dash reaches the user as mojibake. The CI check keeps it that way.
+    Write-Note 'Next step: connect a calendar - right-click the widget.'
     Write-Note 'Docs: https://josunlp.github.io/TPMPlaner/'
 } finally {
     Remove-Item $temp -Recurse -Force -ErrorAction SilentlyContinue

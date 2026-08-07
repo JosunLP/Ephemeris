@@ -24,7 +24,7 @@ installed.
 
 ```powershell
 # A specific version instead of the latest
-& ([scriptblock]::Create((irm .../install.ps1))) -Version v1.0.0
+& ([scriptblock]::Create((irm .../install.ps1))) -Version v1.0.1
 
 # Install without starting it or adding it to autostart
 & ([scriptblock]::Create((irm .../install.ps1))) -NoStart -NoAutostart

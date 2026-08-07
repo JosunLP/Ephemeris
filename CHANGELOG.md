@@ -4,6 +4,52 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-08-07
+
+### Fixed
+
+- The installer rejected an intact download as a checksum mismatch, which made
+  the one-line install fail on every machine. GitHub serves release assets as
+  `application/octet-stream`, and for a non-text content type PowerShell does
+  not hand back the text of the file from `Invoke-WebRequest`: PowerShell 7
+  returns a byte array and Windows PowerShell 5.1 returns an empty string, so
+  the published checksum was never actually read. It is now fetched to a file
+  and read from there. A checksum that cannot be read is also reported as
+  such, rather than as a mismatched binary.
+- Turning autostart on did nothing at all on a profile that had never had an
+  autostart entry, and the installer aborted at the same step — after the
+  binary was already in place. The `CurrentVersion\Run` key is not one Windows
+  guarantees: it comes into being when something first registers for autostart,
+  and writing a value into a key that is absent fails. The installer and the
+  widget's own setting both create it now.
+- The installer's closing hint printed as `connect a calendar â€" right-click`
+  on stock Windows. The script carries no byte order mark, so Windows
+  PowerShell 5.1 reads it as the system ANSI codepage, and the one-line install
+  pipes it out of an HTTP response that declares no character set. Both scripts
+  are plain ASCII now, and a check keeps them that way.
+
+The 1.0.0 binaries are intact and their published checksums are correct and
+unchanged: the checksum and encoding defects belonged to the installer that
+verified them, not to what it installed. The 1.0.0 release has had its
+`install.ps1` asset replaced with the fixed one, so pinning to that version
+installs as well. The autostart defect is the exception — it is in the 1.0.0
+binary too, and only 1.0.1 has it fixed.
+
+### Internal
+
+- The checksum and encoding defects were invisible to the test suite, because
+  they only appear when the script is run against real assets over real HTTP.
+  CI now installs, verifies and uninstalls for real on every change, under
+  Windows PowerShell 5.1 as well as PowerShell 7, and the release workflow
+  repeats it on both architectures against the assets actually attached to the
+  release. The scripts are also linted and checked for non-ASCII characters.
+- The autostart defect hid behind a machine that already had the key, which
+  every developer machine and every CI runner does. The smoke test therefore
+  takes the Run key away before it installs, and puts it back afterwards, so
+  the installer has to create one. `set_autostart` is driven against a scratch
+  key that is known to be absent, because emptying the real one would mean
+  deleting whatever the machine starts at logon.
+
 ## [1.0.0] - 2026-08-07
 
 First public release.
@@ -50,4 +96,5 @@ First public release.
 - File log with rotation; panics are recorded before the process ends.
 - Settings are reloaded without a restart.
 
+[1.0.1]: https://github.com/JosunLP/TPMPlaner/releases/tag/v1.0.1
 [1.0.0]: https://github.com/JosunLP/TPMPlaner/releases/tag/v1.0.0
