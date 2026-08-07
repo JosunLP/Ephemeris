@@ -54,9 +54,24 @@ try {
 
     # Verify before anything is written to the install directory. A truncated
     # download or a swapped asset must never reach disk as an executable.
+    #
+    # The checksum is fetched to a file rather than read from `.Content`.
+    # GitHub serves release assets as application/octet-stream, and for a
+    # non-text content type `.Content` is not the text of the file: PowerShell
+    # 7 hands back a Byte[] (so the parse below yielded "48", the first byte of
+    # "0" in decimal) and Windows PowerShell 5.1 hands back an empty string.
+    # Either way the comparison failed on a release that was in fact intact.
+    # `-OutFile` bypasses the content-type handling entirely.
     Write-Step 'Verifying checksum'
-    $expectedLine = (Invoke-WebRequest -Uri "$base/$assetName.sha256" -UseBasicParsing).Content
+    $sumFile = Join-Path $temp "$assetName.sha256"
+    Invoke-WebRequest -Uri "$base/$assetName.sha256" -OutFile $sumFile -UseBasicParsing
+    $expectedLine = (Get-Content $sumFile -Raw)
     $expected = ($expectedLine -split '\s+')[0].ToLower()
+    # Distinguish "the checksum file did not arrive" from "the binary is wrong",
+    # so the next such failure names its own cause instead of blaming the asset.
+    if ($expected -notmatch '^[0-9a-f]{64}$') {
+        throw "Could not read the published checksum for $assetName. Nothing was installed."
+    }
     $actual = (Get-FileHash $downloaded -Algorithm SHA256).Hash.ToLower()
     if ($expected -ne $actual) {
         throw "Checksum mismatch. Expected $expected, got $actual. Nothing was installed."

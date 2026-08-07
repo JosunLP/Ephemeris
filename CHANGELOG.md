@@ -4,6 +4,22 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-08-07
+
+### Fixed
+
+- The installer rejected an intact download as a checksum mismatch, which made
+  the one-line install fail on every machine. GitHub serves release assets as
+  `application/octet-stream`, and for a non-text content type PowerShell does
+  not hand back the text of the file from `Invoke-WebRequest`: PowerShell 7
+  returns a byte array and Windows PowerShell 5.1 returns an empty string, so
+  the published checksum was never actually read. It is now fetched to a file
+  and read from there. A checksum that cannot be read is also reported as
+  such, rather than as a mismatched binary.
+
+The 1.0.0 binaries were never affected; only the installer that verified them
+was. Their published checksums are correct and unchanged.
+
 ## [1.0.0] - 2026-08-07
 
 First public release.
@@ -50,4 +66,5 @@ First public release.
 - File log with rotation; panics are recorded before the process ends.
 - Settings are reloaded without a restart.
 
+[1.0.1]: https://github.com/JosunLP/TPMPlaner/releases/tag/v1.0.1
 [1.0.0]: https://github.com/JosunLP/TPMPlaner/releases/tag/v1.0.0
