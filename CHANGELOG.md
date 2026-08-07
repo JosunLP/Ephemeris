@@ -4,6 +4,45 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- The binary builds and runs on macOS and Linux. Not the widget — the window
+  that sits below every other window and above the desktop has not been written
+  for those platforms yet — but the whole portable half: settings, locale,
+  accounts, the same sync thread the Windows front end drives, and the agenda
+  printed instead of drawn. `TPMPLANER_DEMO=1` works there too.
+- A `Host` for macOS and Linux. The data directory follows each platform's
+  convention and is created readable by its owner alone, a browser is opened
+  through `open` or `xdg-open`, and random bytes come from `/dev/urandom` — the
+  one method whose portable fallback was actively unsafe, since a PKCE verifier
+  of zeros is no verifier at all. A failure there now returns nothing, so the
+  sign-in fails visibly rather than predictably. Credential storage is not
+  implemented and says so plainly: the Keychain and the Secret Service are
+  still to be written, and pretending to encrypt is worse than not encrypting.
+- `docs/development/porting.md`: what a front end has to provide, and the
+  decisions taken before the code that depends on them. No cross-platform
+  toolkit, and why. macOS first, with the API for each piece named. On Linux,
+  X11 and `wlr-layer-shell` — and under GNOME, which implements neither, the
+  widget will say that stacking below other windows is unavailable rather than
+  quietly becoming an ordinary window that has stopped doing the one thing it
+  is for.
+
+### Changed
+
+- The front end is behind a platform boundary. `src/main.rs` calls four
+  functions — `install_host`, `acquire_single_instance`, `run`, `fatal` — and a
+  `#[cfg]` decides which module supplies them, so the Windows code moved to
+  `src/win` and the new one lives in `src/unix`. Adding a platform is adding a
+  directory rather than threading conditionals through the program. The Win32
+  bindings became a Windows-only dependency at the same time, so they are not
+  compiled at all elsewhere.
+- Continuous integration builds the whole workspace on Ubuntu and macOS, not
+  only the core crate, and runs the resulting binary in demo mode in two
+  languages. "The core is portable" was a claim about a crate that compiles; it
+  is now a claim about a program that runs.
+
 ## [1.0.2] - 2026-08-07
 
 ### Fixed
@@ -139,6 +178,7 @@ First public release.
 - File log with rotation; panics are recorded before the process ends.
 - Settings are reloaded without a restart.
 
+[Unreleased]: https://github.com/JosunLP/TPMPlaner/compare/v1.0.2...HEAD
 [1.0.2]: https://github.com/JosunLP/TPMPlaner/releases/tag/v1.0.2
 [1.0.1]: https://github.com/JosunLP/TPMPlaner/releases/tag/v1.0.1
 [1.0.0]: https://github.com/JosunLP/TPMPlaner/releases/tag/v1.0.0

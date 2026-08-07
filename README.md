@@ -61,12 +61,20 @@ There is no render loop: the widget draws when something changes and then stops.
 | | Status |
 |---|---|
 | **Windows 10/11** | Supported |
-| **macOS, Linux** | The portable core builds and passes its tests there; the interface layer is not yet ported |
+| **macOS, Linux** | The binary builds and runs, and prints today's agenda; the window is not ported yet |
 
 `tpmplaner-core` contains the model, the calendar back ends, synchronisation,
 localisation and the palette, and calls no operating system API at all — CI
 enforces that on Ubuntu, macOS and Windows. What remains platform-specific is
 the renderer and the window.
+
+On macOS and Linux the data directory, opening a browser and cryptographic
+random bytes are implemented, and running the binary prints the agenda the
+widget would have drawn — so the portable half is exercised end to end on both
+rather than merely type checked. Credential storage and the window are not, and
+[the porting notes](https://josunlp.github.io/TPMPlaner/development/porting)
+say which API each of them needs and which decisions have already been
+made.
 
 ## Build from source
 
@@ -94,6 +102,7 @@ $env:TPMPLANER_DEMO = "1"; cargo run --release
 | [Configuration](https://josunlp.github.io/TPMPlaner/guide/configuration) | Every setting |
 | [Troubleshooting](https://josunlp.github.io/TPMPlaner/guide/troubleshooting) | When something is wrong |
 | [Architecture](https://josunlp.github.io/TPMPlaner/development/architecture) | How it is put together, and the traps |
+| [Porting](https://josunlp.github.io/TPMPlaner/development/porting) | What macOS and Linux still need, and what was decided |
 
 ## Contributing
 

@@ -55,6 +55,7 @@ export default defineConfig({
         text: 'Development',
         items: [
           { text: 'Architecture', link: '/development/architecture' },
+          { text: 'Porting', link: '/development/porting' },
           { text: 'Contributing', link: '/development/contributing' },
         ],
       },

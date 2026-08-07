@@ -20,8 +20,8 @@
 //! (clock, sync due, configuration check), ~60 Hz during an animation, and
 //! 100 ms while an undo grace period is running.
 
-use crate::platform;
-use crate::render::{self, Frame, Hit, HitRegion, Renderer, UndoView};
+use crate::win::platform;
+use crate::win::render::{self, Frame, Hit, HitRegion, Renderer, UndoView};
 use chrono::{DateTime, Duration as ChronoDuration, Local, Timelike};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
@@ -143,7 +143,7 @@ struct State {
     sync: Option<SyncHandle>,
     renderer: Option<Renderer>,
 
-    /// Wird pro Frame neu befuellt statt neu alloziert.
+    /// Refilled once per frame rather than allocated again.
     hits: Vec<HitRegion>,
     hover: Option<Hit>,
     tracking_mouse: bool,
@@ -322,7 +322,7 @@ pub fn run() -> Result<()> {
         if !demo {
             st.sync = Some(sync::spawn(
                 shared,
-                std::sync::Arc::new(crate::host_impl::WindowWaker {
+                std::sync::Arc::new(crate::win::host_impl::WindowWaker {
                     hwnd: hwnd.0 as isize,
                     message: WM_APP_SYNC_DONE,
                 }),
@@ -757,7 +757,7 @@ fn begin_pending(st: &mut State, idx: usize) {
     redraw(st);
 }
 
-/// Bedenkzeit abgelaufen? Dann absenden.
+/// Has the grace period run out? Then send it.
 fn on_undo_tick(st: &mut State) {
     let expired = st
         .pending
@@ -1317,7 +1317,7 @@ fn on_mouse_move(st: &mut State, lparam: LPARAM) {
     let hover = hit_at(st, x, y);
     if hover != st.hover {
         st.hover = hover;
-        // Beim Wechsel neu aufblenden statt hart umzuspringen.
+        // Fade in again on a change rather than jumping.
         st.anim.hover.jump(0.0);
         st.anim.hover.set(if hover.is_some() { 1.0 } else { 0.0 });
         kick(st);

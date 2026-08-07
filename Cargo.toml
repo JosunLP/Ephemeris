@@ -27,6 +27,20 @@ ureq = { version = "3.3.0", default-features = false, features = [
     "json",
     "win-system-proxy",
 ] }
+
+# Trimmed for a small binary and a low idle footprint.
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# The Win32 bindings are only ever used by `src/win`, which is itself behind
+# `#[cfg(windows)]`. Declaring them per target keeps them off the macOS and
+# Linux builds entirely rather than compiling a crate that resolves to nothing
+# there.
+[target.'cfg(windows)'.dependencies]
 windows = { version = "0.62.2", features = [
     "Win32_Foundation",
     "Win32_Graphics_Direct2D",
@@ -57,11 +71,3 @@ windows = { version = "0.62.2", features = [
     "Win32_System_Threading",
 ] }
 windows-numerics = "0.3.1"
-
-# Trimmed for a small binary and a low idle footprint.
-[profile.release]
-opt-level = "z"
-lto = "fat"
-codegen-units = 1
-panic = "abort"
-strip = true

@@ -27,7 +27,7 @@ The project is a workspace with a deliberate split:
 | Crate            | Contains                                               | May call the operating system |
 | ---------------- | ------------------------------------------------------ | ----------------------------- |
 | `tpmplaner-core` | model, calendar back ends, sync, localisation, palette | **no**                        |
-| `tpmplaner`      | Direct2D renderer, Win32 window, Windows host          | yes                           |
+| `tpmplaner`      | the front ends: `src/win`, `src/unix`                  | yes                           |
 
 `tpmplaner-core` must compile and pass its tests on Windows, macOS and Linux.
 Anything it needs from the system goes through a trait in `core/src/host.rs`,
@@ -37,6 +37,14 @@ surfacing months later on somebody else's machine.
 
 If you find yourself reaching for a platform API inside the core, that is the
 signal to add a trait method instead.
+
+The front end is split the same way. `src/main.rs` calls four functions —
+`install_host`, `acquire_single_instance`, `run`, `fatal` — and a `#[cfg]`
+decides which module supplies them, so platform code lives in `src/win` or
+`src/unix` and nowhere else. Adding a platform is adding a directory rather
+than threading conditionals through the program. What each new front end owes
+the core, and which decisions have already been taken, is in
+[docs/development/porting.md](docs/development/porting.md).
 
 ## Before you open a pull request
 

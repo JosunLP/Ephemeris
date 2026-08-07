@@ -2217,8 +2217,8 @@ fn tooltip_format(dwrite: &IDWriteFactory, size: f32, rtl: bool) -> Result<IDWri
             format.SetReadingDirection(DWRITE_READING_DIRECTION_RIGHT_TO_LEFT)?;
         }
         format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING)?;
-        // Aligned to the top: the height is derived from the content, not
-        // umgekehrt.
+        // Aligned to the top: the height follows from the content, not the
+        // other way round.
         format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR)?;
         Ok(format)
     }

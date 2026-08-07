@@ -22,7 +22,7 @@ use windows::Win32::Globalization::{
 };
 use windows::core::PCWSTR;
 
-use crate::platform::wide;
+use crate::win::platform::wide;
 
 pub struct WindowsHost;
 
@@ -35,19 +35,19 @@ impl Host for WindowsHost {
     }
 
     fn open_url(&self, url: &str) {
-        crate::platform::open_in_browser(url);
+        crate::win::platform::open_in_browser(url);
     }
 
     fn protect(&self, plain: &[u8], tag: &[u8]) -> Option<Vec<u8>> {
-        crate::secure::protect(plain, tag)
+        crate::win::secure::protect(plain, tag)
     }
 
     fn unprotect(&self, cipher: &[u8], tag: &[u8]) -> Option<Vec<u8>> {
-        crate::secure::unprotect(cipher, tag)
+        crate::win::secure::unprotect(cipher, tag)
     }
 
     fn random_bytes(&self, len: usize) -> Vec<u8> {
-        crate::secure::random_bytes(len)
+        crate::win::secure::random_bytes(len)
     }
 }
 

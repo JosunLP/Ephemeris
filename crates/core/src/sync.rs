@@ -55,7 +55,7 @@ pub struct Shared {
     pub agenda: Agenda,
     pub status: Status,
     pub config: Config,
-    /// Syntaxfehler in `config.json`, falls vorhanden.
+    /// Syntax error in `config.json`, if there is one.
     pub config_error: Option<String>,
     /// Available calendars as `(id, name)`, the basis for picking them in the
     /// context menu. Before this, the ids had to be typed into the settings

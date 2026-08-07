@@ -2,70 +2,62 @@
 // Copyright (C) 2026 TPMPlaner contributors
 //! TPMPlaner — a desktop widget for calendar events and due tasks.
 //!
-//! This binary is the Windows front end: the Direct2D renderer, the Win32
-//! window and the operating system glue. Everything portable — the model, the
-//! calendar back ends, synchronisation, localisation and the palette — lives
-//! in `tpmplaner-core` and is shared with the other platforms.
+//! This file knows nothing about any operating system. Everything portable —
+//! the model, the calendar back ends, synchronisation, localisation and the
+//! palette — lives in `tpmplaner-core`; everything platform-specific lives in
+//! one front end module, selected below, and reaches the rest of the binary
+//! only through the four functions this file calls.
 //!
-//! No console window: the widget is a pure graphical application.
-#![windows_subsystem = "windows"]
+//! **The front end contract.** A platform module provides exactly these:
+//!
+//! | | |
+//! |---|---|
+//! | `install_host()` | Give the core its [`Host`] and [`LocaleBackend`]. Runs before anything touches a path, a secret or a date format. |
+//! | `acquire_single_instance() -> bool` | `false` if another copy already owns the desktop. |
+//! | `run() -> Result<(), String>` | The event loop. Returns only when the widget is finished, or with the reason it could not start. |
+//! | `fatal(&str)` | Say why, to a user who may have no console. |
+//!
+//! Windows has a complete implementation. macOS and Linux have the host and a
+//! text front end, which is the portable half working and the interface layer
+//! still to be written — see `docs/development/porting.md`.
+//!
+//! [`Host`]: tpmplaner_core::host::Host
+//! [`LocaleBackend`]: tpmplaner_core::host::LocaleBackend
+//!
+//! On Windows there is no console window: the widget is a pure graphical
+//! application. The text front end on the other platforms needs one, so the
+//! attribute is conditional rather than unconditional.
+#![cfg_attr(windows, windows_subsystem = "windows")]
 
-mod host_impl;
-mod platform;
-mod render;
-mod secure;
-mod window;
+#[cfg(windows)]
+mod win;
+#[cfg(windows)]
+use win as frontend;
 
-use std::sync::Arc;
-use tpmplaner_core::{host, log};
-use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
-use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MESSAGEBOX_STYLE, MessageBoxW};
-use windows::core::PCWSTR;
+#[cfg(unix)]
+mod unix;
+#[cfg(unix)]
+use unix as frontend;
+
+use tpmplaner_core::log;
 
 fn main() {
     // First of all: without the hook the widget vanishes from the desktop
     // without a word when something goes wrong.
     log::install_panic_hook();
 
-    // Hand the portable core its operating system implementations before
-    // anything else touches a path, a secret or a date format.
-    host::set_host(Arc::new(host_impl::WindowsHost));
-    host::set_locale_backend(Arc::new(host_impl::WindowsLocale));
+    // Before anything touches a path, a secret or a date format.
+    frontend::install_host();
 
-    // A second start would put an identical window on top of the first; both
-    // would draw and synchronise in parallel.
-    if !platform::acquire_single_instance() {
+    if !frontend::acquire_single_instance() {
         return;
     }
 
-    unsafe {
-        // ShellExecuteW (opening a browser) expects an initialised COM
-        // apartment on the calling thread.
-        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-    }
-
-    if let Err(e) = window::run() {
-        // A failure building the graphics chain is the one thing that can
-        // genuinely stop the widget — then at least say why.
+    if let Err(e) = frontend::run() {
         // The language is already settled: `run` sets it first thing.
-        fatal(&format!(
-            "{}
-
-{e}",
+        frontend::fatal(&format!(
+            "{}\n\n{e}",
             tpmplaner_core::i18n::global().fatal_start
         ));
-    }
-}
-
-fn fatal(message: &str) {
-    let text = platform::wide(message);
-    let title = platform::wide("TPMPlaner");
-    unsafe {
-        MessageBoxW(
-            None,
-            PCWSTR(text.as_ptr()),
-            PCWSTR(title.as_ptr()),
-            MESSAGEBOX_STYLE(MB_OK.0 | MB_ICONERROR.0),
-        );
     }
 }
