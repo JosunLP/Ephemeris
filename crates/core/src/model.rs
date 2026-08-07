@@ -29,6 +29,13 @@ pub struct Event {
     /// Colour of the source calendar as `0xRRGGBB`.
     pub color: u32,
     pub calendar_name: String,
+    /// Id of the source calendar, as the provider knows it.
+    ///
+    /// Not drawn — it is the key a per-calendar colour override is looked up
+    /// by, alongside the name. Defaulted on read so a cache written before it
+    /// existed still loads.
+    #[serde(default)]
+    pub calendar_id: String,
 }
 
 impl Event {
@@ -333,6 +340,7 @@ mod tests {
             join_url: None,
             color: 0,
             calendar_name: "K".into(),
+            calendar_id: "k".into(),
         }
     }
 

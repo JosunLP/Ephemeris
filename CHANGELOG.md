@@ -4,6 +4,56 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `appearance` in `config.json`: customisation on top of what the system
+  decides. Colours beyond the accent — panel, text, muted text, separator, and
+  the semantic `now`, `overdue` and `conflict` — plus a font family, a size
+  offset independent of `scale`, a weight for the section headers, a surface
+  style (`aero`, `flat`, `borderless`), a layout density and per-calendar
+  colour overrides. Everything defaults to `"system"`, and everything left
+  there keeps being derived exactly as before. Following the system is the
+  right default for a widget that should feel like part of it, but a wallpaper
+  the panel disappears into, a glass surface next to an otherwise flat desktop
+  or provider colours that are indistinguishable at 82% opacity are not
+  answered by `"theme": "contrast"`, which is all or nothing.
+- A whole set of choices can live in one shareable file: `"appearance":
+  "midnight"` reads `midnight.theme.json` next to `config.json`, rather than
+  growing another pile of top-level keys. A theme name is reduced to letters,
+  digits, spaces, hyphens and underscores, so it names a file in the data
+  directory and cannot become a path to one somewhere else.
+- Only the colours a person reasons about are exposed; the shades between them
+  are derived from those, so the set stays coherent. A custom panel colour
+  keeps the gradient's shape by reproducing the built-in lightness spread
+  around it, and if it crosses into the other appearance — a near-white panel
+  while the dark theme is active — the text, separators and edges follow it. A
+  white separator on light glass is invisible whatever the theme was called.
+
+### Changed
+
+- Accessibility keeps winning. A contrast theme ignores the custom colours and
+  the surface style, because its colours come from the system and its flatness
+  is the point; typography and density still apply, since nothing about a
+  larger font or more room works against contrast. Custom colours are corrected
+  until they read against the surface they sit on — the same bargain the accent
+  has always struck, moving the lightness and leaving the hue — so a settings
+  file cannot produce invisible text. Every correction, malformed colour and
+  missing theme file is written to the log, because otherwise it is
+  indistinguishable from a setting that had no effect.
+
+### Fixed
+
+- With `"backdrop": "acrylic"` the panel was drawn inset by the drop shadow's
+  margin inside a window that had deliberately not reserved one, losing 14
+  device independent pixels on each side. The renderer derived its own metrics
+  from the scale factor while the window derived its geometry from the
+  backdrop as well, and the two disagreed in exactly that case. The renderer is
+  handed the metrics the window used, and the shadow is skipped when there is
+  no margin to draw it in — twelve rectangles that cannot grow outwards are not
+  a soft edge but twelve coats of black over the panel.
+
 ## [1.0.2] - 2026-08-07
 
 ### Fixed
@@ -139,6 +189,7 @@ First public release.
 - File log with rotation; panics are recorded before the process ends.
 - Settings are reloaded without a restart.
 
+[Unreleased]: https://github.com/JosunLP/TPMPlaner/compare/v1.0.2...HEAD
 [1.0.2]: https://github.com/JosunLP/TPMPlaner/releases/tag/v1.0.2
 [1.0.1]: https://github.com/JosunLP/TPMPlaner/releases/tag/v1.0.1
 [1.0.0]: https://github.com/JosunLP/TPMPlaner/releases/tag/v1.0.0

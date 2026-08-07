@@ -327,6 +327,7 @@ impl CalendarProvider for CalDavProvider {
                     join_url: vevent.url,
                     color: calendar.color,
                     calendar_name: calendar.name.clone(),
+                    calendar_id: calendar.id.clone(),
                 });
             }
         }

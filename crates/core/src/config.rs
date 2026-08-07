@@ -6,8 +6,84 @@
 //! Unknown or missing fields fall back to their defaults, so a hand edited
 //! file cannot bring the widget down.
 
+use crate::theme::Appearance;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+
+/// How `appearance` is written in `config.json`.
+///
+/// Two shapes, because a growing pile of top-level keys is not a theme. A
+/// whole set of choices belongs in one file that can be shared, and a name is
+/// what points at it:
+///
+/// ```jsonc
+/// "appearance": "midnight"                       // <data dir>/midnight.theme.json
+/// "appearance": { "surface": "flat", ... }       // written out in place
+/// "appearance": "system"                         // nothing customised
+/// ```
+///
+/// Untagged, so both forms round-trip: the settings file is written back
+/// whenever the window moves, and a named theme must not turn into its
+/// contents behind the user's back.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum AppearanceRef {
+    /// `"system"`, or the name of a theme file next to `config.json`.
+    Named(String),
+    /// Written out in `config.json` itself.
+    Inline(Box<Appearance>),
+}
+
+impl Default for AppearanceRef {
+    fn default() -> Self {
+        AppearanceRef::Named("system".into())
+    }
+}
+
+impl AppearanceRef {
+    /// The customisation to apply, reading the theme file if one was named.
+    ///
+    /// Returns the notes alongside it, in the same spirit as
+    /// [`crate::theme::Palette::customize`]: a theme file that is missing or
+    /// malformed falls back to the system look, and says so rather than
+    /// looking like a setting that had no effect.
+    pub fn resolve(&self) -> (Appearance, Vec<String>) {
+        let name = match self {
+            AppearanceRef::Inline(custom) => return ((**custom).clone(), Vec::new()),
+            AppearanceRef::Named(name) => name.trim(),
+        };
+        if name.is_empty()
+            || name.eq_ignore_ascii_case("system")
+            || name.eq_ignore_ascii_case("none")
+        {
+            return (Appearance::default(), Vec::new());
+        }
+
+        let path = theme_path(name);
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            return (
+                Appearance::default(),
+                vec![format!(
+                    "No theme file at {} — the system look is in use.",
+                    path.display()
+                )],
+            );
+        };
+        // Same byte order mark tolerance as the settings file: several Windows
+        // editors add one, and JSON has no concept of it.
+        match serde_json::from_str::<Appearance>(raw.trim_start_matches('\u{feff}')) {
+            Ok(custom) => (custom, Vec::new()),
+            Err(e) => (
+                Appearance::default(),
+                vec![format!(
+                    "{} line {}: {e} — the system look is in use.",
+                    path.display(),
+                    e.line()
+                )],
+            ),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -60,6 +136,13 @@ pub struct Config {
     pub theme: String,
     /// `"system"` adopts the system accent colour, otherwise `"#RRGGBB"`.
     pub accent: String,
+    /// Customisation on top of the system-derived look: colours beyond the
+    /// accent, typography, surface style, density and per-calendar colours.
+    ///
+    /// Either written out here, or the name of a theme file in the data
+    /// directory — see [`AppearanceRef`].
+    #[serde(default)]
+    pub appearance: AppearanceRef,
     /// Shortcut that brings the widget to the front for a moment.
     /// Modifiers plus a key, for example `"Ctrl+Alt+K"` or `"Ctrl+Shift+P"`.
     /// Avoid `Win+...` where possible — Windows 11 has reserved a great deal
@@ -93,6 +176,7 @@ impl Default for Config {
             language: "system".into(),
             theme: "system".into(),
             accent: "system".into(),
+            appearance: AppearanceRef::default(),
             peek_hotkey: "Ctrl+Alt+Shift+K".into(),
             peek_seconds: 5,
             undo_seconds: 4,
@@ -186,6 +270,22 @@ pub fn config_path() -> PathBuf {
     data_dir().join("config.json")
 }
 
+/// A named theme, next to the settings file it belongs to.
+///
+/// The suffix is fixed rather than part of the name, and the name itself is
+/// reduced to a whitelist of letters, digits, spaces, hyphens and underscores.
+/// A theme name is a label for a file in the data directory, not a way to
+/// reach one somewhere else — and a whitelist is far easier to be sure about
+/// than a list of the separators and traversal sequences to strip.
+pub fn theme_path(name: &str) -> PathBuf {
+    let safe: String = name
+        .trim()
+        .chars()
+        .filter(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | ' '))
+        .collect();
+    data_dir().join(format!("{safe}.theme.json"))
+}
+
 /// The OAuth client file downloaded from the Google Cloud Console
 /// (application type "desktop app").
 pub fn client_secret_path() -> PathBuf {
@@ -200,4 +300,102 @@ pub fn token_path() -> PathBuf {
 /// Last successful sync, so something is on screen immediately at start-up.
 pub fn cache_path() -> PathBuf {
     data_dir().join("cache.json")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The settings file is written back whenever the window moves, so
+    /// anything that survives a load has to survive a save as well. An
+    /// untagged enum is exactly where that goes wrong quietly: a named theme
+    /// turning into its own contents would be a one-way door.
+    #[test]
+    fn an_appearance_survives_the_round_trip_in_both_shapes() {
+        for written in [
+            r#"{"appearance":"midnight"}"#,
+            r#"{"appearance":"system"}"#,
+            r#"{"appearance":{"surface":"flat","density":"roomy"}}"#,
+        ] {
+            let cfg: Config = serde_json::from_str(written).expect(written);
+            let again = serde_json::to_string(&cfg).expect("serialise");
+            let back: Config = serde_json::from_str(&again).expect("re-read");
+            assert_eq!(cfg.appearance, back.appearance, "{written}");
+        }
+
+        // A file written before this setting existed keeps working, and one
+        // with the key left out is not customised.
+        let cfg: Config = serde_json::from_str("{}").expect("empty object");
+        assert_eq!(cfg.appearance, AppearanceRef::default());
+        let (custom, notes) = cfg.appearance.resolve();
+        assert_eq!(custom, crate::theme::Appearance::default());
+        assert!(notes.is_empty());
+    }
+
+    #[test]
+    fn an_inline_appearance_reaches_the_palette() {
+        let cfg: Config = serde_json::from_str(
+            r##"{"appearance":{"surface":"borderless","font_size_offset":2.0,
+                 "colors":{"now":"#FF8800"},
+                 "calendar_colors":{"work":"#123456"}}}"##,
+        )
+        .expect("parse");
+
+        let (custom, notes) = cfg.appearance.resolve();
+        assert!(notes.is_empty(), "{notes:?}");
+        assert_eq!(custom.surface(), crate::theme::Surface::Borderless);
+        assert_eq!(custom.font_size_offset(), 2.0);
+        assert_eq!(custom.colors.now, "#FF8800");
+        assert_eq!(custom.calendar_color("work", "Work"), Some(0x12_3456));
+        // Anything not mentioned stays with the system.
+        assert_eq!(custom.density(), crate::theme::Density::System);
+        assert_eq!(custom.colors.panel, "system");
+    }
+
+    /// A theme file that is not there must not look like a setting that had no
+    /// effect.
+    #[test]
+    fn a_missing_theme_file_falls_back_and_says_so() {
+        let named = AppearanceRef::Named("no-such-theme".into());
+        let (custom, notes) = named.resolve();
+        assert_eq!(custom, crate::theme::Appearance::default());
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(notes[0].contains("no-such-theme.theme.json"), "{notes:?}");
+    }
+
+    /// A theme name is a file in the data directory, not a path.
+    #[test]
+    fn a_theme_name_cannot_escape_the_data_directory() {
+        for hostile in [
+            "../../etc/passwd",
+            "..\\..\\windows\\win.ini",
+            "/etc/shadow",
+        ] {
+            let path = theme_path(hostile);
+            assert_eq!(path.parent(), Some(data_dir().as_path()), "{hostile}");
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            assert!(!name.contains(".."), "{name}");
+            assert!(name.ends_with(".theme.json"), "{name}");
+        }
+
+        // An ordinary name is left recognisable.
+        assert_eq!(
+            theme_path("midnight glass_2").file_name().unwrap(),
+            "midnight glass_2.theme.json"
+        );
+    }
+
+    /// Out-of-range values are clamped rather than rejected, and that has to
+    /// keep holding for the numbers this feature added.
+    #[test]
+    fn nonsense_numbers_are_clamped_rather_than_fatal() {
+        let cfg: Config = serde_json::from_str(
+            r#"{"scale":99.0,"opacity":-5.0,"appearance":{"font_size_offset":250.0}}"#,
+        )
+        .expect("parse");
+        let cfg = cfg.sanitized();
+        assert_eq!(cfg.scale, 3.0);
+        assert_eq!(cfg.opacity, 0.15);
+        assert_eq!(cfg.appearance.resolve().0.font_size_offset(), 8.0);
+    }
 }

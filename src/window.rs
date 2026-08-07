@@ -30,7 +30,7 @@ use tpmplaner_core::config::{self, Config};
 use tpmplaner_core::i18n::Locale;
 use tpmplaner_core::log;
 use tpmplaner_core::sync::{self, Command, Shared, Status, SyncHandle};
-use tpmplaner_core::theme::{Metrics, Palette, ThemePref};
+use tpmplaner_core::theme::{Appearance, Metrics, Palette, SystemVisuals, ThemePref};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{
     DWMSBT_NONE, DWMSBT_TRANSIENTWINDOW, DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE,
@@ -172,12 +172,17 @@ struct State {
     dpi: f32,
     scale: f32,
     metrics: Metrics,
+    /// The customisation last read from the settings, resolved from an inline
+    /// block or a named theme file. Kept to compare against: typography and
+    /// density live in the DirectWrite formats and the metrics, so a change to
+    /// any of it has to rebuild the renderer rather than repaint.
+    appearance: Appearance,
     config_mtime: Option<SystemTime>,
     loc: Locale,
     /// The appearance settings last read from Windows. Re-read on
     /// `WM_SETTINGCHANGE`, and also kept as the value to compare against, so
     /// an unrelated system notification does not trigger a redraw.
-    visuals: tpmplaner_core::theme::SystemVisuals,
+    visuals: SystemVisuals,
 }
 
 pub fn run() -> Result<()> {
@@ -190,13 +195,14 @@ pub fn run() -> Result<()> {
         if let Some(e) = &config_error {
             log::warn(e);
         }
-        let metrics = metrics_for(&cfg);
+        let appearance = appearance_for(&cfg);
+        let metrics = metrics_for(&cfg, &appearance);
         let loc = Locale::resolve(&cfg.language);
         // The sync thread and the emergency exit have no access to this
         // instance, so they reach for the global catalogue instead.
         tpmplaner_core::i18n::set_global(loc.cat);
         let visuals = platform::system_visuals();
-        let palette = Palette::resolve(ThemePref::parse(&cfg.theme), &cfg.accent, visuals);
+        let palette = palette_for(&cfg, &appearance, visuals, false);
         log::info(&format!(
             "Start — locale {} ({}{}), theme {}{}, accent #{:06X}, sync every {} min",
             loc.tag,
@@ -267,6 +273,7 @@ pub fn run() -> Result<()> {
             dpi: 96.0,
             scale: cfg.scale,
             metrics,
+            appearance,
             config_mtime: config_mtime(),
             loc,
             visuals,
@@ -311,9 +318,10 @@ pub fn run() -> Result<()> {
             pw.max(1) as u32,
             ph.max(1) as u32,
             st.dpi,
-            cfg.scale,
+            st.metrics,
             palette,
             st.loc.rtl,
+            &st.appearance,
         )?);
 
         // Demo mode deliberately runs no sync thread — otherwise the missing
@@ -354,9 +362,43 @@ pub fn run() -> Result<()> {
     }
 }
 
-/// Metrics for a configuration: no shadow margin in acrylic mode.
-fn metrics_for(cfg: &Config) -> Metrics {
-    Metrics::with_shadow(cfg.scale, cfg.backdrop != "acrylic")
+/// Metrics for a configuration: the DPI scale, the density and font offset
+/// from the customisation, and no shadow margin where nothing draws one — the
+/// acrylic backdrop fills the whole window rectangle, and a flat surface has
+/// no shadow to leave room for.
+fn metrics_for(cfg: &Config, custom: &Appearance) -> Metrics {
+    Metrics::resolve(cfg.scale, cfg.backdrop != "acrylic", custom)
+}
+
+/// Resolves the customisation and puts anything it complained about in the
+/// log.
+///
+/// A theme file that is missing, a colour that is not a colour, text that had
+/// to be lightened to stay readable: each of those otherwise looks exactly
+/// like a setting that had no effect, which is the hardest kind of thing to
+/// work out from the outside.
+fn appearance_for(cfg: &Config) -> Appearance {
+    let (custom, notes) = cfg.appearance.resolve();
+    for note in notes {
+        log::warn(&note);
+    }
+    custom
+}
+
+/// The palette for a configuration, with the customisation applied.
+fn palette_for(cfg: &Config, custom: &Appearance, visuals: SystemVisuals, quiet: bool) -> Palette {
+    let mut palette = Palette::resolve(ThemePref::parse(&cfg.theme), &cfg.accent, visuals);
+    let notes = palette.customize(custom);
+    // `quiet` is for the paths that re-resolve the same palette after a system
+    // appearance change or a lost graphics device. The notes would be the same
+    // ones already in the log, and repeating them on every theme switch turns
+    // the log into noise.
+    if !quiet {
+        for note in notes {
+            log::warn(&note);
+        }
+    }
+    palette
 }
 
 /// Window position and size in physical pixels.
@@ -1179,8 +1221,15 @@ fn reload_config_if_changed(st: &mut State) {
     }
 
     let scale_changed = (cfg.scale - st.scale).abs() > f32::EPSILON;
-    let (px, py, pw, ph) = target_geometry(&cfg, metrics_for(&cfg), st.dpi);
-    let palette = Palette::resolve(ThemePref::parse(&cfg.theme), &cfg.accent, st.visuals);
+    // Typography, density and the surface style are baked into the DirectWrite
+    // formats and the metrics at construction, so a change to any of them
+    // needs the same rebuild a change of scale does.
+    let appearance = appearance_for(&cfg);
+    let appearance_changed = appearance != st.appearance;
+    st.appearance = appearance;
+
+    let (px, py, pw, ph) = target_geometry(&cfg, metrics_for(&cfg, &st.appearance), st.dpi);
+    let palette = palette_for(&cfg, &st.appearance, st.visuals, !appearance_changed);
     st.anim.enabled = palette.animations;
 
     // Reading direction lives in the DirectWrite formats, so switching
@@ -1191,7 +1240,7 @@ fn reload_config_if_changed(st: &mut State) {
     st.loc = new_loc;
 
     st.scale = cfg.scale;
-    st.metrics = metrics_for(&cfg);
+    st.metrics = metrics_for(&cfg, &st.appearance);
     {
         let mut guard = sync::lock(&st.shared);
         guard.config = cfg.clone();
@@ -1212,9 +1261,11 @@ fn reload_config_if_changed(st: &mut State) {
         );
     }
 
-    // Font sizes live in the DirectWrite formats and cannot be changed after
-    // the fact — a change of scale means rebuilding the renderer completely.
-    if scale_changed || direction_changed {
+    // Font sizes, the family and the header weight live in the DirectWrite
+    // formats and cannot be changed after the fact, and the metrics are fixed
+    // at construction — so a change of scale or of the customisation means
+    // rebuilding the renderer completely. Colours alone do not.
+    if scale_changed || direction_changed || appearance_changed {
         recreate_renderer(st, pw.max(1) as u32, ph.max(1) as u32, palette);
     } else if let Some(r) = st.renderer.as_mut() {
         r.set_palette(palette);
@@ -1242,7 +1293,7 @@ fn refresh_palette(st: &mut State) {
     st.visuals = visuals;
 
     let cfg = sync::lock(&st.shared).config.clone();
-    let palette = Palette::resolve(ThemePref::parse(&cfg.theme), &cfg.accent, st.visuals);
+    let palette = palette_for(&cfg, &st.appearance, st.visuals, true);
     st.anim.enabled = palette.animations;
     apply_backdrop(st.hwnd, &cfg, palette.dark);
     if let Some(r) = st.renderer.as_mut() {
@@ -1618,9 +1669,7 @@ fn redraw(st: &mut State) {
             let (w, h) = current_size_px(st.hwnd);
             let pal = st.renderer.as_ref().map(|r| r.palette());
             let cfg = sync::lock(&st.shared).config.clone();
-            let pal = pal.unwrap_or_else(|| {
-                Palette::resolve(ThemePref::parse(&cfg.theme), &cfg.accent, st.visuals)
-            });
+            let pal = pal.unwrap_or_else(|| palette_for(&cfg, &st.appearance, st.visuals, true));
             recreate_renderer(st, w, h, pal);
         }
         Err(_) => {}
@@ -1636,9 +1685,10 @@ fn recreate_renderer(st: &mut State, width_px: u32, height_px: u32, pal: Palette
         width_px.max(1),
         height_px.max(1),
         st.dpi,
-        st.scale,
+        st.metrics,
         pal,
         st.loc.rtl,
+        &st.appearance,
     )
     .ok();
     if st.renderer.is_none() {

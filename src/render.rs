@@ -21,11 +21,12 @@
 //! roughly 60 Hz while an animation runs. Once everything has settled, drawing
 //! stops completely.
 
+use crate::platform;
 use tpmplaner_core::anim::Animations;
 use tpmplaner_core::i18n::Locale;
 use tpmplaner_core::model::{Agenda, Event, Task};
 use tpmplaner_core::sync::Status;
-use tpmplaner_core::theme::{self, Metrics, Palette, mix};
+use tpmplaner_core::theme::{self, Appearance, Metrics, Palette, mix};
 
 /// Converts the core's toolkit-neutral colour into the Direct2D one.
 ///
@@ -82,7 +83,7 @@ use windows::Win32::Graphics::Dxgi::{
     DXGI_PRESENT, DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
     DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIDevice, IDXGIFactory2, IDXGISurface, IDXGISwapChain1,
 };
-use windows::core::{HRESULT, Interface, Result, w};
+use windows::core::{HRESULT, Interface, PCWSTR, Result, w};
 use windows_numerics::{Matrix3x2, Vector2};
 
 /// A clickable area, in DIPs relative to the window corner.
@@ -194,6 +195,11 @@ pub struct Renderer {
     tooltip: RefCell<Option<(String, f32, f32)>>,
 
     pal: Palette,
+    /// The user's customisation, kept for the per-calendar colour overrides.
+    /// Everything else it carries — typography, density, the surface style —
+    /// is already baked into `formats`, `metrics` and `pal` by the time the
+    /// renderer exists, which is why a change to any of it rebuilds it.
+    custom: Appearance,
     /// Right-to-left layout. Mirroring happens exclusively in the drawing
     /// primitives; all the layout code goes on computing left to right,
     /// unchanged.
@@ -206,14 +212,20 @@ pub struct Renderer {
 }
 
 impl Renderer {
+    /// `metrics` is passed in rather than derived from a scale factor: the
+    /// window sizes itself from the same values — the shadow margin decides
+    /// how much larger the window is than the visible panel — and the two
+    /// drifting apart is how the panel ends up inset inside its own window.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         hwnd: HWND,
         width_px: u32,
         height_px: u32,
         dpi: f32,
-        scale: f32,
+        metrics: Metrics,
         pal: Palette,
         rtl: bool,
+        custom: &Appearance,
     ) -> Result<Self> {
         unsafe {
             let device = create_d3d_device()?;
@@ -278,7 +290,10 @@ impl Renderer {
             let round_stroke: ID2D1StrokeStyle = round_stroke.into();
 
             let dwrite: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
-            let m = Metrics::new(scale);
+            let m = metrics;
+            // Both kept alive for the whole block: every format borrows them.
+            let family = font_family(custom);
+            let section_weight = DWRITE_FONT_WEIGHT(custom.header_weight().0 as i32);
 
             let formats = [
                 text_format(
@@ -287,6 +302,7 @@ impl Renderer {
                     DWRITE_FONT_WEIGHT_SEMI_BOLD,
                     DWRITE_TEXT_ALIGNMENT_LEADING,
                     rtl,
+                    &family,
                 )?,
                 text_format(
                     &dwrite,
@@ -294,6 +310,7 @@ impl Renderer {
                     DWRITE_FONT_WEIGHT_NORMAL,
                     DWRITE_TEXT_ALIGNMENT_TRAILING,
                     rtl,
+                    &family,
                 )?,
                 text_format(
                     &dwrite,
@@ -301,13 +318,15 @@ impl Renderer {
                     DWRITE_FONT_WEIGHT_NORMAL,
                     DWRITE_TEXT_ALIGNMENT_LEADING,
                     rtl,
+                    &family,
                 )?,
                 text_format(
                     &dwrite,
                     m.fs_section,
-                    DWRITE_FONT_WEIGHT_SEMI_BOLD,
+                    section_weight,
                     DWRITE_TEXT_ALIGNMENT_LEADING,
                     rtl,
+                    &family,
                 )?,
                 text_format(
                     &dwrite,
@@ -315,6 +334,7 @@ impl Renderer {
                     DWRITE_FONT_WEIGHT_NORMAL,
                     DWRITE_TEXT_ALIGNMENT_LEADING,
                     rtl,
+                    &family,
                 )?,
                 text_format(
                     &dwrite,
@@ -322,6 +342,7 @@ impl Renderer {
                     DWRITE_FONT_WEIGHT_SEMI_BOLD,
                     DWRITE_TEXT_ALIGNMENT_LEADING,
                     rtl,
+                    &family,
                 )?,
                 text_format(
                     &dwrite,
@@ -329,6 +350,7 @@ impl Renderer {
                     DWRITE_FONT_WEIGHT_NORMAL,
                     DWRITE_TEXT_ALIGNMENT_LEADING,
                     rtl,
+                    &family,
                 )?,
                 text_format(
                     &dwrite,
@@ -336,6 +358,7 @@ impl Renderer {
                     DWRITE_FONT_WEIGHT_NORMAL,
                     DWRITE_TEXT_ALIGNMENT_TRAILING,
                     rtl,
+                    &family,
                 )?,
                 text_format(
                     &dwrite,
@@ -343,9 +366,10 @@ impl Renderer {
                     DWRITE_FONT_WEIGHT_NORMAL,
                     DWRITE_TEXT_ALIGNMENT_LEADING,
                     rtl,
+                    &family,
                 )?,
                 icon_format(&dwrite, m.fs_row + 1.5)?,
-                tooltip_format(&dwrite, m.fs_row, rtl)?,
+                tooltip_format(&dwrite, m.fs_row, rtl, &family)?,
             ];
 
             let mut me = Self {
@@ -363,6 +387,7 @@ impl Renderer {
                 fade: Cell::new(1.0),
                 tooltip: RefCell::new(None),
                 pal,
+                custom: custom.clone(),
                 rtl,
                 mirror: Cell::new(0.0),
                 metrics: m,
@@ -385,6 +410,17 @@ impl Renderer {
 
     pub fn palette(&self) -> Palette {
         self.pal
+    }
+
+    /// The colour to draw one event's calendar in.
+    ///
+    /// The provider's own colour by default, so the widget matches the web
+    /// calendar. A configured override wins, because the provider's palette
+    /// was not chosen to be told apart at 0.82 opacity on a wallpaper.
+    fn calendar_color(&self, ev: &Event) -> u32 {
+        self.custom
+            .calendar_color(&ev.calendar_id, &ev.calendar_name)
+            .unwrap_or(ev.color)
     }
 
     /// Point D2D at the back buffer. Has to happen again after every resize.
@@ -540,8 +576,11 @@ impl Renderer {
     fn draw_shadow(&self, panel: D2D_RECT_F) -> Result<()> {
         let m = self.metrics;
         // A contrast theme has no shadow: it softens exactly the edge that
-        // this mode wants hard.
-        if self.pal.shadow_alpha <= 0.0 {
+        // this mode wants hard. Nor is there one when no margin was reserved
+        // for it — the system backdrop fills the whole window rectangle, and
+        // twelve rectangles that cannot grow outwards are not a soft edge but
+        // twelve coats of black over the panel.
+        if self.pal.shadow_alpha <= 0.0 || m.shadow <= 0.0 {
             return Ok(());
         }
         let steps = 12;
@@ -641,33 +680,40 @@ impl Renderer {
             }
 
             // Light inside, dark outside — that contrast is what makes the
-            // edge look raised.
-            self.dc.DrawRoundedRectangle(
-                &D2D1_ROUNDED_RECT {
-                    rect: inset(panel, 1.0),
-                    radiusX: m.corner - 1.0,
-                    radiusY: m.corner - 1.0,
-                },
-                &self.brush(p.sheen, p.sheen_border)?,
-                1.0,
-                None,
-            );
-            self.dc.DrawRoundedRectangle(
-                &body,
-                &self.brush(p.border_outer, p.border_outer_alpha)?,
-                1.0,
-                None,
-            );
+            // edge look raised. Both edges are skipped when their alpha is
+            // zero: a flat or borderless surface removes them by setting it,
+            // and a fully transparent stroke is work with nothing to show for
+            // it.
+            if p.sheen_border > 0.0 {
+                self.dc.DrawRoundedRectangle(
+                    &D2D1_ROUNDED_RECT {
+                        rect: inset(panel, 1.0),
+                        radiusX: m.corner - 1.0,
+                        radiusY: m.corner - 1.0,
+                    },
+                    &self.brush(p.sheen, p.sheen_border)?,
+                    1.0,
+                    None,
+                );
 
-            // A narrow strip of light right at the top, like the reflection
-            // on the edge of a sheet of glass.
-            self.dc.DrawLine(
-                point(panel.left + m.corner, panel.top + 1.0),
-                point(panel.right - m.corner, panel.top + 1.0),
-                &self.brush(p.sheen, p.sheen_border * 1.4)?,
-                1.0,
-                None,
-            );
+                // A narrow strip of light right at the top, like the
+                // reflection on the edge of a sheet of glass.
+                self.dc.DrawLine(
+                    point(panel.left + m.corner, panel.top + 1.0),
+                    point(panel.right - m.corner, panel.top + 1.0),
+                    &self.brush(p.sheen, p.sheen_border * 1.4)?,
+                    1.0,
+                    None,
+                );
+            }
+            if p.border_outer_alpha > 0.0 {
+                self.dc.DrawRoundedRectangle(
+                    &body,
+                    &self.brush(p.border_outer, p.border_outer_alpha)?,
+                    1.0,
+                    None,
+                );
+            }
             Ok(())
         }
     }
@@ -840,7 +886,7 @@ impl Renderer {
             } else if running {
                 p.accent
             } else {
-                ev.color
+                self.calendar_color(ev)
             };
             self.fill_round(
                 rect(sx, y + 1.0, ex.min(x1), y + m.rail_h - 1.0),
@@ -1157,7 +1203,7 @@ impl Renderer {
             } else if is_now {
                 p.accent
             } else {
-                ev.color
+                self.calendar_color(ev)
             };
             self.fill_round(
                 rect(x0, y + 6.0, x0 + 3.0, y + m.event_row_h - 6.0),
@@ -2160,18 +2206,30 @@ fn create_d3d_device() -> Result<ID3D11Device> {
     Err(windows::core::Error::from_thread())
 }
 
+/// The font family to draw the interface in, as a nul-terminated wide string.
+///
+/// "Segoe UI Variable Text" is the Windows 11 system font; on older systems
+/// DirectWrite falls back to Segoe UI by itself. A name it does not know falls
+/// back the same way rather than failing, which is why a typo here costs a
+/// different font and not a widget that will not start.
+fn font_family(custom: &Appearance) -> Vec<u16> {
+    match custom.font_family() {
+        Some(name) => platform::wide(name),
+        None => platform::wide("Segoe UI Variable Text"),
+    }
+}
+
 fn text_format(
     dwrite: &IDWriteFactory,
     size: f32,
     weight: DWRITE_FONT_WEIGHT,
     align: DWRITE_TEXT_ALIGNMENT,
     rtl: bool,
+    family: &[u16],
 ) -> Result<IDWriteTextFormat> {
     unsafe {
-        // "Segoe UI Variable Text" is the Windows 11 system font; on older
-        // systems DirectWrite falls back to Segoe UI by itself.
         let format = dwrite.CreateTextFormat(
-            w!("Segoe UI Variable Text"),
+            PCWSTR(family.as_ptr()),
             None,
             weight,
             DWRITE_FONT_STYLE_NORMAL,
@@ -2202,10 +2260,15 @@ fn text_format(
 }
 
 /// Multi-line with word wrapping and no truncation.
-fn tooltip_format(dwrite: &IDWriteFactory, size: f32, rtl: bool) -> Result<IDWriteTextFormat> {
+fn tooltip_format(
+    dwrite: &IDWriteFactory,
+    size: f32,
+    rtl: bool,
+    family: &[u16],
+) -> Result<IDWriteTextFormat> {
     unsafe {
         let format = dwrite.CreateTextFormat(
-            w!("Segoe UI Variable Text"),
+            PCWSTR(family.as_ptr()),
             None,
             DWRITE_FONT_WEIGHT_NORMAL,
             DWRITE_FONT_STYLE_NORMAL,

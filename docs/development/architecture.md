@@ -8,7 +8,7 @@ crates/core/          tpmplaner-core   — portable, no operating system calls
   provider/           Google, Microsoft Graph, CalDAV, iCalendar
   sync.rs             schedule, backoff, parallel fetch, cache
   i18n.rs             catalogues, relative times, bidi handling
-  theme.rs            palette, metrics
+  theme.rs            palette, metrics, appearance customisation
   host.rs             the traits the platform must supply
   update.rs           release check
 
