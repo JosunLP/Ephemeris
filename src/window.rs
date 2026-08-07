@@ -314,6 +314,7 @@ pub fn run() -> Result<()> {
             cfg.scale,
             palette,
             st.loc.rtl,
+            &st.loc.tag,
         )?);
 
         // Demo mode deliberately runs no sync thread — otherwise the missing
@@ -1183,10 +1184,12 @@ fn reload_config_if_changed(st: &mut State) {
     let palette = Palette::resolve(ThemePref::parse(&cfg.theme), &cfg.accent, st.visuals);
     st.anim.enabled = palette.animations;
 
-    // Reading direction lives in the DirectWrite formats, so switching
-    // between LTR and RTL forces the same rebuild as a change of scale.
+    // Reading direction and the locale name both live in the DirectWrite
+    // formats, so a change to either forces the same rebuild as a change of
+    // scale. The locale name is not cosmetic: it selects the Han glyph shapes
+    // and the line breaking rules — see `render::locale_name`.
     let new_loc = Locale::resolve(&cfg.language);
-    let direction_changed = new_loc.rtl != st.loc.rtl;
+    let text_layout_changed = new_loc.rtl != st.loc.rtl || new_loc.tag != st.loc.tag;
     tpmplaner_core::i18n::set_global(new_loc.cat);
     st.loc = new_loc;
 
@@ -1214,7 +1217,7 @@ fn reload_config_if_changed(st: &mut State) {
 
     // Font sizes live in the DirectWrite formats and cannot be changed after
     // the fact — a change of scale means rebuilding the renderer completely.
-    if scale_changed || direction_changed {
+    if scale_changed || text_layout_changed {
         recreate_renderer(st, pw.max(1) as u32, ph.max(1) as u32, palette);
     } else if let Some(r) = st.renderer.as_mut() {
         r.set_palette(palette);
@@ -1639,6 +1642,7 @@ fn recreate_renderer(st: &mut State, width_px: u32, height_px: u32, pal: Palette
         st.scale,
         pal,
         st.loc.rtl,
+        &st.loc.tag,
     )
     .ok();
     if st.renderer.is_none() {

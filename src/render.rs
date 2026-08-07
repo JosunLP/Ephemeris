@@ -21,8 +21,10 @@
 //! roughly 60 Hz while an animation runs. Once everything has settled, drawing
 //! stops completely.
 
+use crate::platform;
 use tpmplaner_core::anim::Animations;
 use tpmplaner_core::i18n::Locale;
+use tpmplaner_core::log;
 use tpmplaner_core::model::{Agenda, Event, Task};
 use tpmplaner_core::sync::Status;
 use tpmplaner_core::theme::{self, Metrics, Palette, mix};
@@ -45,6 +47,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::mem::ManuallyDrop;
 use windows::Win32::Foundation::HWND;
+use windows::Win32::Globalization::IsValidLocaleName;
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D_RECT_F, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_GRADIENT_STOP, D2D1_PIXEL_FORMAT,
 };
@@ -82,7 +85,7 @@ use windows::Win32::Graphics::Dxgi::{
     DXGI_PRESENT, DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
     DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIDevice, IDXGIFactory2, IDXGISurface, IDXGISwapChain1,
 };
-use windows::core::{HRESULT, Interface, Result, w};
+use windows::core::{HRESULT, Interface, PCWSTR, Result, w};
 use windows_numerics::{Matrix3x2, Vector2};
 
 /// A clickable area, in DIPs relative to the window corner.
@@ -206,6 +209,9 @@ pub struct Renderer {
 }
 
 impl Renderer {
+    /// `lang` is the BCP-47 tag the interface text is written in. It is not
+    /// cosmetic — see [`locale_name`].
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         hwnd: HWND,
         width_px: u32,
@@ -214,6 +220,7 @@ impl Renderer {
         scale: f32,
         pal: Palette,
         rtl: bool,
+        lang: &str,
     ) -> Result<Self> {
         unsafe {
             let device = create_d3d_device()?;
@@ -279,6 +286,8 @@ impl Renderer {
 
             let dwrite: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
             let m = Metrics::new(scale);
+            // Kept alive for the whole block: every format below borrows it.
+            let locale = locale_name(lang);
 
             let formats = [
                 text_format(
@@ -287,6 +296,7 @@ impl Renderer {
                     DWRITE_FONT_WEIGHT_SEMI_BOLD,
                     DWRITE_TEXT_ALIGNMENT_LEADING,
                     rtl,
+                    &locale,
                 )?,
                 text_format(
                     &dwrite,
@@ -294,6 +304,7 @@ impl Renderer {
                     DWRITE_FONT_WEIGHT_NORMAL,
                     DWRITE_TEXT_ALIGNMENT_TRAILING,
                     rtl,
+                    &locale,
                 )?,
                 text_format(
                     &dwrite,
@@ -301,6 +312,7 @@ impl Renderer {
                     DWRITE_FONT_WEIGHT_NORMAL,
                     DWRITE_TEXT_ALIGNMENT_LEADING,
                     rtl,
+                    &locale,
                 )?,
                 text_format(
                     &dwrite,
@@ -308,6 +320,7 @@ impl Renderer {
                     DWRITE_FONT_WEIGHT_SEMI_BOLD,
                     DWRITE_TEXT_ALIGNMENT_LEADING,
                     rtl,
+                    &locale,
                 )?,
                 text_format(
                     &dwrite,
@@ -315,6 +328,7 @@ impl Renderer {
                     DWRITE_FONT_WEIGHT_NORMAL,
                     DWRITE_TEXT_ALIGNMENT_LEADING,
                     rtl,
+                    &locale,
                 )?,
                 text_format(
                     &dwrite,
@@ -322,6 +336,7 @@ impl Renderer {
                     DWRITE_FONT_WEIGHT_SEMI_BOLD,
                     DWRITE_TEXT_ALIGNMENT_LEADING,
                     rtl,
+                    &locale,
                 )?,
                 text_format(
                     &dwrite,
@@ -329,6 +344,7 @@ impl Renderer {
                     DWRITE_FONT_WEIGHT_NORMAL,
                     DWRITE_TEXT_ALIGNMENT_LEADING,
                     rtl,
+                    &locale,
                 )?,
                 text_format(
                     &dwrite,
@@ -336,6 +352,7 @@ impl Renderer {
                     DWRITE_FONT_WEIGHT_NORMAL,
                     DWRITE_TEXT_ALIGNMENT_TRAILING,
                     rtl,
+                    &locale,
                 )?,
                 text_format(
                     &dwrite,
@@ -343,9 +360,10 @@ impl Renderer {
                     DWRITE_FONT_WEIGHT_NORMAL,
                     DWRITE_TEXT_ALIGNMENT_LEADING,
                     rtl,
+                    &locale,
                 )?,
                 icon_format(&dwrite, m.fs_row + 1.5)?,
-                tooltip_format(&dwrite, m.fs_row, rtl)?,
+                tooltip_format(&dwrite, m.fs_row, rtl, &locale)?,
             ];
 
             let mut me = Self {
@@ -2160,16 +2178,47 @@ fn create_d3d_device() -> Result<ID3D11Device> {
     Err(windows::core::Error::from_thread())
 }
 
+/// The locale name to hand DirectWrite, as a nul-terminated wide string.
+///
+/// Not a formality. Han unification gives one code point different accepted
+/// shapes per language — 直, 骨 and 令 are drawn differently in Japanese,
+/// Simplified and Traditional Chinese — and this name is what DirectWrite
+/// selects the font and the glyph variant with. It also decides where a line
+/// may break, which differs between Chinese and Japanese. Getting it wrong
+/// produces text that is perfectly legible and visibly foreign to a native
+/// reader, which is precisely the friction a localised interface is for.
+///
+/// The tag may come straight out of `config.json`, so it is validated first:
+/// `CreateTextFormat` rejects an unknown locale name, and without this check a
+/// typo in the settings file would turn into "TPMPlaner could not start". An
+/// empty name means "no particular locale", which is what the renderer used to
+/// get in effect.
+fn locale_name(tag: &str) -> Vec<u16> {
+    let wide = platform::wide(tag);
+    let valid = unsafe { IsValidLocaleName(PCWSTR(wide.as_ptr())) }.as_bool();
+    if valid {
+        wide
+    } else {
+        log::warn(&format!(
+            "'{tag}' is not a locale name Windows knows — text is laid out without one"
+        ));
+        platform::wide("")
+    }
+}
+
 fn text_format(
     dwrite: &IDWriteFactory,
     size: f32,
     weight: DWRITE_FONT_WEIGHT,
     align: DWRITE_TEXT_ALIGNMENT,
     rtl: bool,
+    locale: &[u16],
 ) -> Result<IDWriteTextFormat> {
     unsafe {
         // "Segoe UI Variable Text" is the Windows 11 system font; on older
-        // systems DirectWrite falls back to Segoe UI by itself.
+        // systems DirectWrite falls back to Segoe UI by itself. Scripts it
+        // does not cover — CJK, Thai, Devanagari — go through DirectWrite's
+        // own font fallback, which is why the locale name below matters.
         let format = dwrite.CreateTextFormat(
             w!("Segoe UI Variable Text"),
             None,
@@ -2177,7 +2226,7 @@ fn text_format(
             DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL,
             size,
-            w!("de-DE"),
+            PCWSTR(locale.as_ptr()),
         )?;
         // With a right-to-left reading direction DirectWrite swaps the meaning
         // of LEADING and TRAILING itself — "leading" is then the right edge.
@@ -2202,7 +2251,12 @@ fn text_format(
 }
 
 /// Multi-line with word wrapping and no truncation.
-fn tooltip_format(dwrite: &IDWriteFactory, size: f32, rtl: bool) -> Result<IDWriteTextFormat> {
+fn tooltip_format(
+    dwrite: &IDWriteFactory,
+    size: f32,
+    rtl: bool,
+    locale: &[u16],
+) -> Result<IDWriteTextFormat> {
     unsafe {
         let format = dwrite.CreateTextFormat(
             w!("Segoe UI Variable Text"),
@@ -2211,14 +2265,14 @@ fn tooltip_format(dwrite: &IDWriteFactory, size: f32, rtl: bool) -> Result<IDWri
             DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL,
             size,
-            w!("de-DE"),
+            PCWSTR(locale.as_ptr()),
         )?;
         if rtl {
             format.SetReadingDirection(DWRITE_READING_DIRECTION_RIGHT_TO_LEFT)?;
         }
         format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING)?;
-        // Aligned to the top: the height is derived from the content, not
-        // umgekehrt.
+        // Aligned to the top: the height follows from the content, not the
+        // other way round.
         format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR)?;
         Ok(format)
     }

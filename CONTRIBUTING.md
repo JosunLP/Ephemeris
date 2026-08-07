@@ -59,6 +59,44 @@ All three run in CI and all three have to pass.
 - **Say what you could not verify.** A pull request that notes "this path was
   never run against a real server" is more useful than one that implies it was.
 
+## Adding an interface language
+
+One `Catalog` constant in `crates/core/src/i18n.rs`, one arm in `catalog_for`,
+one entry in `CATALOGS`. Because `Catalog` is a struct of named fields rather
+than a key/value map, a forgotten string is a compile error rather than a blank
+label at runtime.
+
+What a translation pull request is expected to contain:
+
+- **Text written by someone who speaks the language.** Machine translation
+  produces strings that are grammatical and wrong in tone — a desktop widget
+  saying the equivalent of "Please to synchronise now" is worse than the
+  English fallback, because it looks like the program does not know what it is
+  saying. Say in the pull request who checked it.
+- **The right plural rule.** Pick the [`Plural`] variant your language actually
+  uses and fill in its forms; the variant *is* the rule, so the two cannot
+  drift apart. Russian, Ukrainian, Polish and Czech each get their own variant
+  because their boundaries genuinely differ — Polish puts 21 in the `many`
+  form where Russian puts it in `one`. Arabic has six categories, Hebrew has a
+  dual, and Chinese, Japanese, Korean and Turkish have exactly one form.
+- **Strings that fit.** The panel is about 380 device independent pixels wide
+  and several labels sit in a fixed column. `cargo test -p tpmplaner-core`
+  enforces a width budget for those and flags anything that ran away from its
+  English original; a failure means "find a shorter word", not "raise the
+  budget".
+- **A screenshot, if you can.** Run `TPMPLANER_DEMO=1 cargo run --release`
+  with `"language"` set to your tag. For a script Segoe UI does not cover —
+  CJK, Thai, Devanagari — this is the only way to see whether font fallback
+  picked something sensible.
+
+Regional variants normally share one catalogue: `de-AT` gets `DE`, and dates,
+times and the calendar system still come from the operating system. Split them
+only where the text genuinely differs, as `pt` and `pt-BR` do. Chinese is
+matched by script rather than by region, so `zh-TW` and `zh-HK` reach the
+traditional catalogue.
+
+[`Plural`]: https://github.com/JosunLP/TPMPlaner/blob/main/crates/core/src/i18n.rs
+
 ## Reporting a bug
 
 Please include the log. Right-click the widget and choose *Open log*, or find

@@ -53,18 +53,20 @@ fn scratch(name: &str) -> PathBuf {
 /// forgotten translation cannot compile. This test guards the other half: that
 /// no field was filled in with the English text by accident, and that none is
 /// empty.
+///
+/// Driven by [`i18n::CATALOGS`] rather than a list written out here, so adding
+/// a language cannot silently escape the check. The exhaustive per-field
+/// version — every field, the column budgets, the plural forms — lives in the
+/// unit tests next to the data, where the private field walker can reach it.
 #[test]
 fn every_shipped_language_is_complete_and_distinct() {
-    let catalogues = [
-        ("en", &i18n::EN),
-        ("de", &i18n::DE),
-        ("fr", &i18n::FR),
-        ("es", &i18n::ES),
-        ("it", &i18n::IT),
-    ];
+    assert!(
+        i18n::CATALOGS.len() >= 5,
+        "the shipped languages went missing"
+    );
 
-    for (code, cat) in catalogues {
-        assert_eq!(cat.code, code);
+    for cat in i18n::CATALOGS {
+        let code = cat.code;
         // A handful of representative fields; empty text would show as a gap
         // in the interface.
         for (name, value) in [
@@ -90,10 +92,6 @@ fn every_shipped_language_is_complete_and_distinct() {
             ("in_pattern", cat.in_pattern),
             ("ago_pattern", cat.ago_pattern),
             ("left_pattern", cat.left_pattern),
-            ("overdue_one", cat.overdue_one),
-            ("overdue_many", cat.overdue_many),
-            ("conflict_one", cat.conflict_one),
-            ("conflict_many", cat.conflict_many),
             ("update_available", cat.update_available),
         ] {
             assert!(value.contains("{}"), "{code}: {name} lost its placeholder");
@@ -106,8 +104,9 @@ fn every_shipped_language_is_complete_and_distinct() {
         );
     }
 
-    // The four translations must not simply be the English text.
-    for (code, cat) in &catalogues[1..] {
+    // No translation may simply be the English text.
+    for cat in i18n::CATALOGS.iter().filter(|c| c.code != "en") {
+        let code = cat.code;
         assert_ne!(
             cat.section_tasks,
             i18n::EN.section_tasks,
@@ -121,21 +120,36 @@ fn every_shipped_language_is_complete_and_distinct() {
     }
 }
 
-/// Relative times have to work in every shipped language, not only the two
-/// that were looked at on screen.
+/// Relative times and counted messages have to work in every shipped language,
+/// not only the two that were looked at on screen.
+///
+/// The counts are chosen to walk every plural category the shipped rules can
+/// select: 1, the dual, the Slavic `few` and `many` bands, the 11-to-14 trap,
+/// and a value past 100 where Arabic falls back to `other`.
 #[test]
 fn relative_times_render_in_every_language() {
-    for tag in ["en-US", "de-DE", "fr-FR", "es-ES", "it-IT"] {
+    for cat in i18n::CATALOGS {
+        let tag = cat.code;
         let loc = i18n::Locale::resolve(tag);
+        assert_eq!(loc.cat.code, cat.code, "{tag} did not resolve to itself");
+
         for minutes in [-90i64, -5, 0, 25, 130, 3000] {
             let text = loc.relative(minutes);
             assert!(!text.trim().is_empty(), "{tag}: empty for {minutes}");
             assert!(!text.contains("{}"), "{tag}: placeholder left in {text}");
         }
         assert!(!loc.time_left(32).contains("{}"), "{tag}: time_left");
-        assert!(!loc.overdue(1).contains("{}"), "{tag}: overdue(1)");
-        assert!(!loc.overdue(3).contains("{}"), "{tag}: overdue(3)");
-        assert!(!loc.conflicts(2).contains("{}"), "{tag}: conflicts");
+
+        for n in [0, 1, 2, 3, 5, 11, 14, 21, 22, 101] {
+            for (what, text) in [("overdue", loc.overdue(n)), ("conflicts", loc.conflicts(n))] {
+                assert!(!text.trim().is_empty(), "{tag}: {what}({n}) is empty");
+                assert!(
+                    !text.contains("{}"),
+                    "{tag}: {what}({n}) left a placeholder in {text}"
+                );
+            }
+        }
+
         let updated = loc.updated_next("09:00", "09:30");
         assert!(
             updated.contains("09:00") && updated.contains("09:30"),

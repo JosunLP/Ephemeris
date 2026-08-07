@@ -4,6 +4,54 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Fifteen more interface languages: Portuguese (European and Brazilian), Dutch,
+  Swedish, Polish, Czech, Turkish, Russian, Ukrainian, Japanese, Simplified and
+  Traditional Chinese, Korean, Arabic and Hebrew. Twenty catalogues in total.
+  Dates, times and reading direction came from the operating system already, so
+  an unlisted locale was never broken — but the labels a user actually reads
+  were English, and a permanent strip of English in an otherwise localised
+  desktop is exactly the friction this widget exists to avoid.
+- Arabic and Hebrew are the first catalogues with `rtl` set, so the layout
+  mirroring that `ar-SA` has always produced now agrees with the text inside
+  it. The bidi isolation brackets that keep "32 min left" from rearranging
+  itself are applied only while the labels are still Latin, which is what they
+  were written for and what a Persian or Urdu locale still gets.
+- Counted messages carry their language's plural rule. English gets by with a
+  comparison against one; Russian needs three forms and has to look at the last
+  two digits, Polish draws the same boundaries differently, Arabic has six
+  categories and Hebrew a dual, while Chinese, Japanese, Korean and Turkish
+  leave the noun alone entirely. The rule and its forms are one choice in the
+  catalogue rather than two that can drift apart, and the forms for one and two
+  may spell the numeral out — "تعارض واحد" reads better than "1 تعارض".
+
+### Fixed
+
+- Text was laid out as though it were German whatever the language: the
+  renderer passed a hard-coded `de-DE` to DirectWrite. That name is what
+  selects between the Han glyph shapes a single code point has in Japanese,
+  Simplified and Traditional Chinese, and it decides where a line may break, so
+  the new CJK catalogues would have been drawn legibly and visibly wrong. The
+  configured locale is used now, validated first so a typo in `config.json`
+  cannot stop the widget from starting, and a change of language rebuilds the
+  text formats the same way a change of scale does.
+
+### Internal
+
+- The consistency checks are driven by the list of shipped catalogues instead
+  of a list written out in the test, so a language cannot be added without
+  being checked. They walk every field through a destructuring that fails to
+  compile if a field is added and not listed, and they enforce a width budget
+  for the labels that sit in a fixed column — a translation that is correct but
+  too long arrives on screen as an ellipsis. The budget counts East Asian and
+  Hangul characters as two columns, because they are drawn that way.
+- `CONTRIBUTING.md` says what a translation pull request is expected to
+  contain: who checked the text, the plural variant the language actually uses,
+  and strings that fit.
+
 ## [1.0.2] - 2026-08-07
 
 ### Fixed
@@ -139,6 +187,7 @@ First public release.
 - File log with rotation; panics are recorded before the process ends.
 - Settings are reloaded without a restart.
 
+[Unreleased]: https://github.com/JosunLP/TPMPlaner/compare/v1.0.2...HEAD
 [1.0.2]: https://github.com/JosunLP/TPMPlaner/releases/tag/v1.0.2
 [1.0.1]: https://github.com/JosunLP/TPMPlaner/releases/tag/v1.0.1
 [1.0.0]: https://github.com/JosunLP/TPMPlaner/releases/tag/v1.0.0

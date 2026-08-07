@@ -73,13 +73,29 @@ a zero-sized window or a storm of requests.
 
 ## Language
 
-`"system"` follows your display language. The interface text ships in English,
-German, French, Spanish and Italian; any other locale gets English labels.
+`"system"` follows your display language. The interface text ships in twenty
+catalogues:
+
+| | |
+|---|---|
+| Latin script | English, German, French, Spanish, Italian, Portuguese (`pt` and `pt-BR`), Dutch, Swedish, Polish, Czech, Turkish |
+| Cyrillic | Russian, Ukrainian |
+| CJK | Japanese, Simplified Chinese, Traditional Chinese, Korean |
+| Right to left | Arabic, Hebrew |
+
+Any other locale gets English labels.
+
+Regional variants share a catalogue — `de-AT` and `de-CH` both get German —
+with two exceptions. Portuguese splits by region, because Brazilian and
+European Portuguese differ in vocabulary and in whether zero takes the
+singular. Chinese splits by **script**, so `zh-TW`, `zh-HK` and `zh-MO` reach
+the traditional catalogue and `zh-CN`, `zh-SG` and a bare `zh` the simplified
+one; an explicit `zh-Hans` or `zh-Hant` outranks the region.
 
 **Dates, times and reading direction always follow the chosen locale**, catalogue
-or not. Set `"language": "ja-JP"` and you get Japanese date formatting with
-English labels. Set `"ar-SA"` and the entire layout mirrors, with a Hijri
-calendar, still with English labels.
+or not. Set `"language": "th-TH"` and you get Thai date formatting with
+English labels. Set `"fa-IR"` and the entire layout mirrors, still with English
+labels — while `"ar-SA"` now mirrors *and* speaks Arabic.
 
 That distinction is the difference between a translated program and an
 internationalised one: a hard-coded `HH:MM` would show a user in the United

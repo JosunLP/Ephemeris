@@ -39,10 +39,11 @@ Then connect a calendar — see [connecting accounts](https://josunlp.github.io/
   entries once today is done.
 - **Tasks that matter today.** Due today or earlier, oldest first, overdue
   marked. Tick one off from the widget, with a few seconds to change your mind.
-- **Speaks your system's language.** Interface text in English, German, French,
-  Spanish and Italian — but dates, times and reading direction come from the
-  operating system, so a 12-hour clock, a Hijri calendar or a right-to-left
-  layout are simply correct.
+- **Speaks your system's language.** Interface text in twenty languages,
+  Arabic and Hebrew among them — and dates, times and reading direction come
+  from the operating system, so a 12-hour clock, a Hijri calendar or a
+  right-to-left layout are simply correct even in a language nobody has
+  translated yet.
 - **Fits your theme.** Light and dark, the accent colour, contrast themes, and
   the transparency and animation settings, all followed at runtime.
 
@@ -98,7 +99,8 @@ $env:TPMPLANER_DEMO = "1"; cargo run --release
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). The largest open piece is the
-cross-platform interface; adding an interface language is a single constant.
+cross-platform interface; adding an interface language is a single constant
+plus a plural rule.
 
 ## Honest limitations
 
