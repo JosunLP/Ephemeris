@@ -18,6 +18,10 @@
 # `-InstallScript` and `-UninstallScript` take either a local path or an https
 # URL, so the same file can check the scripts in the tree (on a pull request)
 # and the scripts actually attached to a release (after publishing).
+#
+# Note for a run on a real machine: the autostart Run key is exported, emptied
+# for the duration of the test and imported back afterwards. Nothing else on
+# the machine is touched beyond a normal install and uninstall.
 
 #Requires -Version 5.1
 [CmdletBinding()]
@@ -68,6 +72,56 @@ Write-Host "    uninstall: $UninstallScript"
 # check below.
 if (Test-Path $installDir) { throw "$installDir exists before the test started" }
 
+# The installer has to *create* the Run key, not just write into it: a profile
+# on which nothing has ever registered for autostart does not have that key,
+# and the install then aborted there -- after the binary was already in place.
+# A machine that has the key cannot show this, so the key is taken away for the
+# duration of the test. It is exported first and put back at the end, because
+# this script is also meant to be runnable on a real machine.
+$runKeyNative = 'HKCU\Software\Microsoft\Windows\CurrentVersion\Run'
+$runKeyBackup = Join-Path ([IO.Path]::GetTempPath()) 'smoke-run-key.reg'
+$runKeyExisted = Test-Path $runKey
+
+# reg.exe writes to stderr on paths that are not failures here, and redirected
+# native stderr is a terminating error while $ErrorActionPreference is 'Stop'.
+# The assignment below is function-scoped, so it only covers this call.
+function Invoke-Reg {
+    param([Parameter(Mandatory)][string[]]$RegArgs)
+    $ErrorActionPreference = 'Continue'
+    & reg.exe @RegArgs 2>&1 | Out-Null
+    return $LASTEXITCODE
+}
+
+Remove-Item -LiteralPath $runKeyBackup -Force -ErrorAction SilentlyContinue
+if ($runKeyExisted) {
+    if ((Invoke-Reg @('export', $runKeyNative, $runKeyBackup, '/y')) -ne 0) {
+        throw "could not back up $runKeyNative"
+    }
+}
+
+# Puts the machine back as it was found: whatever the test wrote is dropped
+# along with the key, then the export goes back on over the empty slate.
+# Reached from every way out of this script, a failing check and a throw
+# included: a trap covers the whole scope it is written in, wherever in that
+# scope the error came from. That includes the failed export above -- which is
+# what the first line guards against. A key that was there but has no backup
+# means the export died before anything was taken away, so there is nothing to
+# undo here and nothing to put back either.
+function Restore-RunKey {
+    if ($runKeyExisted -and -not (Test-Path -LiteralPath $runKeyBackup)) { return }
+    Remove-Item -Path $runKey -Recurse -Force -ErrorAction SilentlyContinue
+    if (-not $runKeyExisted) { return }
+    if ((Invoke-Reg @('import', $runKeyBackup)) -ne 0) {
+        Write-Host "  WARN  $runKeyNative not restored, backup kept at $runKeyBackup" -ForegroundColor Yellow
+        return
+    }
+    Remove-Item -LiteralPath $runKeyBackup -Force -ErrorAction SilentlyContinue
+}
+trap { Restore-RunKey; break }
+
+Remove-Item -Path $runKey -Recurse -Force -ErrorAction SilentlyContinue
+Check 'the test starts without a Run key' { -not (Test-Path $runKey) }
+
 $install = Get-Script $InstallScript
 $uninstall = Get-Script $UninstallScript
 
@@ -112,6 +166,9 @@ Check 'the uninstaller was placed next to the binary' {
 Check '-NoAutostart left no autostart entry' {
     $null -eq (Get-ItemProperty -Path $runKey -Name TPMPlaner -ErrorAction SilentlyContinue)
 }
+# Creating the key belongs to the autostart branch alone, so -NoAutostart must
+# not leave one behind either.
+Check '-NoAutostart did not create the Run key' { -not (Test-Path $runKey) }
 
 # --- reinstall over an existing install ---------------------------------------
 # The common case for an update, and the one where a locked or read-only file
@@ -123,7 +180,9 @@ Check 'reinstalling over an existing install works' { Test-Path $exePath }
 Check 'the binary still matches the published checksum' {
     (Get-FileHash $exePath -Algorithm SHA256).Hash.ToLower() -eq $published
 }
-Check 'autostart is registered' {
+# The Run key was removed above, so this is also the check that the installer
+# creates it rather than failing on a profile that never had one.
+Check 'autostart is registered in a Run key the installer created' {
     (Get-ItemProperty -Path $runKey -Name TPMPlaner -ErrorAction SilentlyContinue).TPMPlaner `
         -eq "`"$exePath`""
 }
@@ -141,6 +200,8 @@ Check 'the autostart entry is gone' {
     $null -eq (Get-ItemProperty -Path $runKey -Name TPMPlaner -ErrorAction SilentlyContinue)
 }
 Check 'the uninstall entry is gone' { -not (Test-Path $uninstallKey) }
+
+Restore-RunKey
 
 Write-Host ''
 if ($failures.Count -gt 0) {

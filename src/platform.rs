@@ -8,8 +8,8 @@ use windows::Win32::Graphics::Gdi::{
     HMONITOR, MONITOR_DEFAULTTONULL, MONITORINFO, MonitorFromRect,
 };
 use windows::Win32::System::Registry::{
-    HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_SET_VALUE, REG_DWORD, REG_SZ, RegCloseKey,
-    RegDeleteValueW, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW,
+    HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_SET_VALUE, REG_DWORD, REG_OPTION_NON_VOLATILE, REG_SZ,
+    RegCloseKey, RegCreateKeyExW, RegDeleteValueW, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW,
 };
 use windows::Win32::System::Threading::{
     CreateMutexW, GetCurrentProcess, SetProcessWorkingSetSize,
@@ -48,9 +48,17 @@ pub fn open_path(path: &std::path::Path) {
 }
 
 pub fn autostart_enabled() -> bool {
+    autostart_enabled_in(RUN_KEY)
+}
+
+/// Split out from [`autostart_enabled`] so a test can drive it against a
+/// scratch key. Pointing the test at the real Run key would mean deleting the
+/// user's own autostart entries to reach the case worth testing: the key not
+/// being there at all.
+fn autostart_enabled_in(subkey: &str) -> bool {
     unsafe {
         let mut key = HKEY::default();
-        let sub = wide(RUN_KEY);
+        let sub = wide(subkey);
         if RegOpenKeyExW(
             HKEY_CURRENT_USER,
             PCWSTR(sub.as_ptr()),
@@ -79,18 +87,44 @@ pub fn autostart_enabled() -> bool {
 }
 
 pub fn set_autostart(enabled: bool) {
+    set_autostart_in(RUN_KEY, enabled);
+}
+
+/// Split out from [`set_autostart`] for the same reason as
+/// [`autostart_enabled_in`].
+fn set_autostart_in(subkey: &str, enabled: bool) {
     unsafe {
         let mut key = HKEY::default();
-        let sub = wide(RUN_KEY);
-        if RegOpenKeyExW(
-            HKEY_CURRENT_USER,
-            PCWSTR(sub.as_ptr()),
-            None,
-            KEY_SET_VALUE,
-            &mut key,
-        )
-        .is_err()
-        {
+        let sub = wide(subkey);
+        // The Run key is not guaranteed to exist. A profile on which nothing
+        // has ever registered itself for autostart simply does not have it,
+        // and opening it then fails — which would leave switching autostart on
+        // silently doing nothing at all. So create it when switching on;
+        // creating is a no-op when it is already there. Switching off needs no
+        // such care: no key means no value to remove, which is the wanted
+        // state already.
+        let opened = if enabled {
+            RegCreateKeyExW(
+                HKEY_CURRENT_USER,
+                PCWSTR(sub.as_ptr()),
+                None,
+                PCWSTR::null(),
+                REG_OPTION_NON_VOLATILE,
+                KEY_SET_VALUE,
+                None,
+                &mut key,
+                None,
+            )
+        } else {
+            RegOpenKeyExW(
+                HKEY_CURRENT_USER,
+                PCWSTR(sub.as_ptr()),
+                None,
+                KEY_SET_VALUE,
+                &mut key,
+            )
+        };
+        if opened.is_err() {
             return;
         }
         let name = wide(RUN_VALUE);
@@ -404,7 +438,10 @@ pub fn trim_working_set() {
 
 #[cfg(test)]
 mod tests {
-    use super::{autostart_enabled, parse_hotkey, set_autostart, set_clipboard_text};
+    use super::{
+        autostart_enabled, autostart_enabled_in, parse_hotkey, set_autostart, set_autostart_in,
+        set_clipboard_text,
+    };
     use windows::core::PCWSTR;
 
     /// Autostart is a registry write, so reading the code proves nothing about
@@ -527,6 +564,50 @@ mod tests {
             );
             let _ = RegSetValueExW(key, PCWSTR(name.as_ptr()), None, REG_SZ, Some(bytes));
             let _ = RegCloseKey(key);
+        }
+    }
+
+    /// A profile on which nothing has ever registered for autostart does not
+    /// have the Run key at all, and writing into a key that is not there
+    /// fails — so switching autostart on used to do nothing whatsoever, in
+    /// silence. The test above cannot reach that case: emptying the real Run
+    /// key would mean deleting whatever the machine already starts at logon.
+    /// Hence a scratch key, removed first so it is reliably absent.
+    #[test]
+    fn autostart_creates_the_key_when_it_is_missing() {
+        const SCRATCH: &str = r"Software\TPMPlaner\autostart-create-test";
+
+        delete_key(SCRATCH);
+        assert!(
+            !autostart_enabled_in(SCRATCH),
+            "the scratch key was still there after deleting it"
+        );
+
+        set_autostart_in(SCRATCH, true);
+        assert!(
+            autostart_enabled_in(SCRATCH),
+            "the missing key was not created"
+        );
+
+        set_autostart_in(SCRATCH, false);
+        assert!(
+            !autostart_enabled_in(SCRATCH),
+            "the value was not removed again"
+        );
+
+        delete_key(SCRATCH);
+        // Succeeds only while it is empty, which is the wanted behaviour: the
+        // parent is not ours to remove once something else lives under it.
+        delete_key(r"Software\TPMPlaner");
+    }
+
+    /// Removes a key under `HKEY_CURRENT_USER`. A key that is not there is not
+    /// an error worth reporting — that is the state being asked for.
+    fn delete_key(subkey: &str) {
+        use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RegDeleteKeyW};
+        unsafe {
+            let sub = super::wide(subkey);
+            let _ = RegDeleteKeyW(HKEY_CURRENT_USER, PCWSTR(sub.as_ptr()));
         }
     }
 

@@ -102,7 +102,18 @@ try {
 
     if (-not $NoAutostart) {
         Write-Step 'Enabling autostart'
-        New-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' `
+        # `-Force` on New-ItemProperty overwrites an existing value, but it
+        # does not create a missing key, and the Run key is absent on a
+        # profile where nothing has ever registered for autostart. Without
+        # this the install aborts here, after the binary is already in place.
+        #
+        # The Test-Path is not redundant, unlike in the uninstall entry below:
+        # `New-Item -Force` on a registry key that is already there recreates
+        # it and drops its values, which for this key means unregistering
+        # every other program's autostart.
+        $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+        if (-not (Test-Path $runKey)) { New-Item -Path $runKey -Force | Out-Null }
+        New-ItemProperty -Path $runKey `
             -Name 'TPMPlaner' -Value "`"$exePath`"" -PropertyType String -Force | Out-Null
     }
 
