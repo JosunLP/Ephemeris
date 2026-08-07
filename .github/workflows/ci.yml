@@ -91,14 +91,22 @@ jobs:
       # The interface language is compiled in, the date format comes from the
       # platform, and this is the one place both can be observed together.
       #
+      # `LC_ALL` rather than `LANG`: it is the variable that outranks the rest,
+      # and it is the first one `PortableLocale::user_default_tag` reads — so
+      # the test says what locale it wants rather than hoping the runner has
+      # not already said something else. Setting only `LANG` failed on the
+      # macOS runner for exactly that reason.
+      #
       # Written to a file rather than piped into `grep -q`, which would close
       # the pipe on its first match and leave the program writing into it.
       - name: Smoke test a second language
         env:
           TPMPLANER_DEMO: "1"
+          LC_ALL: fr_FR.UTF-8
           LANG: fr_FR.UTF-8
         run: |
           cargo run --locked --quiet > agenda-fr.txt
+          cat agenda-fr.txt
           grep -q "AGENDA" agenda-fr.txt
 
   check:
