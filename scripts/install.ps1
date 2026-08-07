@@ -140,7 +140,11 @@ try {
     Write-Host 'TPMPlaner installed.' -ForegroundColor Green
     Write-Note "Binary:   $exePath"
     Write-Note "Settings: $env:APPDATA\TPMPlaner"
-    Write-Note 'Next step: connect a calendar — right-click the widget.'
+    # Kept to plain ASCII on purpose. This file has no BOM, so Windows
+    # PowerShell 5.1 reads it as the system ANSI codepage and `irm | iex`
+    # decodes it from an HTTP response that carries no charset -- either way a
+    # UTF-8 dash reaches the user as mojibake. The CI check keeps it that way.
+    Write-Note 'Next step: connect a calendar - right-click the widget.'
     Write-Note 'Docs: https://josunlp.github.io/TPMPlaner/'
 } finally {
     Remove-Item $temp -Recurse -Force -ErrorAction SilentlyContinue

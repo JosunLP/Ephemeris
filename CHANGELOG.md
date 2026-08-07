@@ -16,9 +16,25 @@ All notable changes to this project are documented here. The format follows
   the published checksum was never actually read. It is now fetched to a file
   and read from there. A checksum that cannot be read is also reported as
   such, rather than as a mismatched binary.
+- The installer's closing hint printed as `connect a calendar â€" right-click`
+  on stock Windows. The script carries no byte order mark, so Windows
+  PowerShell 5.1 reads it as the system ANSI codepage, and the one-line install
+  pipes it out of an HTTP response that declares no character set. Both scripts
+  are plain ASCII now, and a check keeps them that way.
 
 The 1.0.0 binaries were never affected; only the installer that verified them
-was. Their published checksums are correct and unchanged.
+was. Their published checksums are correct and unchanged. The 1.0.0 release has
+had its `install.ps1` asset replaced with the fixed one, so pinning to that
+version installs as well.
+
+### Internal
+
+- Both installer defects were invisible to the test suite, because they only
+  appear when the script is run against real assets over real HTTP. CI now
+  installs, verifies and uninstalls for real on every change, under Windows
+  PowerShell 5.1 as well as PowerShell 7, and the release workflow repeats it
+  on both architectures against the assets actually attached to the release.
+  The scripts are also linted and checked for non-ASCII characters.
 
 ## [1.0.0] - 2026-08-07
 

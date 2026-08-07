@@ -141,3 +141,45 @@ jobs:
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: artifacts/*
+
+  # CI already runs this against the scripts in the tree. This runs it against
+  # what is actually attached to the release, on both architectures, which is
+  # the only way to catch an asset that was built or uploaded wrongly.
+  #
+  # It necessarily runs after publishing: the failure it guards against is
+  # GitHub serving the assets as `application/octet-stream`, which cannot be
+  # reproduced before they are assets. So it cannot block a bad release, only
+  # report one loudly enough to pull -- which is still the difference between
+  # finding out here and finding out from a user.
+  smoke:
+    name: Smoke test ${{ matrix.target }}
+    needs: release
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+
+      # Pinned to the tag rather than `latest`: a release published as a
+      # pre-release, or a concurrent run, would otherwise leave it testing a
+      # different version than the one this run built.
+      - name: Install from the published release, verify and uninstall
+        shell: powershell
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          $base = "https://github.com/${{ github.repository }}/releases/download/$env:TAG"
+          .github/scripts/smoke-install.ps1 `
+            -InstallScript "$base/install.ps1" `
+            -UninstallScript "$base/uninstall.ps1" `
+            -Version $env:TAG `
+            -Repo "${{ github.repository }}"
