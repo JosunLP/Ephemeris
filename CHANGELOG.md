@@ -20,6 +20,11 @@ All notable changes to this project are documented here. The format follows
   it. The bidi isolation brackets that keep "32 min left" from rearranging
   itself are applied only while the labels are still Latin, which is what they
   were written for and what a Persian or Urdu locale still gets.
+- Superseded ISO 639 codes are rewritten before the tag reaches the platform:
+  `iw` becomes `he`, `in` becomes `id`, `ji` becomes `yi`. The catalogue could
+  always read the old codes, but Windows cannot — it rejects `iw` outright —
+  so reading direction, date formatting and DirectWrite's script shaping each
+  fell back to a neutral default, and Hebrew came out laid left to right.
 - Counted messages carry their language's plural rule. English gets by with a
   comparison against one; Russian needs three forms and has to look at the last
   two digits, Polish draws the same boundaries differently, Arabic has six

@@ -80,6 +80,12 @@ pub enum Plural {
         other: &'static str,
     },
     /// Hebrew, which has a genuine dual: 2 is neither singular nor plural.
+    ///
+    /// CLDR also lists a `many` for the round tens — 20, 30, 100 — which this
+    /// deliberately folds into `other`. The category only earns its keep for
+    /// nouns that change shape after a round number, and neither counted
+    /// string in [`HE`] does: 20 is "{} חפיפות", the same plural 3 takes. A
+    /// fourth field would hold a copy of `other` and nothing else.
     Hebrew {
         one: &'static str,
         two: &'static str,
@@ -1716,6 +1722,29 @@ pub fn catalog_for(tag: &str) -> &'static Catalog {
     }
 }
 
+/// Rewrites superseded ISO 639 codes to the ones in use today.
+///
+/// Some systems still emit the pre-1989 codes — the JVM does, and so do older
+/// Unix locale settings. Windows does not know them: both `GetLocaleInfoEx`
+/// and `IsValidLocaleName` reject `iw`, so reading direction, date formatting
+/// and DirectWrite's script shaping would each fall back to a neutral default
+/// for a tag [`catalog_for`] translates perfectly well. Hebrew text would come
+/// out laid left to right.
+///
+/// Canonicalising once, where the tag enters the program, keeps the catalogue
+/// and the platform looking at the same language. Only the primary subtag is
+/// touched, so `iw-IL` becomes `he-IL`.
+fn canonical_tag(tag: &str) -> String {
+    let end = tag.find(['-', '_']).unwrap_or(tag.len());
+    let canonical = match tag[..end].to_ascii_lowercase().as_str() {
+        "iw" => "he",
+        "in" => "id",
+        "ji" => "yi",
+        _ => return tag.to_string(),
+    };
+    format!("{canonical}{}", &tag[end..])
+}
+
 /// Catalogue for code that has no access to the window's [`Locale`].
 ///
 /// That means the sync thread — OAuth messages, the sign-in page shown in the
@@ -1752,6 +1781,9 @@ impl Locale {
             "" | "system" | "auto" => backend.user_default_tag(),
             explicit => explicit.to_string(),
         };
+        // Before anything asks the platform about this tag: it has to be one
+        // the platform recognises. See [`canonical_tag`].
+        let tag = canonical_tag(&tag);
         let rtl = backend.is_rtl(&tag);
         Self {
             cat: catalog_for(&tag),
@@ -2319,5 +2351,40 @@ mod tests {
         assert!(!Locale::resolve("en-US").rtl);
         assert!(Locale::resolve("ar-SA").rtl, "Arabic must be right to left");
         assert!(Locale::resolve("he-IL").rtl, "Hebrew must be right to left");
+    }
+
+    #[test]
+    fn superseded_language_codes_are_rewritten() {
+        assert_eq!(canonical_tag("iw"), "he");
+        assert_eq!(canonical_tag("iw-IL"), "he-IL");
+        assert_eq!(
+            canonical_tag("IW_IL"),
+            "he_IL",
+            "separator is kept as given"
+        );
+        assert_eq!(canonical_tag("ji"), "yi");
+        assert_eq!(canonical_tag("in-ID"), "id-ID");
+        // Everything else passes through untouched, casing included.
+        assert_eq!(canonical_tag("he-IL"), "he-IL");
+        assert_eq!(canonical_tag("de-DE"), "de-DE");
+        assert_eq!(canonical_tag(""), "");
+        // `ind` starts with "in" but is a subtag in its own right, not the
+        // superseded code: only a whole primary subtag is rewritten.
+        assert_eq!(canonical_tag("ind"), "ind");
+    }
+
+    #[test]
+    fn superseded_hebrew_code_reads_right_to_left() {
+        // The catalogue has always understood `iw`; the reading direction and
+        // the platform's locale lookups did not, which laid Hebrew text out
+        // left to right. Resolving canonicalises the tag so both agree.
+        let loc = Locale::resolve("iw");
+        assert_eq!(loc.cat.code, "he");
+        assert_eq!(loc.tag, "he", "the platform is handed a tag it knows");
+        assert!(loc.rtl, "`iw` is Hebrew and must read right to left");
+        assert_eq!(
+            loc.rtl, loc.cat.rtl,
+            "layout direction must not contradict the catalogue"
+        );
     }
 }
