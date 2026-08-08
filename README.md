@@ -45,7 +45,10 @@ Then connect a calendar — see [connecting accounts](https://josunlp.github.io/
   right-to-left layout are simply correct even in a language nobody has
   translated yet.
 - **Fits your theme.** Light and dark, the accent colour, contrast themes, and
-  the transparency and animation settings, all followed at runtime.
+  the transparency and animation settings, all followed at runtime — and where
+  following the system is not enough, colours, typography, surface style,
+  density and per-calendar colours can be set outright, in `config.json` or in
+  a theme file you can share.
 
 ## What it costs
 
