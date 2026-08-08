@@ -544,7 +544,7 @@ mod tests {
             );
         }
         assert_eq!(
-            AppearanceRef::Inline(Box::new(Appearance::default())).file(),
+            AppearanceRef::Inline(Box::default()).file(),
             None,
             "an inline block is already in config.json"
         );
