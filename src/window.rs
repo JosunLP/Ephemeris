@@ -381,7 +381,11 @@ fn metrics_for(cfg: &Config, custom: &Appearance, visuals: SystemVisuals) -> Met
         cfg.scale,
         cfg.backdrop != "acrylic",
         custom,
-        visuals.high_contrast,
+        // The same question `Palette::resolve` asks. Reading `visuals` alone
+        // would leave `"theme": "contrast"` with a high-contrast palette and
+        // metrics sized for the configured surface — the exact disagreement
+        // `effective_surface` exists to prevent.
+        ThemePref::parse(&cfg.theme).high_contrast(visuals),
     )
 }
 
@@ -1249,7 +1253,14 @@ fn reload_config_if_changed(st: &mut State) {
     st.theme_file = cfg.appearance.file();
     st.config_mtime = config_mtime(st.theme_file.as_deref());
 
+    // Compared rather than derived from the settings that feed it. The
+    // renderer caches these metrics at construction, so any move at all has to
+    // rebuild — and the list of settings that move them has grown twice now
+    // (`backdrop` decides the shadow margin, `theme: contrast` overrides the
+    // surface style). Asking `Metrics` directly cannot fall behind that list.
+    let previous_metrics = st.metrics;
     st.metrics = metrics_for(&cfg, &st.appearance, st.visuals);
+    let metrics_changed = st.metrics != previous_metrics;
     let (px, py, pw, ph) = target_geometry(&cfg, st.metrics, st.dpi);
     let palette = palette_for(&cfg, &st.appearance, st.visuals, !appearance_changed);
     st.anim.enabled = palette.animations;
@@ -1284,13 +1295,15 @@ fn reload_config_if_changed(st: &mut State) {
 
     // Font sizes, the family and the header weight live in the DirectWrite
     // formats and cannot be changed after the fact, and the metrics are fixed
-    // at construction — so a change of scale or of the layout half of the
-    // customisation means rebuilding the renderer completely. Colours alone do
-    // not, which is what `layout_differs` separates out.
-    if scale_changed || direction_changed || layout_changed {
+    // at construction — so a change of scale, of the metrics, or of the layout
+    // half of the customisation means rebuilding the renderer completely.
+    // Colours alone do not, which is what `layout_differs` separates out: they
+    // are uploaded per frame, and rebuilding for one would flicker the whole
+    // panel every time somebody nudges a value in a theme file.
+    if scale_changed || direction_changed || layout_changed || metrics_changed {
         recreate_renderer(st, pw.max(1) as u32, ph.max(1) as u32, palette);
     } else if let Some(r) = st.renderer.as_mut() {
-        r.set_palette(palette);
+        r.set_palette(palette, &st.appearance);
     }
     redraw(st);
 }
@@ -1333,8 +1346,9 @@ fn refresh_palette(st: &mut State) {
     // change to the setting itself would.
     if contrast_changed {
         let metrics = metrics_for(&cfg, &st.appearance, st.visuals);
-        if (metrics.shadow - st.metrics.shadow).abs() > f32::EPSILON {
-            st.metrics = metrics;
+        let moved = metrics != st.metrics;
+        st.metrics = metrics;
+        if moved {
             let (px, py, pw, ph) = target_geometry(&cfg, st.metrics, st.dpi);
             unsafe {
                 let _ = SetWindowPos(
@@ -1351,11 +1365,10 @@ fn refresh_palette(st: &mut State) {
             redraw(st);
             return;
         }
-        st.metrics = metrics;
     }
 
     if let Some(r) = st.renderer.as_mut() {
-        r.set_palette(palette);
+        r.set_palette(palette, &st.appearance);
     }
     redraw(st);
 }

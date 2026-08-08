@@ -130,6 +130,18 @@ impl ThemePref {
             _ => ThemePref::System,
         }
     }
+
+    /// Will the palette be a high-contrast one?
+    ///
+    /// Two independent things force it: the system contrast setting, and
+    /// asking for [`ThemePref::Contrast`] outright. Anything that has to agree
+    /// with the palette about contrast must ask *this*, not `vis.high_contrast`
+    /// alone — the metrics above all, because contrast overrides the surface
+    /// style and the surface style decides whether the geometry reserves a
+    /// shadow margin. See [`Appearance::effective_surface`].
+    pub fn high_contrast(self, vis: SystemVisuals) -> bool {
+        vis.high_contrast || self == ThemePref::Contrast
+    }
 }
 
 /// The chrome drawn around the panel.
@@ -440,7 +452,19 @@ pub struct Palette {
     pub accent_soft: u32,
     pub overdue: u32,
     pub ok_green: u32,
+    /// Problems the user has to act on: a broken configuration, a sign-in that
+    /// expired, setup that was never finished. Footer text, in other words.
     pub warn: u32,
+    /// Overlapping appointments: the badge in the header and the time of a
+    /// clashing row.
+    ///
+    /// The same colour as [`Self::warn`] in every built-in palette, and a
+    /// separate field only so the customisation can move one without the
+    /// other. A conflict is a fact about the day; a broken configuration is
+    /// something gone wrong with the program, and somebody who tints their
+    /// conflict marks to taste has not asked for their error messages to
+    /// follow along.
+    pub conflict: u32,
 }
 
 impl Palette {
@@ -449,7 +473,7 @@ impl Palette {
         // A system contrast theme outranks any configuration: whoever turns
         // it on needs it, and an application that overrides it becomes
         // unusable.
-        if vis.high_contrast || pref == ThemePref::Contrast {
+        if pref.high_contrast(vis) {
             return Self::high_contrast(vis);
         }
 
@@ -612,6 +636,14 @@ impl Palette {
         }
         if let Some(rule) = checked_hex("separator", &colors.separator, notes) {
             self.rule = rule;
+            // The built-in rule is a white or black hairline composited at 9%,
+            // which is how it reads as a hairline at all. Keeping that alpha
+            // for a named colour made the setting look like it did nothing:
+            // 9% of anything against the panel is the panel. Somebody who
+            // names a separator colour means that colour, so the base becomes
+            // solid — the call sites that want a quieter line still scale it
+            // down from here, which keeps the hierarchy between them.
+            self.rule_alpha = 1.0;
         }
     }
 
@@ -630,8 +662,12 @@ impl Palette {
         if let Some(overdue) = checked_hex("overdue", &colors.overdue, notes) {
             self.overdue = overdue;
         }
+        // Only the conflict marks. `warn` is the footer's "something is wrong
+        // with the program" colour and stays where the built-in palette put
+        // it: tinting the conflict badge is a taste decision, and it should
+        // not quietly restyle the error messages as well.
         if let Some(conflict) = checked_hex("conflict", &colors.conflict, notes) {
-            self.warn = conflict;
+            self.conflict = conflict;
         }
     }
 
@@ -695,16 +731,29 @@ impl Palette {
             fix("overdue", &mut self.overdue, 3.0);
         }
         if parse_hex(&colors.conflict).is_some() {
-            fix("conflict", &mut self.warn, 3.0);
+            fix("conflict", &mut self.conflict, 3.0);
         }
         // A custom panel moves the background under text that was never
-        // overridden, so the built-in text has to be checked against it too.
+        // overridden, so the built-in text has to be checked against it too —
+        // all four shades, not just the two loudest. The quiet ones are where
+        // a mid grey panel does its damage: `"panel": "#808080"` left the
+        // faint text at roughly 1.3:1, which is not quiet, it is invisible.
         if parse_hex(&colors.panel).is_some() {
             fix("the text on the custom panel", &mut self.text_primary, 4.5);
+            fix(
+                "the secondary text on the custom panel",
+                &mut self.text_secondary,
+                3.5,
+            );
             fix(
                 "the muted text on the custom panel",
                 &mut self.text_dim,
                 3.0,
+            );
+            fix(
+                "the faint text on the custom panel",
+                &mut self.text_faint,
+                2.2,
             );
         }
     }
@@ -771,6 +820,7 @@ impl Palette {
             overdue: distinct_from(hot, highlight),
             ok_green: hot,
             warn: hot,
+            conflict: hot,
         }
     }
 
@@ -804,6 +854,7 @@ impl Palette {
             overdue: 0xFF_7A7A,
             ok_green: 0x5C_D6A0,
             warn: 0xFF_C05C,
+            conflict: 0xFF_C05C,
         }
     }
 
@@ -841,6 +892,7 @@ impl Palette {
             overdue: 0xC0_3535,
             ok_green: 0x1D_8A5C,
             warn: 0xA8_6A08,
+            conflict: 0xA8_6A08,
         }
     }
 }
@@ -1050,7 +1102,13 @@ fn ensure_contrast(fg: u32, bg: u32, min: f32) -> u32 {
 }
 
 /// All metrics in device independent pixels at `scale = 1.0`.
-#[derive(Debug, Clone, Copy)]
+///
+/// `PartialEq` so a caller can ask the one question that matters — "did any
+/// of this move?" — instead of enumerating the inputs that feed
+/// [`Metrics::resolve`]. Every field is derived from those inputs by
+/// multiplication, so equality here means the geometry and the renderer's
+/// cached copy still agree.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Metrics {
     /// Free margin inside the window for the drop shadow. The glass body is
     /// inset from the window edge by this amount.
@@ -1441,6 +1499,80 @@ mod tests {
         assert!(
             note.contains("lighter than the dark theme expects"),
             "the note names the wrong theme: {note}"
+        );
+    }
+
+    /// A mid grey panel is the case that catches the quiet shades: it is far
+    /// enough from both built-in palettes that neither's greys survive it.
+    #[test]
+    fn a_custom_panel_is_checked_against_every_shade_of_text() {
+        let mut palette = dark_palette();
+        let _ = palette.customize(&Appearance {
+            colors: Colors {
+                panel: "#808080".into(),
+                ..Colors::default()
+            },
+            ..Appearance::default()
+        });
+
+        let bg = palette.panel_mid;
+        // The same thresholds `enforce_readability` works to: body text at
+        // WCAG AA, the quieter shades only far enough to remain findable.
+        for (label, color, min) in [
+            ("text_primary", palette.text_primary, 4.5),
+            ("text_secondary", palette.text_secondary, 3.5),
+            ("text_dim", palette.text_dim, 3.0),
+            ("text_faint", palette.text_faint, 2.2),
+        ] {
+            let ratio = contrast_ratio(color, bg);
+            assert!(
+                ratio >= min - 0.05,
+                "{label} sits at {ratio:.2}:1 on the custom panel, needs {min}"
+            );
+        }
+    }
+
+    /// Tinting the conflict marks is a taste decision. Restyling the error
+    /// messages in the footer is not, and the two used to share one field.
+    #[test]
+    fn a_custom_conflict_colour_leaves_the_error_text_alone() {
+        let mut palette = dark_palette();
+        let warn = palette.warn;
+
+        let _ = palette.customize(&Appearance {
+            colors: Colors {
+                conflict: "#7A5CFF".into(),
+                ..Colors::default()
+            },
+            ..Appearance::default()
+        });
+
+        assert_ne!(palette.conflict, warn, "the conflict marks had to move");
+        assert_eq!(palette.warn, warn, "the footer's warning colour must not");
+    }
+
+    /// A named separator colour has to be visible, or the setting reads as one
+    /// that did nothing.
+    #[test]
+    fn a_custom_separator_is_not_swallowed_by_the_hairline_alpha() {
+        let mut palette = dark_palette();
+        assert!(
+            palette.rule_alpha < 0.2,
+            "precondition: the built-in rule is a hairline"
+        );
+
+        let _ = palette.customize(&Appearance {
+            colors: Colors {
+                separator: "#FF0000".into(),
+                ..Colors::default()
+            },
+            ..Appearance::default()
+        });
+
+        assert_eq!(palette.rule, 0xFF_0000);
+        assert_eq!(
+            palette.rule_alpha, 1.0,
+            "9% of any colour against the panel is the panel"
         );
     }
 

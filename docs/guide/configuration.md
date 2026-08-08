@@ -146,7 +146,7 @@ means "leave it to the derivation rules above".
     "separator": "system",   // the rules between sections
     "now": "system",         // the running event, the now line, day progress
     "overdue": "system",     // overdue tasks
-    "conflict": "system"     // the badge on overlapping events
+    "conflict": "system"     // the badge and times of overlapping events
   },
 
   // Provider colours are not always distinguishable at 0.82 opacity.
@@ -176,6 +176,16 @@ Put it next to `config.json` as `<name>.theme.json` and point at it by name:
 reads `%APPDATA%\TPMPlaner\midnight.theme.json`, whose contents are the object
 above. That file can be shared as-is. A theme that is missing or malformed
 falls back to the system look and says so in the log.
+
+A name is a label for a file in that folder, not a path to one elsewhere, so it
+has to be letters, digits, spaces, hyphens and underscores throughout. Anything
+else is refused outright and reported, rather than stripped down to whatever
+was left — `"mid/night"` is a mistake worth hearing about, not a second way to
+spell `"midnight"`.
+
+`conflict` colours the overlap marks only. The footer keeps its own colour for
+the things that need you to act — a broken settings file, a sign-in that
+expired — because those are not a matter of taste.
 
 ### What always wins
 

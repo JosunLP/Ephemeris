@@ -399,12 +399,22 @@ impl Renderer {
         }
     }
 
-    /// The theme changed (Windows light/dark, or a different accent colour).
+    /// The theme changed (Windows light/dark, a different accent colour, or an
+    /// edited colour in the configuration).
+    ///
+    /// Takes the appearance as well as the palette, and not only because the
+    /// two are read from the same configuration: the per-calendar overrides in
+    /// [`Self::calendar_color`] are looked up on `custom` at draw time rather
+    /// than baked into `pal`. `layout_differs` deliberately excludes
+    /// `calendar_colors`, so editing only those comes down this path instead of
+    /// through a rebuild — and leaving `custom` behind meant the new colour
+    /// never reached the screen until the next restart.
     ///
     /// Brushes are cached by colour; without clearing them the old entries
     /// would stay around for good.
-    pub fn set_palette(&mut self, pal: Palette) {
+    pub fn set_palette(&mut self, pal: Palette, custom: &Appearance) {
         self.pal = pal;
+        self.custom = custom.clone();
         self.brushes.borrow_mut().clear();
     }
 
@@ -1098,7 +1108,7 @@ impl Renderer {
 
         let mut badges: Vec<(String, u32)> = Vec::new();
         if conflicts > 0 {
-            badges.push((loc.conflicts(conflicts), p.warn));
+            badges.push((loc.conflicts(conflicts), p.conflict));
         }
 
         y += m.section_gap;
@@ -1223,7 +1233,7 @@ impl Renderer {
                 if is_now {
                     p.accent
                 } else if conflicted {
-                    p.warn
+                    p.conflict
                 } else {
                     p.text_dim
                 },

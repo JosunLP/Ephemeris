@@ -38,16 +38,57 @@ fn read_json_text(path: &Path) -> Option<String> {
 /// "appearance": "system"                         // nothing customised
 /// ```
 ///
-/// Untagged, so both forms round-trip: the settings file is written back
-/// whenever the window moves, and a named theme must not turn into its
-/// contents behind the user's back.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Both forms round-trip: the settings file is written back whenever the
+/// window moves, and a named theme must not turn into its contents behind the
+/// user's back.
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum AppearanceRef {
     /// `"system"`, or the name of a theme file next to `config.json`.
     Named(String),
     /// Written out in `config.json` itself.
     Inline(Box<Appearance>),
+}
+
+/// Deserialised by hand rather than with `#[serde(untagged)]`.
+///
+/// Untagged buffers the input into serde's own value type and replays it into
+/// each variant in turn. Two things follow from that, and both were visible in
+/// the log. The replayed input carries no position, so *every* complaint about
+/// `appearance` came out as "line 0" — which contradicts the one thing the
+/// configuration errors promise, that they name the line to go and fix. And a
+/// failure is reported as "data did not match any variant", hiding whichever
+/// error the map arm actually produced.
+///
+/// Dispatching on the input kind keeps both: the string arm and the map arm
+/// each hand the real deserialiser through, so a bad value inside an inline
+/// block is reported where it is written.
+impl<'de> Deserialize<'de> for AppearanceRef {
+    fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+        use serde::de::{MapAccess, Visitor};
+
+        struct Pick;
+
+        impl<'de> Visitor<'de> for Pick {
+            type Value = AppearanceRef;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a theme name such as \"midnight\", or a block of appearance settings")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<AppearanceRef, E> {
+                Ok(AppearanceRef::Named(v.to_owned()))
+            }
+
+            fn visit_map<M: MapAccess<'de>>(self, map: M) -> Result<AppearanceRef, M::Error> {
+                let custom =
+                    Appearance::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
+                Ok(AppearanceRef::Inline(Box::new(custom)))
+            }
+        }
+
+        de.deserialize_any(Pick)
+    }
 }
 
 impl Default for AppearanceRef {
@@ -68,8 +109,18 @@ impl AppearanceRef {
             return ((**custom).clone(), Vec::new());
         }
         // No name, or a name meaning "nothing customised".
-        let Some(path) = self.file() else {
+        let Some(name) = self.named() else {
             return (Appearance::default(), Vec::new());
+        };
+        let Some(path) = theme_path(name) else {
+            return (
+                Appearance::default(),
+                vec![format!(
+                    "\"{name}\" is not a usable theme name: a name labels a file in the data \
+                     folder, so only letters, digits, spaces, hyphens and underscores are \
+                     allowed. The system look is in use."
+                )],
+            );
         };
         let Some(raw) = read_json_text(&path) else {
             return (
@@ -101,17 +152,24 @@ impl AppearanceRef {
     /// editing it is the whole point of having one, so the widget has to notice
     /// when it moves.
     pub fn file(&self) -> Option<PathBuf> {
+        self.named().and_then(theme_path)
+    }
+
+    /// The trimmed name, if this is a name that asks for a theme file at all.
+    ///
+    /// `None` for an inline block and for the names that mean "nothing
+    /// customised". Says nothing about whether the name is *usable* — that is
+    /// [`theme_path`]'s question, and the two are kept apart so `resolve` can
+    /// tell a rejected name from a name that never wanted a file.
+    fn named(&self) -> Option<&str> {
         let AppearanceRef::Named(name) = self else {
             return None;
         };
         let name = name.trim();
-        if name.is_empty()
-            || name.eq_ignore_ascii_case("system")
-            || name.eq_ignore_ascii_case("none")
-        {
-            return None;
-        }
-        Some(theme_path(name))
+        (!name.is_empty()
+            && !name.eq_ignore_ascii_case("system")
+            && !name.eq_ignore_ascii_case("none"))
+        .then_some(name)
     }
 }
 
@@ -297,18 +355,25 @@ pub fn config_path() -> PathBuf {
 
 /// A named theme, next to the settings file it belongs to.
 ///
-/// The suffix is fixed rather than part of the name, and the name itself is
-/// reduced to a whitelist of letters, digits, spaces, hyphens and underscores.
-/// A theme name is a label for a file in the data directory, not a way to
-/// reach one somewhere else — and a whitelist is far easier to be sure about
-/// than a list of the separators and traversal sequences to strip.
-pub fn theme_path(name: &str) -> PathBuf {
-    let safe: String = name
-        .trim()
-        .chars()
-        .filter(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | ' '))
-        .collect();
-    data_dir().join(format!("{safe}.theme.json"))
+/// The suffix is fixed rather than part of the name, and the name itself has to
+/// be letters, digits, spaces, hyphens and underscores throughout. A theme name
+/// is a label for a file in the data directory, not a way to reach one
+/// somewhere else — and a whitelist is far easier to be sure about than a list
+/// of the separators and traversal sequences to strip.
+///
+/// `None` when the name does not survive that check, rather than the sanitised
+/// remainder. Stripping quietly is what makes a whitelist go wrong: `"../"`
+/// lost every character and landed on a hidden `.theme.json`, and `"mid/night"`
+/// and `"midnight"` became the same file — two names for one theme, with no
+/// hint that the first was not the one on disk. A name that has to be repaired
+/// to be safe is a name the user should hear about.
+pub fn theme_path(name: &str) -> Option<PathBuf> {
+    let name = name.trim();
+    let usable = !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | ' '));
+    usable.then(|| data_dir().join(format!("{name}.theme.json")))
 }
 
 /// The OAuth client file downloaded from the Google Cloud Console
@@ -395,18 +460,52 @@ mod tests {
             "../../etc/passwd",
             "..\\..\\windows\\win.ini",
             "/etc/shadow",
+            "..",
+            // Sanitising used to turn this into "midnight", silently pointing
+            // two different names at one file.
+            "mid/night",
         ] {
-            let path = theme_path(hostile);
-            assert_eq!(path.parent(), Some(data_dir().as_path()), "{hostile}");
-            let name = path.file_name().unwrap().to_string_lossy().into_owned();
-            assert!(!name.contains(".."), "{name}");
-            assert!(name.ends_with(".theme.json"), "{name}");
+            assert_eq!(theme_path(hostile), None, "{hostile}");
         }
 
-        // An ordinary name is left recognisable.
+        // An ordinary name is left exactly as written.
         assert_eq!(
-            theme_path("midnight glass_2").file_name().unwrap(),
+            theme_path("midnight glass_2")
+                .expect("a plain name is usable")
+                .file_name()
+                .unwrap(),
             "midnight glass_2.theme.json"
+        );
+        assert_eq!(
+            theme_path("midnight").expect("usable").parent(),
+            Some(data_dir().as_path())
+        );
+    }
+
+    /// A rejected name must not read as "you asked for the system look".
+    #[test]
+    fn an_unusable_theme_name_is_reported_rather_than_repaired() {
+        let (custom, notes) = AppearanceRef::Named("mid/night".into()).resolve();
+        assert_eq!(custom, crate::theme::Appearance::default());
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(notes[0].contains("mid/night"), "{notes:?}");
+        // And it names no file, so nothing is watched for changes either.
+        assert_eq!(AppearanceRef::Named("mid/night".into()).file(), None);
+    }
+
+    /// An error inside `appearance` has to name the line it is on.
+    ///
+    /// `#[serde(untagged)]` reported every one of them as line 0 and replaced
+    /// the real complaint with "data did not match any variant", which is the
+    /// one thing the configuration errors promise not to do.
+    #[test]
+    fn a_broken_appearance_block_reports_its_line() {
+        let raw = "{\n  \"scale\": 1.0,\n  \"appearance\": {\n    \"surface\": 7\n  }\n}";
+        let err = serde_json::from_str::<Config>(raw).expect_err("7 is not a surface");
+        assert_eq!(err.line(), 4, "{err}");
+        assert!(
+            !err.to_string().contains("any variant"),
+            "the real error has to survive: {err}"
         );
     }
 
@@ -434,7 +533,7 @@ mod tests {
     fn a_named_theme_names_a_file_to_watch() {
         assert_eq!(
             AppearanceRef::Named("midnight".into()).file(),
-            Some(theme_path("midnight"))
+            theme_path("midnight")
         );
         // Nothing customised: no second file involved.
         for none in ["system", "none", "", "  "] {
