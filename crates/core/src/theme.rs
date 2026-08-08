@@ -1327,7 +1327,7 @@ mod tests {
         let (h_adj, _, _) = rgb_to_hsl(adjusted);
         assert!(
             hue_distance(h_acc, h_adj) >= 0.07,
-            "Warnfarbe {adjusted:06X} liegt zu nah am Akzent {red_accent:06X}"
+            "warning colour {adjusted:06X} sits too close to the accent {red_accent:06X}"
         );
     }
 

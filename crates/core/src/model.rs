@@ -307,24 +307,24 @@ mod tests {
     fn future_tasks_are_dropped_overdue_are_kept() {
         let today = NaiveDate::from_ymd_opt(2026, 8, 4).unwrap();
         let input = vec![
-            task("in drei Wochen", Some("2026-08-25")),
-            task("heute", Some("2026-08-04")),
-            task("ueberfaellig", Some("2026-07-30")),
-            task("ohne Datum", None),
+            task("in three weeks", Some("2026-08-25")),
+            task("today", Some("2026-08-04")),
+            task("overdue", Some("2026-07-30")),
+            task("undated", None),
         ];
         let kept = filter_tasks_for_today(input, today, false);
         let titles: Vec<_> = kept.iter().map(|t| t.title.as_str()).collect();
-        assert_eq!(titles, vec!["heute", "ueberfaellig"]);
+        assert_eq!(titles, vec!["today", "overdue"]);
     }
 
     #[test]
     fn undated_tasks_can_be_opted_in_and_sort_last() {
         let today = NaiveDate::from_ymd_opt(2026, 8, 4).unwrap();
-        let input = vec![task("ohne Datum", None), task("heute", Some("2026-08-04"))];
+        let input = vec![task("undated", None), task("today", Some("2026-08-04"))];
         let mut kept = filter_tasks_for_today(input, today, true);
         sort_tasks(&mut kept);
         let titles: Vec<_> = kept.iter().map(|t| t.title.as_str()).collect();
-        assert_eq!(titles, vec!["heute", "ohne Datum"]);
+        assert_eq!(titles, vec!["today", "undated"]);
     }
 
     fn timed(title: &str, from: (u32, u32), to: (u32, u32)) -> Event {
@@ -364,31 +364,31 @@ mod tests {
     #[test]
     fn an_event_fully_inside_another_counts() {
         let events = vec![
-            timed("lang", (9, 0), (12, 0)),
-            timed("kurz", (10, 0), (10, 15)),
+            timed("long", (9, 0), (12, 0)),
+            timed("short", (10, 0), (10, 15)),
         ];
         assert_eq!(mark_overlaps(&events), vec![true, true]);
     }
 
     #[test]
     fn all_day_events_never_conflict() {
-        let mut all_day = timed("ganztags", (0, 0), (23, 59));
+        let mut all_day = timed("all day", (0, 0), (23, 59));
         all_day.all_day = true;
         all_day.start = None;
         all_day.end = None;
-        let events = vec![all_day, timed("termin", (9, 0), (10, 0))];
+        let events = vec![all_day, timed("meeting", (9, 0), (10, 0))];
         assert_eq!(mark_overlaps(&events), vec![false, false]);
     }
 
     #[test]
     fn tasks_sort_oldest_due_first() {
         let mut t = vec![
-            task("b heute", Some("2026-08-04")),
-            task("a heute", Some("2026-08-04")),
-            task("alt", Some("2026-07-01")),
+            task("b today", Some("2026-08-04")),
+            task("a today", Some("2026-08-04")),
+            task("old", Some("2026-07-01")),
         ];
         sort_tasks(&mut t);
         let titles: Vec<_> = t.iter().map(|x| x.title.as_str()).collect();
-        assert_eq!(titles, vec!["alt", "a heute", "b heute"]);
+        assert_eq!(titles, vec!["old", "a today", "b today"]);
     }
 }

@@ -178,13 +178,30 @@ All notable changes to this project are documented here. The format follows
 - `CONTRIBUTING.md` says what a translation pull request is expected to
   contain: who checked the text, the plural variant the language actually uses,
   and strings that fit.
-- The last German comments and assertion messages are gone — two comments in
-  `src/win/window.rs`, an `unreachable!` in `crates/core/src/theme.rs` and the
-  two test messages beside it. The 1.0.2 entry below already claimed the source
-  reads in one language; it does now. The German words still in the source are
-  content rather than prose about it: the `de` catalogue, the demo data, and
-  `"dunkel"` accepted alongside `"dark"` in `config.json`, which is a setting
-  users have already written and not ours to invalidate.
+- The source really does read in one language now, which the 1.0.2 entry below
+  has claimed since it was written. Twenty-four places: the module header of
+  `src/win/platform.rs` and six section banners in `src/win/window.rs`, four
+  more comments across those two and `src/win/render.rs`, an `unreachable!` and
+  three assertion messages, the log lines for copying the agenda and toggling
+  autostart, and eleven test fixture titles. Searching for German words is what
+  missed most of them twice; searching for *comments with no English function
+  words in them* is what found them.
+- Five error messages the Google provider shows the user were German while the
+  CalDAV and Microsoft ones beside them were English — so since the twenty
+  catalogues landed, a Korean or Arabic user hit German at exactly the moment
+  something had gone wrong. They now read as their siblings already did
+  ("Network error", "Unexpected response", "I/O error"), and an event or task
+  with no title is "(no title)" rather than "(ohne Titel)", which is the
+  wording `caldav.rs` was already using. Not translated: the detail beside them
+  comes from Google in English, so a translated prefix on an English payload
+  would be for show. Putting them in the catalogues is a separate change, and
+  `CONTRIBUTING.md` is right that it needs a human per language.
+- Still German on purpose, because it is content rather than prose about the
+  code: the `de` catalogue, the demo data, `"dunkel"`/`"hell"` accepted beside
+  `"dark"`/`"light"` in `config.json` and `"strg"`/`"umschalt"` beside
+  `"ctrl"`/`"shift"` in `peek_hotkey` — settings users have already written,
+  and not ours to invalidate for tidiness — and the umlauts in the two tests
+  that exist to prove non-ASCII survives.
 
 ## [1.0.2] - 2026-08-07
 

@@ -195,7 +195,7 @@ impl Auth {
 
     fn store_access(&mut self, token: TokenResponse) -> Result<String> {
         if token.access_token.is_empty() {
-            return Err(Error::Other("Leerer Access-Token von Google.".into()));
+            return Err(Error::Other("Empty access token".into()));
         }
         let ttl = Duration::from_secs(token.expires_in.unwrap_or(3600));
         self.access = Some((token.access_token.clone(), Instant::now() + ttl));

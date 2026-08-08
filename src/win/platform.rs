@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 TPMPlaner contributors
-//! Kleine Windows-Helfer: Browser oeffnen, Autostart, Speicher trimmen.
+//! Small Windows helpers: opening a browser, autostart, trimming memory.
 
 use tpmplaner_core::theme::{ContrastColors, SystemVisuals};
 use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError, HWND, RECT};

@@ -514,7 +514,7 @@ fn arm_tick(hwnd: HWND) {
     }
 }
 
-// --- Animationsantrieb ------------------------------------------------------
+// --- Animation driver -------------------------------------------------------
 
 /// Starts the animation timer if needed and takes a step immediately, so the
 /// response does not feel delayed by up to 16 ms.
@@ -779,7 +779,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
     }
 }
 
-// --- Rueckgaengig -----------------------------------------------------------
+// --- Undo -------------------------------------------------------------------
 
 /// Records the tick provisionally and starts the grace period.
 fn begin_pending(st: &mut State, idx: usize) {
@@ -1142,7 +1142,7 @@ fn end_peek(st: &mut State) {
     redraw(st);
 }
 
-// --- Zeitplanung ------------------------------------------------------------
+// --- Scheduling -------------------------------------------------------------
 
 fn on_tick(st: &mut State) {
     let now = Local::now();
@@ -1225,7 +1225,7 @@ fn on_sync_done(st: &mut State) {
     kick(st);
 }
 
-/// Uebernimmt Aenderungen an `config.json` ohne Neustart.
+/// Picks up changes to `config.json` without a restart.
 fn reload_config_if_changed(st: &mut State) {
     if config_mtime(st.theme_file.as_deref()) == st.config_mtime {
         return;
@@ -1396,7 +1396,7 @@ fn config_mtime(theme_file: Option<&Path>) -> Stamps {
     (stamp(&config::config_path()), theme_file.and_then(stamp))
 }
 
-// --- Maus -------------------------------------------------------------------
+// --- Mouse ------------------------------------------------------------------
 
 fn on_mouse_move(st: &mut State, lparam: LPARAM) {
     unsafe {
@@ -1696,7 +1696,7 @@ fn rescue_offscreen(st: &mut State) {
     }
 }
 
-// --- Zeichnen ---------------------------------------------------------------
+// --- Drawing ----------------------------------------------------------------
 
 fn redraw(st: &mut State) {
     // Copy the Arc, not the contents: during an animation this runs 60 times
@@ -1799,7 +1799,7 @@ fn current_size_px(hwnd: HWND) -> (u32, u32) {
     }
 }
 
-// --- Kontextmenue -----------------------------------------------------------
+// --- Context menu -----------------------------------------------------------
 
 fn show_menu(st: &mut State) {
     unsafe {
@@ -1856,7 +1856,7 @@ fn show_menu(st: &mut State) {
         if !sources.is_empty() {
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
         }
-        // Untermenues muessen leben, bis `TrackPopupMenu` zurueckkehrt.
+        // Submenus have to stay alive until `TrackPopupMenu` returns.
         let mut submenus = Vec::new();
         for (label, entries, selected, base) in sources {
             let Ok(sub) = CreatePopupMenu() else { continue };
@@ -1928,9 +1928,9 @@ fn show_menu(st: &mut State) {
             CMD_AUTOSTART => {
                 platform::set_autostart(!autostart);
                 log::info(if autostart {
-                    "Autostart deaktiviert"
+                    "Autostart disabled"
                 } else {
-                    "Autostart aktiviert"
+                    "Autostart enabled"
                 });
             }
             CMD_CONFIG => {
