@@ -79,7 +79,7 @@ What a translation pull request is expected to contain:
   because their boundaries genuinely differ — Polish puts 21 in the `many`
   form where Russian puts it in `one`. Arabic has six categories, Hebrew has a
   dual, and Chinese, Japanese, Korean and Turkish have exactly one form.
-- **Strings that fit.** The panel is about 380 device independent pixels wide
+- **Strings that fit.** The panel is about 380 device-independent pixels wide
   and several labels sit in a fixed column. `cargo test -p tpmplaner-core`
   enforces a width budget for those and flags anything that ran away from its
   English original; a failure means "find a shorter word", not "raise the

@@ -60,9 +60,10 @@ fn scratch(name: &str) -> PathBuf {
 /// unit tests next to the data, where the private field walker can reach it.
 #[test]
 fn every_shipped_language_is_complete_and_distinct() {
-    assert!(
-        i18n::CATALOGS.len() >= 5,
-        "the shipped languages went missing"
+    assert_eq!(
+        i18n::CATALOGS.len(),
+        20,
+        "the shipped language count changed — update the changelog claim too"
     );
 
     for cat in i18n::CATALOGS {

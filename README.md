@@ -39,7 +39,7 @@ Then connect a calendar — see [connecting accounts](https://josunlp.github.io/
   entries once today is done.
 - **Tasks that matter today.** Due today or earlier, oldest first, overdue
   marked. Tick one off from the widget, with a few seconds to change your mind.
-- **Speaks your system's language.** Interface text in twenty languages,
+- **Speaks your system's language.** Interface text in twenty catalogues,
   Arabic and Hebrew among them — and dates, times and reading direction come
   from the operating system, so a 12-hour clock, a Hijri calendar or a
   right-to-left layout are simply correct even in a language nobody has
@@ -102,8 +102,10 @@ $env:TPMPLANER_DEMO = "1"; cargo run --release
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). The largest open piece is the
-cross-platform interface; adding an interface language is a single constant
-plus a plural rule.
+cross-platform interface; adding an interface language is a catalogue
+constant with its plural rule, a `catalog_for` arm and an entry in `CATALOGS`
+— the steps are written out in
+[CONTRIBUTING.md](CONTRIBUTING.md#adding-an-interface-language).
 
 ## Honest limitations
 

@@ -40,7 +40,7 @@ features:
       done.
   - title: Speaks your system's language
     details: >
-      Twenty interface languages, Arabic and Hebrew included — and dates,
+      Twenty interface catalogues, Arabic and Hebrew included — and dates,
       times and reading direction come from the operating system, so a 12-hour
       clock, a Hijri calendar or a right-to-left layout are all simply correct
       even in a language nobody has translated yet.

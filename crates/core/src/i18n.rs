@@ -1634,7 +1634,7 @@ pub const HE: Catalog = Catalog {
     overdue: Plural::Hebrew {
         one: "משימה אחת באיחור",
         two: "שתי משימות באיחור",
-        other: "{} באיחור",
+        other: "{} משימות באיחור",
     },
     syncing: "מסנכרן …",
     updated_next: "עודכן {}   ·   סנכרון הבא {}",
