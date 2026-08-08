@@ -40,9 +40,10 @@ features:
       done.
   - title: Speaks your system's language
     details: >
-      Five interface languages, but dates, times and reading direction come
-      from the operating system — so a 12-hour clock, a Hijri calendar or a
-      right-to-left layout are all simply correct.
+      Twenty interface catalogues, Arabic and Hebrew included — and dates,
+      times and reading direction come from the operating system, so a 12-hour
+      clock, a Hijri calendar or a right-to-left layout are all simply correct
+      even in a language nobody has translated yet.
   - title: Fits your theme
     details: >
       Follows light and dark, the accent colour, contrast themes, and the

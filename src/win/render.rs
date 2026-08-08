@@ -24,6 +24,7 @@
 use crate::win::platform;
 use tpmplaner_core::anim::Animations;
 use tpmplaner_core::i18n::Locale;
+use tpmplaner_core::log;
 use tpmplaner_core::model::{Agenda, Event, Task};
 use tpmplaner_core::sync::Status;
 use tpmplaner_core::theme::{self, Appearance, Metrics, Palette, mix};
@@ -46,6 +47,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::mem::ManuallyDrop;
 use windows::Win32::Foundation::HWND;
+use windows::Win32::Globalization::IsValidLocaleName;
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D_RECT_F, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_GRADIENT_STOP, D2D1_PIXEL_FORMAT,
 };
@@ -216,6 +218,9 @@ impl Renderer {
     /// window sizes itself from the same values — the shadow margin decides
     /// how much larger the window is than the visible panel — and the two
     /// drifting apart is how the panel ends up inset inside its own window.
+    ///
+    /// `lang` is the BCP-47 tag the interface text is written in. It is not
+    /// cosmetic — see [`locale_name`].
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         hwnd: HWND,
@@ -226,6 +231,7 @@ impl Renderer {
         pal: Palette,
         rtl: bool,
         custom: &Appearance,
+        lang: &str,
     ) -> Result<Self> {
         unsafe {
             let device = create_d3d_device()?;
@@ -291,8 +297,10 @@ impl Renderer {
 
             let dwrite: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
             let m = metrics;
-            // Both kept alive for the whole block: every format borrows them.
+            // All kept alive for the whole block: every format below borrows
+            // them.
             let family = font_family(custom);
+            let locale = locale_name(lang);
             let section_weight = DWRITE_FONT_WEIGHT(custom.header_weight().0 as i32);
 
             let formats = [
@@ -303,6 +311,7 @@ impl Renderer {
                     DWRITE_TEXT_ALIGNMENT_LEADING,
                     rtl,
                     &family,
+                    &locale,
                 )?,
                 text_format(
                     &dwrite,
@@ -311,6 +320,7 @@ impl Renderer {
                     DWRITE_TEXT_ALIGNMENT_TRAILING,
                     rtl,
                     &family,
+                    &locale,
                 )?,
                 text_format(
                     &dwrite,
@@ -319,6 +329,7 @@ impl Renderer {
                     DWRITE_TEXT_ALIGNMENT_LEADING,
                     rtl,
                     &family,
+                    &locale,
                 )?,
                 text_format(
                     &dwrite,
@@ -327,6 +338,7 @@ impl Renderer {
                     DWRITE_TEXT_ALIGNMENT_LEADING,
                     rtl,
                     &family,
+                    &locale,
                 )?,
                 text_format(
                     &dwrite,
@@ -335,6 +347,7 @@ impl Renderer {
                     DWRITE_TEXT_ALIGNMENT_LEADING,
                     rtl,
                     &family,
+                    &locale,
                 )?,
                 text_format(
                     &dwrite,
@@ -343,6 +356,7 @@ impl Renderer {
                     DWRITE_TEXT_ALIGNMENT_LEADING,
                     rtl,
                     &family,
+                    &locale,
                 )?,
                 text_format(
                     &dwrite,
@@ -351,6 +365,7 @@ impl Renderer {
                     DWRITE_TEXT_ALIGNMENT_LEADING,
                     rtl,
                     &family,
+                    &locale,
                 )?,
                 text_format(
                     &dwrite,
@@ -359,6 +374,7 @@ impl Renderer {
                     DWRITE_TEXT_ALIGNMENT_TRAILING,
                     rtl,
                     &family,
+                    &locale,
                 )?,
                 text_format(
                     &dwrite,
@@ -367,9 +383,10 @@ impl Renderer {
                     DWRITE_TEXT_ALIGNMENT_LEADING,
                     rtl,
                     &family,
+                    &locale,
                 )?,
                 icon_format(&dwrite, m.fs_row + 1.5)?,
-                tooltip_format(&dwrite, m.fs_row, rtl, &family)?,
+                tooltip_format(&dwrite, m.fs_row, rtl, &family, &locale)?,
             ];
 
             let mut me = Self {
@@ -2216,12 +2233,42 @@ fn create_d3d_device() -> Result<ID3D11Device> {
     Err(windows::core::Error::from_thread())
 }
 
+/// The locale name to hand DirectWrite, as a nul-terminated wide string.
+///
+/// Not a formality. Han unification gives one code point different accepted
+/// shapes per language — 直, 骨 and 令 are drawn differently in Japanese,
+/// Simplified and Traditional Chinese — and this name is what DirectWrite
+/// selects the font and the glyph variant with. It also decides where a line
+/// may break, which differs between Chinese and Japanese. Getting it wrong
+/// produces text that is perfectly legible and visibly foreign to a native
+/// reader, which is precisely the friction a localised interface is for.
+///
+/// The tag may come straight out of `config.json`, so it is validated first:
+/// `CreateTextFormat` rejects an unknown locale name, and without this check a
+/// typo in the settings file would turn into "TPMPlaner could not start". An
+/// empty name means "no particular locale", which is what the renderer used to
+/// get in effect.
+fn locale_name(tag: &str) -> Vec<u16> {
+    let wide = platform::wide(tag);
+    let valid = unsafe { IsValidLocaleName(PCWSTR(wide.as_ptr())) }.as_bool();
+    if valid {
+        wide
+    } else {
+        log::warn(&format!(
+            "'{tag}' is not a locale name Windows knows — text is laid out without one"
+        ));
+        platform::wide("")
+    }
+}
+
 /// The font family to draw the interface in, as a nul-terminated wide string.
 ///
 /// "Segoe UI Variable Text" is the Windows 11 system font; on older systems
 /// DirectWrite falls back to Segoe UI by itself. A name it does not know falls
 /// back the same way rather than failing, which is why a typo here costs a
-/// different font and not a widget that will not start.
+/// different font and not a widget that will not start. Scripts the family does
+/// not cover — CJK, Thai, Devanagari — go through DirectWrite's own font
+/// fallback, which is why the locale name matters as well.
 fn font_family(custom: &Appearance) -> Vec<u16> {
     match custom.font_family() {
         Some(name) => platform::wide(name),
@@ -2236,6 +2283,7 @@ fn text_format(
     align: DWRITE_TEXT_ALIGNMENT,
     rtl: bool,
     family: &[u16],
+    locale: &[u16],
 ) -> Result<IDWriteTextFormat> {
     unsafe {
         let format = dwrite.CreateTextFormat(
@@ -2245,7 +2293,7 @@ fn text_format(
             DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL,
             size,
-            w!("de-DE"),
+            PCWSTR(locale.as_ptr()),
         )?;
         // With a right-to-left reading direction DirectWrite swaps the meaning
         // of LEADING and TRAILING itself — "leading" is then the right edge.
@@ -2275,6 +2323,7 @@ fn tooltip_format(
     size: f32,
     rtl: bool,
     family: &[u16],
+    locale: &[u16],
 ) -> Result<IDWriteTextFormat> {
     unsafe {
         let format = dwrite.CreateTextFormat(
@@ -2284,7 +2333,7 @@ fn tooltip_format(
             DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL,
             size,
-            w!("de-DE"),
+            PCWSTR(locale.as_ptr()),
         )?;
         if rtl {
             format.SetReadingDirection(DWRITE_READING_DIRECTION_RIGHT_TO_LEFT)?;
