@@ -169,6 +169,10 @@ pub fn list_events(
                 color: cal.color,
                 calendar_name: cal.name.clone(),
                 calendar_id: cal.id.clone(),
+                // Both stamped by the sync thread, which is where the events
+                // of every account meet the tasks of every account.
+                account_id: String::new(),
+                task_id: None,
             });
         }
 
