@@ -35,6 +35,28 @@ All notable changes to this project are documented here. The format follows
   widget will say that stacking below other windows is unavailable rather than
   quietly becoming an ordinary window that has stopped doing the one thing it
   is for.
+- `appearance` in `config.json`: customisation on top of what the system
+  decides. Colours beyond the accent — panel, text, muted text, separator, and
+  the semantic `now`, `overdue` and `conflict` — plus a font family, a size
+  offset independent of `scale`, a weight for the section headers, a surface
+  style (`aero`, `flat`, `borderless`), a layout density and per-calendar
+  colour overrides. Everything defaults to `"system"`, and everything left
+  there keeps being derived exactly as before. Following the system is the
+  right default for a widget that should feel like part of it, but a wallpaper
+  the panel disappears into, a glass surface next to an otherwise flat desktop
+  or provider colours that are indistinguishable at 82% opacity are not
+  answered by `"theme": "contrast"`, which is all or nothing.
+- A whole set of choices can live in one shareable file: `"appearance":
+  "midnight"` reads `midnight.theme.json` next to `config.json`, rather than
+  growing another pile of top-level keys. A theme name is reduced to letters,
+  digits, spaces, hyphens and underscores, so it names a file in the data
+  directory and cannot become a path to one somewhere else.
+- Only the colours a person reasons about are exposed; the shades between them
+  are derived from those, so the set stays coherent. A custom panel colour
+  keeps the gradient's shape by reproducing the built-in lightness spread
+  around it, and if it crosses into the other appearance — a near-white panel
+  while the dark theme is active — the text, separators and edges follow it. A
+  white separator on light glass is invisible whatever the theme was called.
 
 ### Changed
 
@@ -49,6 +71,15 @@ All notable changes to this project are documented here. The format follows
   only the core crate, and runs the resulting binary in demo mode in two
   languages. "The core is portable" was a claim about a crate that compiles; it
   is now a claim about a program that runs.
+- Accessibility keeps winning. A contrast theme ignores the custom colours and
+  the surface style, because its colours come from the system and its flatness
+  is the point; typography and density still apply, since nothing about a
+  larger font or more room works against contrast. Custom colours are corrected
+  until they read against the surface they sit on — the same bargain the accent
+  has always struck, moving the lightness and leaving the hue — so a settings
+  file cannot produce invisible text. Every correction, malformed colour and
+  missing theme file is written to the log, because otherwise it is
+  indistinguishable from a setting that had no effect.
 
 ### Fixed
 
@@ -71,6 +102,37 @@ All notable changes to this project are documented here. The format follows
 - The browser opener is reaped. Rust installs no `SIGCHLD` handler, so dropping
   the `Child` detached the handle without collecting the process, and a front
   end that runs for days accumulated one zombie per opened URL.
+- With `"backdrop": "acrylic"` the panel was drawn inset by the drop shadow's
+  margin inside a window that had deliberately not reserved one, losing 14
+  device independent pixels on each side. The renderer derived its own metrics
+  from the scale factor while the window derived its geometry from the
+  backdrop as well, and the two disagreed in exactly that case. The renderer is
+  handed the metrics the window used, and the shadow is skipped when there is
+  no margin to draw it in — twelve rectangles that cannot grow outwards are not
+  a soft edge but twelve coats of black over the panel.
+- A named theme file is watched alongside `config.json`. Editing
+  `midnight.theme.json` is the advertised way to use `"appearance": "midnight"`,
+  and only the settings file was checked for changes — so the edit did nothing
+  until `config.json` happened to be written for some unrelated reason.
+- A colour no longer rebuilds the renderer. Only the half of a customisation
+  that is fixed at construction — the font family, weight and size offset, the
+  density and the surface style — needs the Direct3D and Direct2D pipeline torn
+  down and the window resized. Colours are uploaded per frame, so nudging
+  `colors.now` in a theme file repaints instead of flickering the whole panel on
+  every save.
+- A contrast theme ignores the surface style in the window geometry, not only in
+  the palette. `"surface": "borderless"` dropped the shadow margin from the
+  window while the palette — which returns before it reaches the surface under
+  contrast — still drew the shadow and the border into it.
+- The note explaining that a panel colour crossed into the other appearance
+  named the wrong theme. It read the theme after switching to it, so a near-white
+  panel under the dark theme reported itself "lighter than the light theme
+  expects", which is the opposite of what happened.
+- Corrections are logged when the system contrast or theme changes, instead of
+  being suppressed as repetition. They are not repetition: whether custom
+  colours are ignored at all depends on contrast, and what has to be corrected
+  to stay readable depends on the background — so the note saying the custom
+  colours are being ignored was the one going missing.
 
 ## [1.0.2] - 2026-08-07
 

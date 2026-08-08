@@ -439,6 +439,7 @@ mod tests {
                     join_url: None,
                     color: 0,
                     calendar_name: self.id.into(),
+                    calendar_id: format!("{}-cal", self.id),
                 })
                 .collect())
         }

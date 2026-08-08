@@ -28,6 +28,7 @@ pub fn agenda() -> Agenda {
         join_url: None,
         color,
         calendar_name: "Beispiel".into(),
+        calendar_id: "demo".into(),
     };
 
     // Tomorrow at a fixed time, not relative to now: otherwise the entries
@@ -48,6 +49,7 @@ pub fn agenda() -> Agenda {
             join_url: None,
             color,
             calendar_name: "Beispiel".into(),
+            calendar_id: "demo".into(),
         };
 
     let task = |title: &str, due_offset: i64, depth: u8| Task {
@@ -75,6 +77,7 @@ pub fn agenda() -> Agenda {
                 join_url: None,
                 color: 0x9B_8AFB,
                 calendar_name: "Firma".into(),
+                calendar_id: "demo-company".into(),
             },
             // Already over, so drawn dimmed.
             event("Daily Standup", -260, -245, 0x4C_8DF6, None),

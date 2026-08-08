@@ -23,6 +23,7 @@
 use crate::win::platform;
 use crate::win::render::{self, Frame, Hit, HitRegion, Renderer, UndoView};
 use chrono::{DateTime, Duration as ChronoDuration, Local, Timelike};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 use tpmplaner_core::anim::Animations;
@@ -30,7 +31,7 @@ use tpmplaner_core::config::{self, Config};
 use tpmplaner_core::i18n::Locale;
 use tpmplaner_core::log;
 use tpmplaner_core::sync::{self, Command, Shared, Status, SyncHandle};
-use tpmplaner_core::theme::{Metrics, Palette, ThemePref};
+use tpmplaner_core::theme::{Appearance, Metrics, Palette, SystemVisuals, ThemePref};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{
     DWMSBT_NONE, DWMSBT_TRANSIENTWINDOW, DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE,
@@ -172,12 +173,21 @@ struct State {
     dpi: f32,
     scale: f32,
     metrics: Metrics,
-    config_mtime: Option<SystemTime>,
+    /// The customisation last read from the settings, resolved from an inline
+    /// block or a named theme file. Kept to compare against: typography and
+    /// density live in the DirectWrite formats and the metrics, so a change to
+    /// any of it has to rebuild the renderer rather than repaint.
+    appearance: Appearance,
+    /// The named theme file, if `appearance` came from one. Watched alongside
+    /// the settings: editing that file is the whole point of having one, and it
+    /// leaves `config.json` untouched.
+    theme_file: Option<PathBuf>,
+    config_mtime: Stamps,
     loc: Locale,
     /// The appearance settings last read from Windows. Re-read on
     /// `WM_SETTINGCHANGE`, and also kept as the value to compare against, so
     /// an unrelated system notification does not trigger a redraw.
-    visuals: tpmplaner_core::theme::SystemVisuals,
+    visuals: SystemVisuals,
 }
 
 pub fn run() -> Result<()> {
@@ -190,13 +200,18 @@ pub fn run() -> Result<()> {
         if let Some(e) = &config_error {
             log::warn(e);
         }
-        let metrics = metrics_for(&cfg);
+        let appearance = appearance_for(&cfg);
+        // Read before the metrics: a contrast theme overrides the surface
+        // style, and the surface style decides whether the geometry reserves a
+        // margin for the shadow.
+        let visuals = platform::system_visuals();
+        let metrics = metrics_for(&cfg, &appearance, visuals);
+        let theme_file = cfg.appearance.file();
         let loc = Locale::resolve(&cfg.language);
         // The sync thread and the emergency exit have no access to this
         // instance, so they reach for the global catalogue instead.
         tpmplaner_core::i18n::set_global(loc.cat);
-        let visuals = platform::system_visuals();
-        let palette = Palette::resolve(ThemePref::parse(&cfg.theme), &cfg.accent, visuals);
+        let palette = palette_for(&cfg, &appearance, visuals, false);
         log::info(&format!(
             "Start — locale {} ({}{}), theme {}{}, accent #{:06X}, sync every {} min",
             loc.tag,
@@ -267,7 +282,9 @@ pub fn run() -> Result<()> {
             dpi: 96.0,
             scale: cfg.scale,
             metrics,
-            config_mtime: config_mtime(),
+            appearance,
+            config_mtime: config_mtime(theme_file.as_deref()),
+            theme_file,
             loc,
             visuals,
         });
@@ -311,9 +328,10 @@ pub fn run() -> Result<()> {
             pw.max(1) as u32,
             ph.max(1) as u32,
             st.dpi,
-            cfg.scale,
+            st.metrics,
             palette,
             st.loc.rtl,
+            &st.appearance,
         )?);
 
         // Demo mode deliberately runs no sync thread — otherwise the missing
@@ -354,9 +372,52 @@ pub fn run() -> Result<()> {
     }
 }
 
-/// Metrics for a configuration: no shadow margin in acrylic mode.
-fn metrics_for(cfg: &Config) -> Metrics {
-    Metrics::with_shadow(cfg.scale, cfg.backdrop != "acrylic")
+/// Metrics for a configuration: the DPI scale, the density and font offset
+/// from the customisation, and no shadow margin where nothing draws one — the
+/// acrylic backdrop fills the whole window rectangle, and a flat surface has
+/// no shadow to leave room for.
+fn metrics_for(cfg: &Config, custom: &Appearance, visuals: SystemVisuals) -> Metrics {
+    Metrics::resolve(
+        cfg.scale,
+        cfg.backdrop != "acrylic",
+        custom,
+        // The same question `Palette::resolve` asks. Reading `visuals` alone
+        // would leave `"theme": "contrast"` with a high-contrast palette and
+        // metrics sized for the configured surface — the exact disagreement
+        // `effective_surface` exists to prevent.
+        ThemePref::parse(&cfg.theme).high_contrast(visuals),
+    )
+}
+
+/// Resolves the customisation and puts anything it complained about in the
+/// log.
+///
+/// A theme file that is missing, a colour that is not a colour, text that had
+/// to be lightened to stay readable: each of those otherwise looks exactly
+/// like a setting that had no effect, which is the hardest kind of thing to
+/// work out from the outside.
+fn appearance_for(cfg: &Config) -> Appearance {
+    let (custom, notes) = cfg.appearance.resolve();
+    for note in notes {
+        log::warn(&note);
+    }
+    custom
+}
+
+/// The palette for a configuration, with the customisation applied.
+fn palette_for(cfg: &Config, custom: &Appearance, visuals: SystemVisuals, quiet: bool) -> Palette {
+    let mut palette = Palette::resolve(ThemePref::parse(&cfg.theme), &cfg.accent, visuals);
+    let notes = palette.customize(custom);
+    // `quiet` is for the paths that re-resolve the same palette after a system
+    // appearance change or a lost graphics device. The notes would be the same
+    // ones already in the log, and repeating them on every theme switch turns
+    // the log into noise.
+    if !quiet {
+        for note in notes {
+            log::warn(&note);
+        }
+    }
+    palette
 }
 
 /// Window position and size in physical pixels.
@@ -847,7 +908,7 @@ fn toggle_source(st: &mut State, is_calendar: bool, index: usize) {
         }
         guard.config.save();
     }
-    st.config_mtime = config_mtime();
+    st.config_mtime = config_mtime(st.theme_file.as_deref());
     request_sync(st);
 }
 
@@ -1165,11 +1226,9 @@ fn on_sync_done(st: &mut State) {
 
 /// Uebernimmt Aenderungen an `config.json` ohne Neustart.
 fn reload_config_if_changed(st: &mut State) {
-    let current = config_mtime();
-    if current == st.config_mtime {
+    if config_mtime(st.theme_file.as_deref()) == st.config_mtime {
         return;
     }
-    st.config_mtime = current;
 
     let (cfg, error) = Config::load();
     if let Some(e) = &error {
@@ -1179,8 +1238,31 @@ fn reload_config_if_changed(st: &mut State) {
     }
 
     let scale_changed = (cfg.scale - st.scale).abs() > f32::EPSILON;
-    let (px, py, pw, ph) = target_geometry(&cfg, metrics_for(&cfg), st.dpi);
-    let palette = Palette::resolve(ThemePref::parse(&cfg.theme), &cfg.accent, st.visuals);
+    // Typography, density and the surface style are baked into the DirectWrite
+    // formats and the metrics at construction, so a change to any of them
+    // needs the same rebuild a change of scale does. A colour is not: it is
+    // uploaded per frame, and rebuilding for one would flicker the whole panel
+    // every time somebody nudges a value in a theme file.
+    let appearance = appearance_for(&cfg);
+    let layout_changed = appearance.layout_differs(&st.appearance);
+    let appearance_changed = appearance != st.appearance;
+    st.appearance = appearance;
+    // Stamped after the theme name is known, not before: switching from one
+    // named theme to another changes which file is watched, and stamping the
+    // outgoing one would leave a mismatch that reloads again on the next tick.
+    st.theme_file = cfg.appearance.file();
+    st.config_mtime = config_mtime(st.theme_file.as_deref());
+
+    // Compared rather than derived from the settings that feed it. The
+    // renderer caches these metrics at construction, so any move at all has to
+    // rebuild — and the list of settings that move them has grown twice now
+    // (`backdrop` decides the shadow margin, `theme: contrast` overrides the
+    // surface style). Asking `Metrics` directly cannot fall behind that list.
+    let previous_metrics = st.metrics;
+    st.metrics = metrics_for(&cfg, &st.appearance, st.visuals);
+    let metrics_changed = st.metrics != previous_metrics;
+    let (px, py, pw, ph) = target_geometry(&cfg, st.metrics, st.dpi);
+    let palette = palette_for(&cfg, &st.appearance, st.visuals, !appearance_changed);
     st.anim.enabled = palette.animations;
 
     // Reading direction lives in the DirectWrite formats, so switching
@@ -1191,7 +1273,6 @@ fn reload_config_if_changed(st: &mut State) {
     st.loc = new_loc;
 
     st.scale = cfg.scale;
-    st.metrics = metrics_for(&cfg);
     {
         let mut guard = sync::lock(&st.shared);
         guard.config = cfg.clone();
@@ -1212,12 +1293,17 @@ fn reload_config_if_changed(st: &mut State) {
         );
     }
 
-    // Font sizes live in the DirectWrite formats and cannot be changed after
-    // the fact — a change of scale means rebuilding the renderer completely.
-    if scale_changed || direction_changed {
+    // Font sizes, the family and the header weight live in the DirectWrite
+    // formats and cannot be changed after the fact, and the metrics are fixed
+    // at construction — so a change of scale, of the metrics, or of the layout
+    // half of the customisation means rebuilding the renderer completely.
+    // Colours alone do not, which is what `layout_differs` separates out: they
+    // are uploaded per frame, and rebuilding for one would flicker the whole
+    // panel every time somebody nudges a value in a theme file.
+    if scale_changed || direction_changed || layout_changed || metrics_changed {
         recreate_renderer(st, pw.max(1) as u32, ph.max(1) as u32, palette);
     } else if let Some(r) = st.renderer.as_mut() {
-        r.set_palette(palette);
+        r.set_palette(palette, &st.appearance);
     }
     redraw(st);
 }
@@ -1239,22 +1325,71 @@ fn refresh_palette(st: &mut State) {
         visuals.transparency,
         visuals.animations
     ));
+    // Which corrections `customize` reports depends on both of these: contrast
+    // decides whether the custom colours are ignored at all, and a light or
+    // dark background decides what has to be corrected to stay readable. When
+    // either moves, the notes are genuinely new rather than the repetition
+    // `quiet` exists to suppress, and staying silent would hide the one that
+    // says the custom colours are being ignored.
+    let contrast_changed = visuals.high_contrast != st.visuals.high_contrast;
+    let notes_would_differ = contrast_changed || visuals.light != st.visuals.light;
     st.visuals = visuals;
 
     let cfg = sync::lock(&st.shared).config.clone();
-    let palette = Palette::resolve(ThemePref::parse(&cfg.theme), &cfg.accent, st.visuals);
+    let palette = palette_for(&cfg, &st.appearance, st.visuals, !notes_would_differ);
     st.anim.enabled = palette.animations;
     apply_backdrop(st.hwnd, &cfg, palette.dark);
+
+    // Contrast overrides the surface style, and the surface style decides
+    // whether the geometry reserves a shadow margin — so the window has to be
+    // resized and the renderer rebuilt around the new metrics, exactly as a
+    // change to the setting itself would.
+    if contrast_changed {
+        let metrics = metrics_for(&cfg, &st.appearance, st.visuals);
+        let moved = metrics != st.metrics;
+        st.metrics = metrics;
+        if moved {
+            let (px, py, pw, ph) = target_geometry(&cfg, st.metrics, st.dpi);
+            unsafe {
+                let _ = SetWindowPos(
+                    st.hwnd,
+                    Some(HWND_BOTTOM),
+                    px,
+                    py,
+                    pw,
+                    ph,
+                    SWP_NOACTIVATE | SWP_NOOWNERZORDER,
+                );
+            }
+            recreate_renderer(st, pw.max(1) as u32, ph.max(1) as u32, palette);
+            redraw(st);
+            return;
+        }
+    }
+
     if let Some(r) = st.renderer.as_mut() {
-        r.set_palette(palette);
+        r.set_palette(palette, &st.appearance);
     }
     redraw(st);
 }
 
-fn config_mtime() -> Option<SystemTime> {
-    std::fs::metadata(config::config_path())
-        .ok()
-        .and_then(|m| m.modified().ok())
+/// When the settings and the named theme file were last written.
+///
+/// Both, because a named theme lives in its own file: watching only
+/// `config.json` meant `"appearance": "midnight"` never picked up an edit to
+/// `midnight.theme.json` until the settings file happened to be rewritten for
+/// some unrelated reason — which is the advertised way to use a theme.
+///
+/// `None` in either slot is "no such file", and that is a state worth noticing
+/// rather than ignoring: a theme file appearing or being deleted changes the
+/// appearance just as much as an edit to one.
+type Stamps = (Option<SystemTime>, Option<SystemTime>);
+
+fn config_mtime(theme_file: Option<&Path>) -> Stamps {
+    fn stamp(path: &Path) -> Option<SystemTime> {
+        std::fs::metadata(path).ok().and_then(|m| m.modified().ok())
+    }
+    (stamp(&config::config_path()), theme_file.and_then(stamp))
 }
 
 // --- Maus -------------------------------------------------------------------
@@ -1491,7 +1626,7 @@ fn save_geometry(st: &mut State) {
         guard.config.height = (wr.bottom - wr.top) as f32 / scale - st.metrics.shadow * 2.0;
         guard.config.save();
     }
-    st.config_mtime = config_mtime();
+    st.config_mtime = config_mtime(st.theme_file.as_deref());
 }
 
 /// Hit testing back to front: the regions drawn last (those on top) win —
@@ -1524,7 +1659,7 @@ fn save_position(st: &mut State) {
         }
     }
     // Do not mistake our own save for someone else's edit.
-    st.config_mtime = config_mtime();
+    st.config_mtime = config_mtime(st.theme_file.as_deref());
 }
 
 /// Brings the window back when its position is no longer on any monitor.
@@ -1542,7 +1677,7 @@ fn rescue_offscreen(st: &mut State) {
             guard.config.save();
             guard.config.clone()
         };
-        st.config_mtime = config_mtime();
+        st.config_mtime = config_mtime(st.theme_file.as_deref());
 
         let (px, py, pw, ph) = target_geometry(&cfg, st.metrics, st.dpi);
         let _ = SetWindowPos(
@@ -1618,9 +1753,7 @@ fn redraw(st: &mut State) {
             let (w, h) = current_size_px(st.hwnd);
             let pal = st.renderer.as_ref().map(|r| r.palette());
             let cfg = sync::lock(&st.shared).config.clone();
-            let pal = pal.unwrap_or_else(|| {
-                Palette::resolve(ThemePref::parse(&cfg.theme), &cfg.accent, st.visuals)
-            });
+            let pal = pal.unwrap_or_else(|| palette_for(&cfg, &st.appearance, st.visuals, true));
             recreate_renderer(st, w, h, pal);
         }
         Err(_) => {}
@@ -1636,9 +1769,10 @@ fn recreate_renderer(st: &mut State, width_px: u32, height_px: u32, pal: Palette
         width_px.max(1),
         height_px.max(1),
         st.dpi,
-        st.scale,
+        st.metrics,
         pal,
         st.loc.rtl,
+        &st.appearance,
     )
     .ok();
     if st.renderer.is_none() {
@@ -1798,7 +1932,7 @@ fn show_menu(st: &mut State) {
                 // Make sure the file exists before opening it — the editor
                 // should not report "not found".
                 sync::lock(&st.shared).config.save();
-                st.config_mtime = config_mtime();
+                st.config_mtime = config_mtime(st.theme_file.as_deref());
                 platform::open_path(&config::config_path());
             }
             CMD_RESET_POS => {
@@ -1808,7 +1942,7 @@ fn show_menu(st: &mut State) {
                     guard.config.y = None;
                     guard.config.save();
                 }
-                st.config_mtime = config_mtime();
+                st.config_mtime = config_mtime(st.theme_file.as_deref());
                 let cfg = sync::lock(&st.shared).config.clone();
                 let (px, py, pw, ph) = target_geometry(&cfg, st.metrics, st.dpi);
                 let _ = SetWindowPos(
