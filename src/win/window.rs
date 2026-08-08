@@ -1202,7 +1202,7 @@ fn on_sync_done(st: &mut State) {
             st.next_sync_at = Local::now() + ChronoDuration::minutes(interval);
         }
         Status::NeedsSetup(_) | Status::NeedsLogin(_) => {
-            // Ohne Benutzeraktion bringt ein Wiederholen nichts.
+            // Retrying achieves nothing without the user acting first.
             st.next_sync_at = Local::now() + ChronoDuration::minutes(interval.max(15));
         }
         _ => {
@@ -1519,7 +1519,7 @@ fn on_left_down(st: &mut State, lparam: LPARAM) {
             }
         }
 
-        // Leere Flaeche: Fenster verschieben.
+        // Empty space: drag the window.
         None => unsafe {
             let mut cursor = POINT::default();
             let _ = GetCursorPos(&mut cursor);

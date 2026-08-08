@@ -178,6 +178,13 @@ All notable changes to this project are documented here. The format follows
 - `CONTRIBUTING.md` says what a translation pull request is expected to
   contain: who checked the text, the plural variant the language actually uses,
   and strings that fit.
+- The last German comments and assertion messages are gone — two comments in
+  `src/win/window.rs`, an `unreachable!` in `crates/core/src/theme.rs` and the
+  two test messages beside it. The 1.0.2 entry below already claimed the source
+  reads in one language; it does now. The German words still in the source are
+  content rather than prose about it: the `de` catalogue, the demo data, and
+  `"dunkel"` accepted alongside `"dark"` in `config.json`, which is a setting
+  users have already written and not ours to invalidate.
 
 ## [1.0.2] - 2026-08-07
 
