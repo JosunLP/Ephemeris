@@ -311,6 +311,20 @@ pub struct Catalog {
 }
 
 impl Catalog {
+    /// `lang` and `dir` attributes for the `<html>` element of the pages the
+    /// sign-in flow serves into the user's browser.
+    ///
+    /// The widget itself gets its reading direction from the platform, but
+    /// that never reaches the browser — a page with no `dir` is laid out
+    /// left to right whatever the script, so Arabic and Hebrew come out with
+    /// the clause order and the trailing punctuation on the wrong side. The
+    /// catalogue already knows which of the two it is written in, and it is
+    /// the same catalogue these pages take their text from.
+    pub fn html_attrs(&self) -> String {
+        let dir = if self.rtl { "rtl" } else { "ltr" };
+        format!("lang=\"{}\" dir=\"{dir}\"", self.code)
+    }
+
     /// Every plain field, paired with its name.
     ///
     /// Written as a destructuring `let` without `..` on purpose: a field added
@@ -1722,25 +1736,38 @@ pub fn catalog_for(tag: &str) -> &'static Catalog {
     }
 }
 
-/// Rewrites superseded ISO 639 codes to the ones in use today.
+/// Puts a tag into the shape the platform expects: BCP-47 separators, and
+/// superseded ISO 639 codes rewritten to the ones in use today.
 ///
-/// Some systems still emit the pre-1989 codes — the JVM does, and so do older
-/// Unix locale settings. Windows does not know them: both `GetLocaleInfoEx`
-/// and `IsValidLocaleName` reject `iw`, so reading direction, date formatting
-/// and DirectWrite's script shaping would each fall back to a neutral default
-/// for a tag [`catalog_for`] translates perfectly well. Hebrew text would come
-/// out laid left to right.
+/// Both halves exist for the same reason. Windows locale lookups —
+/// `GetLocaleInfoEx`, `GetTimeFormatEx`, `IsValidLocaleName`, and the locale
+/// DirectWrite shapes with — accept only a well-formed BCP-47 tag. They reject
+/// the pre-1989 codes some systems still emit (the JVM does, and so do older
+/// Unix locale settings), and they reject the underscore that Unix locale
+/// names carry, `he_IL`. [`catalog_for`] is deliberately more forgiving than
+/// that: it splits on either separator, so it would happily hand back the
+/// Hebrew catalogue for a tag every platform call then fails on. The window
+/// would draw Hebrew labels left to right, with an empty DirectWrite locale
+/// and no localised dates.
 ///
 /// Canonicalising once, where the tag enters the program, keeps the catalogue
-/// and the platform looking at the same language. Only the primary subtag is
-/// touched, so `iw-IL` becomes `he-IL`.
+/// and the platform looking at the same language. Only the separator and the
+/// primary subtag are touched, so `IW_IL` becomes `he-IL` and casing is
+/// otherwise left alone — the platform matches case-insensitively.
 fn canonical_tag(tag: &str) -> String {
-    let end = tag.find(['-', '_']).unwrap_or(tag.len());
+    // Unix locale names also carry an encoding or a modifier (`he_IL.UTF-8`,
+    // `ca_ES@valencia`). Neither is part of a language tag.
+    let tag = tag
+        .split(['.', '@'])
+        .next()
+        .unwrap_or(tag)
+        .replace('_', "-");
+    let end = tag.find('-').unwrap_or(tag.len());
     let canonical = match tag[..end].to_ascii_lowercase().as_str() {
         "iw" => "he",
         "in" => "id",
         "ji" => "yi",
-        _ => return tag.to_string(),
+        _ => return tag,
     };
     format!("{canonical}{}", &tag[end..])
 }
@@ -1876,6 +1903,13 @@ impl Locale {
     }
 
     /// The bare amount without a direction word, and without the bidi bracket.
+    ///
+    /// The minute remainder carries its own unit. Leaving it bare reads well
+    /// enough in the languages this started out in — "2 hr 10" — but the unit
+    /// is not optional everywhere: Japanese, both Chinese catalogues, Korean,
+    /// Arabic and Hebrew all attach the following direction word straight to
+    /// the number, so a bare remainder produced "2 時間 10後" instead of
+    /// "2 時間 10 分後".
     fn duration_raw(&self, minutes: i64) -> String {
         let c = self.cat;
         let m = minutes.max(0);
@@ -1886,7 +1920,7 @@ impl Locale {
             if rest == 0 {
                 format!("{h} {}", c.unit_hour)
             } else {
-                format!("{h} {} {rest}", c.unit_hour)
+                format!("{h} {} {rest} {}", c.unit_hour, c.unit_min)
             }
         } else {
             format!("{} {}", m / (60 * 24), c.unit_day)
@@ -1996,7 +2030,7 @@ mod tests {
         let de = Locale::resolve("de-DE");
         assert_eq!(de.relative(0), "jetzt");
         assert_eq!(de.relative(25), "in 25 Min");
-        assert_eq!(de.relative(130), "in 2 Std 10");
+        assert_eq!(de.relative(130), "in 2 Std 10 Min");
         assert_eq!(de.relative(-5), "vor 5 Min");
         assert_eq!(de.time_left(32), "noch 32 Min");
 
@@ -2004,6 +2038,30 @@ mod tests {
         assert_eq!(en.relative(25), "in 25 min");
         assert_eq!(en.relative(-5), "5 min ago");
         assert_eq!(en.time_left(32), "32 min left");
+    }
+
+    #[test]
+    fn the_minute_remainder_keeps_its_unit() {
+        // The direction word attaches straight to the number in these
+        // languages, so a unit-less remainder ran the two together.
+        assert_eq!(Locale::resolve("ja-JP").relative(130), "2 時間 10 分後");
+        assert_eq!(Locale::resolve("ko-KR").time_left(130), "2 시간 10 분 남음");
+
+        // Every catalogue: an hours-plus-minutes distance must end in the
+        // minute unit, never in a bare digit.
+        for cat in CATALOGS {
+            let loc = Locale {
+                tag: cat.code.to_string(),
+                cat,
+                rtl: cat.rtl,
+            };
+            let body = loc.duration_raw(130);
+            assert!(
+                body.ends_with(cat.unit_min),
+                "{}: `{body}` drops the minute unit",
+                cat.code
+            );
+        }
     }
 
     #[test]
@@ -2354,13 +2412,23 @@ mod tests {
     }
 
     #[test]
+    fn sign_in_page_declares_its_reading_direction() {
+        assert_eq!(HE.html_attrs(), "lang=\"he\" dir=\"rtl\"");
+        assert_eq!(AR.html_attrs(), "lang=\"ar\" dir=\"rtl\"");
+        assert_eq!(EN.html_attrs(), "lang=\"en\" dir=\"ltr\"");
+        // The tag carries the subtag where the catalogue needs one.
+        assert_eq!(ZH_HANT.html_attrs(), "lang=\"zh-Hant\" dir=\"ltr\"");
+        assert_eq!(PT_BR.html_attrs(), "lang=\"pt-BR\" dir=\"ltr\"");
+    }
+
+    #[test]
     fn superseded_language_codes_are_rewritten() {
         assert_eq!(canonical_tag("iw"), "he");
         assert_eq!(canonical_tag("iw-IL"), "he-IL");
         assert_eq!(
             canonical_tag("IW_IL"),
-            "he_IL",
-            "separator is kept as given"
+            "he-IL",
+            "the platform only accepts the BCP-47 separator"
         );
         assert_eq!(canonical_tag("ji"), "yi");
         assert_eq!(canonical_tag("in-ID"), "id-ID");
@@ -2371,6 +2439,38 @@ mod tests {
         // `ind` starts with "in" but is a subtag in its own right, not the
         // superseded code: only a whole primary subtag is rewritten.
         assert_eq!(canonical_tag("ind"), "ind");
+    }
+
+    #[test]
+    fn unix_locale_names_are_reshaped_for_the_platform() {
+        // A `LANG` value, verbatim. The catalogue understands all three
+        // spellings; the platform understands only the last one.
+        assert_eq!(canonical_tag("he_IL.UTF-8"), "he-IL");
+        assert_eq!(canonical_tag("de_CH"), "de-CH");
+        assert_eq!(canonical_tag("ca_ES@valencia"), "ca-ES");
+        assert_eq!(canonical_tag("zh_TW"), "zh-TW");
+        // The encoding suffix is not a subtag even without a region.
+        assert_eq!(canonical_tag("ar.UTF-8"), "ar");
+    }
+
+    #[test]
+    fn underscore_separated_tags_still_read_right_to_left() {
+        // `catalog_for` splits on either separator, so `he_IL` has always
+        // selected the Hebrew catalogue. The platform's reading-direction
+        // lookup rejects the underscore, which used to leave right-to-left
+        // text in a left-to-right panel.
+        for tag in ["he_IL", "ar_SA", "he_IL.UTF-8"] {
+            let loc = Locale::resolve(tag);
+            assert!(loc.cat.rtl, "{tag} must select a right-to-left catalogue");
+            assert!(
+                loc.rtl,
+                "{tag}: layout direction must not contradict the catalogue"
+            );
+            assert!(
+                !loc.tag.contains('_'),
+                "{tag}: the platform must be handed a tag it accepts"
+            );
+        }
     }
 
     #[test]

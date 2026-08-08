@@ -313,14 +313,17 @@ fn io_err(e: std::io::Error) -> Error {
 }
 
 fn respond(stream: &mut std::net::TcpStream, title: &str, subtitle: &str) {
+    // Same catalogue the callers took `title` and `subtitle` from, so the
+    // reading direction cannot disagree with the text on the page.
+    let attrs = crate::i18n::global().html_attrs();
     let html = format!(
-        "<!doctype html><meta charset=\"utf-8\"><title>{title}</title>\
+        "<!doctype html><html {attrs}><meta charset=\"utf-8\"><title>{title}</title>\
          <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
          <body style=\"font-family:Segoe UI,system-ui,sans-serif;background:#1b1f24;\
          color:#e8edf3;display:flex;flex-direction:column;align-items:center;\
          justify-content:center;height:100vh;margin:0\">\
          <h2 style=\"font-weight:600\">{title}</h2>\
-         <p style=\"opacity:.65\">{subtitle}</p></body>"
+         <p style=\"opacity:.65\">{subtitle}</p></body></html>"
     );
     let response = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\
