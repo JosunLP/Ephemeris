@@ -77,19 +77,28 @@ impl Host for UnixHost {
     /// This is the one method whose portable fallback is actively unsafe: it
     /// returns zeros, and a PKCE verifier of zeros is no verifier at all.
     ///
-    /// A failure returns nothing rather than a short buffer of zeros, so the
-    /// sign-in fails at the authorisation server — visibly, and closed. A
-    /// verifier that is predictable would succeed, which is the outcome worth
-    /// avoiding.
+    /// A failure aborts, because there is no value this can return that is
+    /// safe. Returning fewer bytes — nothing at all, even — does not fail
+    /// closed: the callers base64-encode whatever comes back, so an empty
+    /// buffer yields an empty verifier and an empty `state`, and the callback
+    /// check compares that empty `state` against whatever the callback carries.
+    /// A caller with `state=` set to nothing then passes. Losing PKCE and the
+    /// CSRF check together, quietly, is worse than not starting: the sign-in
+    /// would appear to work. The Windows side asserts on `BCryptGenRandom` for
+    /// the same reason.
     fn random_bytes(&self, len: usize) -> Vec<u8> {
         let mut buf = vec![0u8; len];
         match std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut buf)) {
             Ok(()) => buf,
             Err(e) => {
+                // Logged before the abort: the panic message alone does not
+                // reach the log file.
                 log::error(&format!(
-                    "/dev/urandom is unreadable ({e}) — refusing to produce predictable bytes"
+                    "/dev/urandom is unreadable ({e}) — cannot generate a sign-in secret"
                 ));
-                Vec::new()
+                panic!(
+                    "/dev/urandom is unreadable ({e}) — refusing to continue without a secure random source"
+                );
             }
         }
     }

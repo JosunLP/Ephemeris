@@ -19,7 +19,7 @@
 //!   against, and something to compare against when the drawing is wrong.
 
 use std::io::{self, Write};
-use std::sync::mpsc::{SyncSender, sync_channel};
+use std::sync::mpsc::{RecvTimeoutError, SyncSender, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tpmplaner_core::config::{self, Config};
@@ -122,8 +122,22 @@ fn fetch(
             )?;
             break;
         }
-        if rx.recv_timeout(remaining).is_err() {
-            continue;
+        match rx.recv_timeout(remaining) {
+            Ok(()) => {}
+            // Nothing to do: the deadline is re-checked at the top.
+            Err(RecvTimeoutError::Timeout) => continue,
+            // The worker dropped its waker, so it has stopped — panicked, most
+            // likely, which is the case `sync::lock` recovers a poisoned mutex
+            // for. A disconnected channel returns *immediately*, so treating
+            // this as a timeout would spin a core flat out until the deadline
+            // and then blame a timeout that never happened.
+            Err(RecvTimeoutError::Disconnected) => {
+                writeln!(
+                    out,
+                    "  ! Sync stopped unexpectedly — showing what is cached."
+                )?;
+                break;
+            }
         }
         if !matches!(sync::lock(&shared).status, Status::Syncing) {
             break;

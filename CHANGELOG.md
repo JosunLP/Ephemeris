@@ -17,8 +17,11 @@ All notable changes to this project are documented here. The format follows
   convention and is created readable by its owner alone, a browser is opened
   through `open` or `xdg-open`, and random bytes come from `/dev/urandom` — the
   one method whose portable fallback was actively unsafe, since a PKCE verifier
-  of zeros is no verifier at all. A failure there now returns nothing, so the
-  sign-in fails visibly rather than predictably. Credential storage is not
+  of zeros is no verifier at all. A failure there aborts: there is no shorter
+  buffer that fails closed, because the callers encode whatever comes back, and
+  an empty `state` would be compared against a callback's empty `state` and
+  match. Losing PKCE and the CSRF check quietly is worse than not starting.
+  Credential storage is not
   implemented and says so plainly: the Keychain and the Secret Service are
   still to be written, and pretending to encrypt is worse than not encrypting.
 - `docs/development/porting.md`: what a front end has to provide, and the
@@ -42,6 +45,20 @@ All notable changes to this project are documented here. The format follows
   only the core crate, and runs the resulting binary in demo mode in two
   languages. "The core is portable" was a claim about a crate that compiles; it
   is now a claim about a program that runs.
+
+### Fixed
+
+- The agenda cache is replaced by rename rather than truncated and rewritten in
+  place, so nothing can read it half written. Two copies of the program can now
+  overlap — the Unix single-instance check is still a stub, and a timer firing
+  over a slow sync is enough — and the loser of that race used to leave a
+  truncated file behind. It parsed as no cache at all, which is safe but throws
+  away the day the cache exists to carry across a restart.
+- Waiting for the first sync no longer spins a core if the sync thread stops.
+  A dropped channel returns from `recv_timeout` immediately rather than
+  blocking, so treating it like a timeout meant looping flat out for the full
+  ninety seconds and then reporting a timeout that never happened. It now says
+  the sync stopped and prints what is cached.
 
 ## [1.0.2] - 2026-08-07
 

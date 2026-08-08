@@ -548,12 +548,32 @@ pub fn read_cache() -> Option<Agenda> {
     Some(agenda)
 }
 
+/// Replaces the cache in one step.
+///
+/// A plain write truncates first, so anything reading concurrently can catch
+/// the file half written — and nothing stops a second copy of the program from
+/// running: the Unix front end's single-instance check is still a stub. Writing
+/// beside the file and renaming over it means every reader sees one complete
+/// version or the other. `rename` replaces an existing file on POSIX and on
+/// Windows alike.
+///
+/// [`read_cache`] would survive the torn file — it treats unparseable JSON as
+/// no cache — but at the cost of the day's agenda, which is the thing the cache
+/// exists to keep across a restart.
+///
+/// The process id in the temporary name keeps two writers off the same scratch
+/// path.
 fn write_cache(agenda: &Agenda) {
     let path = config::cache_path();
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    if let Ok(json) = serde_json::to_string(agenda) {
-        let _ = std::fs::write(path, json);
+    let Ok(json) = serde_json::to_string(agenda) else {
+        return;
+    };
+    let tmp = path.with_extension(format!("tmp{}", std::process::id()));
+    if std::fs::write(&tmp, json).is_ok() && std::fs::rename(&tmp, &path).is_err() {
+        // Otherwise the scratch file piles up in the data directory.
+        let _ = std::fs::remove_file(&tmp);
     }
 }

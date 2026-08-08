@@ -45,11 +45,19 @@ pub fn install_host() {
 
 /// Always true for now.
 ///
-/// There is nothing to collide over yet: this front end prints once and exits.
-/// A second copy of a long-lived window would draw over the first and
-/// synchronise in parallel, so the real implementation is needed at the same
-/// time as the window — an abstract socket on Linux, a `flock` on a pid file
-/// where that is not available, and `NSRunningApplication` on macOS.
+/// Not quite "nothing to collide over": this front end prints once and exits,
+/// but two copies still share the agenda cache, and a timer firing over a slow
+/// sync is enough to overlap them. What that collision could corrupt —
+/// a half-written cache file — is prevented in `sync::write_cache` instead,
+/// which replaces the file by rename rather than truncating it in place. What
+/// remains is a duplicated fetch: wasteful, not harmful, and not worth a lock
+/// file for a program that exits in seconds.
+///
+/// A long-lived window is the case that does need this: a second one would
+/// draw over the first and synchronise in parallel. So the real implementation
+/// is due at the same time as the window — an abstract socket on Linux, a
+/// `flock` on a pid file where that is not available, and
+/// `NSRunningApplication` on macOS.
 pub fn acquire_single_instance() -> bool {
     true
 }
