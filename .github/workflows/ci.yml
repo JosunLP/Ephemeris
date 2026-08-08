@@ -79,9 +79,20 @@ jobs:
       # it usable as a smoke test. The output is checked rather than merely the
       # exit status: a front end that prints nothing at all would otherwise
       # pass.
+      #
+      # The locale is pinned for the same reason the second step pins one: the
+      # strings below are the English catalogue, and which catalogue the widget
+      # loads is decided by the runner's own environment. A runner image that
+      # exports a German or French locale would fail this step with nothing
+      # wrong in the product. All three variables, because
+      # `PortableLocale::user_default_tag` reads them in turn and moves on from
+      # any that is unset or "C".
       - name: Smoke test the Unix front end
         env:
           TPMPLANER_DEMO: "1"
+          LC_ALL: en_US.UTF-8
+          LC_TIME: en_US.UTF-8
+          LANG: en_US.UTF-8
         run: |
           cargo run --locked --quiet > agenda.txt
           cat agenda.txt
@@ -103,6 +114,7 @@ jobs:
         env:
           TPMPLANER_DEMO: "1"
           LC_ALL: fr_FR.UTF-8
+          LC_TIME: fr_FR.UTF-8
           LANG: fr_FR.UTF-8
         run: |
           cargo run --locked --quiet > agenda-fr.txt

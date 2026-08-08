@@ -141,10 +141,13 @@ impl Auth {
         let redirect_uri = format!("http://127.0.0.1:{port}");
 
         // PKCE protects the authorization code should another local process
-        // intercept it. Mandatory for loopback redirects.
-        let verifier = URL_SAFE_NO_PAD.encode(crate::host::host().random_bytes(48));
+        // intercept it. Mandatory for loopback redirects. Both secrets are
+        // taken before anything is sent: without a secure source there is no
+        // sign-in to attempt, and the request must not go out with a verifier
+        // and a `state` that protect nothing.
+        let verifier = URL_SAFE_NO_PAD.encode(secret(48)?);
         let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
-        let state = URL_SAFE_NO_PAD.encode(crate::host::host().random_bytes(16));
+        let state = URL_SAFE_NO_PAD.encode(secret(16)?);
 
         let url = format!(
             "{AUTH_ENDPOINT}?client_id={}&redirect_uri={}&response_type=code&scope={}\
@@ -289,6 +292,19 @@ fn wait_for_code(listener: TcpListener, expected_state: &str) -> Result<String> 
     }
 
     Err(Error::NeedsLogin(i18n::global().err_timeout.into()))
+}
+
+/// Random bytes for a sign-in secret, or the error that abandons the sign-in.
+///
+/// The host has already logged why it could not produce any; this only has to
+/// stop the flow. See [`crate::host::Host::random_bytes`] for why there is
+/// nothing to fall back to.
+fn secret(len: usize) -> Result<Vec<u8>> {
+    crate::host::host().random_bytes(len).ok_or_else(|| {
+        Error::Other(
+            "No secure random source available — the sign-in cannot be started safely.".into(),
+        )
+    })
 }
 
 fn respond(stream: &mut std::net::TcpStream, title: &str, subtitle: &str) {

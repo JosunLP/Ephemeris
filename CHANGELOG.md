@@ -15,15 +15,19 @@ All notable changes to this project are documented here. The format follows
   printed instead of drawn. `TPMPLANER_DEMO=1` works there too.
 - A `Host` for macOS and Linux. The data directory follows each platform's
   convention and is created readable by its owner alone, a browser is opened
-  through `open` or `xdg-open`, and random bytes come from `/dev/urandom` — the
-  one method whose portable fallback was actively unsafe, since a PKCE verifier
-  of zeros is no verifier at all. A failure there aborts: there is no shorter
-  buffer that fails closed, because the callers encode whatever comes back, and
-  an empty `state` would be compared against a callback's empty `state` and
-  match. Losing PKCE and the CSRF check quietly is worse than not starting.
-  Credential storage is not
-  implemented and says so plainly: the Keychain and the Secret Service are
-  still to be written, and pretending to encrypt is worse than not encrypting.
+  through `open` or `xdg-open`, and random bytes come from `/dev/urandom`.
+  Credential storage is not implemented and says so plainly: the Keychain and
+  the Secret Service are still to be written, and pretending to encrypt is
+  worse than not encrypting.
+- `Host::random_bytes` returns `Option`. It is the one method whose portable
+  fallback was actively unsafe — it returned zeros, and a PKCE verifier of
+  zeros is no verifier at all. There is no shorter buffer that fails closed
+  either, because the callers encode whatever comes back, and an empty `state`
+  would be compared against a callback's empty `state` and match. Refusing is
+  the only safe answer, and refusing in the return type means the sign-in
+  fails rather than the process: opening `/dev/urandom` has transient failure
+  modes — `EMFILE`, `ENFILE` — that say nothing about the randomness, and with
+  `panic = "abort"` a passing spike would have taken the whole widget down.
 - `docs/development/porting.md`: what a front end has to provide, and the
   decisions taken before the code that depends on them. No cross-platform
   toolkit, and why. macOS first, with the API for each piece named. On Linux,
@@ -59,6 +63,14 @@ All notable changes to this project are documented here. The format follows
   blocking, so treating it like a timeout meant looping flat out for the full
   ninety seconds and then reporting a timeout that never happened. It now says
   the sync stopped and prints what is cached.
+- Scratch files from the cache write are cleaned up whichever step failed, not
+  only a failed rename, and any an earlier run left behind are swept at
+  start-up. The name carries the writing process's id, so nothing later ever
+  reused one: a full disk, or a process killed between the write and the
+  rename, left one more file in the data directory on every restart.
+- The browser opener is reaped. Rust installs no `SIGCHLD` handler, so dropping
+  the `Child` detached the handle without collecting the process, and a front
+  end that runs for days accumulated one zombie per opened URL.
 
 ## [1.0.2] - 2026-08-07
 

@@ -17,6 +17,7 @@ use crate::provider::{
 };
 use chrono::{Duration as ChronoDuration, Local};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -218,6 +219,10 @@ pub fn spawn(shared: Arc<Mutex<Shared>>, waker: Arc<dyn Waker>) -> SyncHandle {
 }
 
 fn worker(shared: Arc<Mutex<Shared>>, waker: Arc<dyn Waker>, rx: Receiver<Command>) {
+    // Here rather than in `spawn`, so a directory listing never lands on the
+    // front end's thread. Once per process is enough: nothing but this thread
+    // writes the cache.
+    sweep_stale_cache_files();
     let mut providers = build_providers(&snapshot_config(&shared).effective_accounts());
     let mut meta: Option<Meta> = None;
     // Ride along with the sync run rather than opening a second connection.
@@ -572,8 +577,95 @@ fn write_cache(agenda: &Agenda) {
         return;
     };
     let tmp = path.with_extension(format!("tmp{}", std::process::id()));
-    if std::fs::write(&tmp, json).is_ok() && std::fs::rename(&tmp, &path).is_err() {
-        // Otherwise the scratch file piles up in the data directory.
+    // Cleaned up whichever step failed, not only a failed rename. `&&`
+    // short-circuits, so a write that failed part-way — a full disk is the
+    // ordinary cause, and it leaves the file behind — skipped the removal
+    // entirely. The name carries the process id, so those never get reused
+    // either: every restart on a full disk left one more behind for good.
+    let wrote = std::fs::write(&tmp, json).is_ok();
+    if !wrote || std::fs::rename(&tmp, &path).is_err() {
         let _ = std::fs::remove_file(&tmp);
+    }
+}
+
+/// Removes scratch files an earlier run left behind.
+///
+/// [`write_cache`] cleans up after itself, but it cannot clean up after a
+/// process that was killed between the write and the rename — and the name
+/// carries that process's id, so nothing later ever reclaims it. Called once at
+/// start-up, where the cost is one directory listing.
+///
+/// Only this program's own scratch names, and only in its own data directory.
+/// Another copy of the widget running right now would have its file swept from
+/// under it; that is why the sweep is at start-up rather than on every write,
+/// where the window would be wide open.
+fn sweep_stale_cache_files() {
+    for path in stale_tmp_files(&config::cache_path(), std::process::id()) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+/// Which scratch files beside `cache` are not this process's own.
+///
+/// Split from [`sweep_stale_cache_files`] so the matching can be tested against
+/// a directory of its own, without standing up a host to point
+/// [`config::cache_path`] somewhere safe. Deleting is the easy half; picking
+/// exactly the right files is the half worth a test.
+fn stale_tmp_files(cache: &Path, my_pid: u32) -> Vec<PathBuf> {
+    let (Some(dir), Some(stem)) = (cache.parent(), cache.file_stem()) else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let prefix = format!("{}.tmp", stem.to_string_lossy());
+    let mine = format!("{prefix}{my_pid}");
+    entries
+        .flatten()
+        .filter(|e| {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            // The suffix has to be a process id and nothing else, or a
+            // `cache.tmp.bak` somebody left in the folder counts as ours.
+            name.strip_prefix(&prefix)
+                .is_some_and(|pid| !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit()))
+                && name != mine.as_str()
+        })
+        .map(|e| e.path())
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_sweep_takes_stale_scratch_files_and_nothing_else() {
+        let dir = std::env::temp_dir().join("tpmplaner-test-sweep");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch directory");
+        let cache = dir.join("cache.json");
+
+        for name in [
+            "cache.json",     // the cache itself
+            "cache.tmp4242",  // another run's leftover — the one to take
+            "cache.tmp99",    // and another
+            "cache.tmp1234",  // ours, still being written
+            "cache.tmp",      // no process id at all
+            "cache.tmp.bak",  // not a scratch file
+            "cache.json.bak", // nor this
+            "config.json",    // and nothing else in the folder
+        ] {
+            std::fs::write(dir.join(name), "{}").expect("fixture");
+        }
+
+        let mut found: Vec<String> = stale_tmp_files(&cache, 1234)
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        found.sort();
+        assert_eq!(found, ["cache.tmp4242", "cache.tmp99"]);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -37,7 +37,17 @@ pub trait Host: Send + Sync {
 
     /// Cryptographically secure random bytes, for PKCE verifiers and OAuth
     /// state values.
-    fn random_bytes(&self, len: usize) -> Vec<u8>;
+    ///
+    /// `None` when the platform has no secure source to hand, and the caller
+    /// must then abandon whatever it was about to secure. There is no safe
+    /// substitute to return: the callers base64-encode what comes back, so
+    /// fewer bytes — none at all, even — does not fail closed. An empty buffer
+    /// yields an empty verifier and an empty `state`, and the callback check
+    /// compares that empty `state` against whatever the callback carries, so a
+    /// request with `state=` set to nothing passes. Losing PKCE and the CSRF
+    /// check together, quietly, while the sign-in appears to work, is the one
+    /// outcome worth refusing outright.
+    fn random_bytes(&self, len: usize) -> Option<Vec<u8>>;
 }
 
 /// Locale-aware date and time formatting.
@@ -164,10 +174,12 @@ impl Host for PortableHost {
         Some(cipher.to_vec())
     }
 
-    fn random_bytes(&self, len: usize) -> Vec<u8> {
-        // Not a cryptographic source. A host that never installs a real one
-        // would be unsafe, so this refuses quietly rather than pretending.
-        vec![0u8; len]
+    fn random_bytes(&self, _len: usize) -> Option<Vec<u8>> {
+        // There is no portable secure source, so this refuses rather than
+        // pretending. It used to return a buffer of zeros, which is a refusal
+        // only if every caller checks — and the callers encode what they are
+        // given.
+        None
     }
 }
 

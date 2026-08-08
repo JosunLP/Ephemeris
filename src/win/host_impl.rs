@@ -46,7 +46,7 @@ impl Host for WindowsHost {
         crate::win::secure::unprotect(cipher, tag)
     }
 
-    fn random_bytes(&self, len: usize) -> Vec<u8> {
+    fn random_bytes(&self, len: usize) -> Option<Vec<u8>> {
         crate::win::secure::random_bytes(len)
     }
 }

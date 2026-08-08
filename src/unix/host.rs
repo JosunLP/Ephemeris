@@ -41,17 +41,41 @@ impl Host for UnixHost {
         } else {
             "xdg-open"
         };
-        // Detached and silent: the browser's own diagnostics are not ours to
-        // print, and waiting for it would block the caller for as long as the
-        // browser lives.
+        // Silent: the browser's own diagnostics are not ours to print. And not
+        // waited for here, because that would block the caller for as long as
+        // the browser lives.
         let spawned = Command::new(opener)
             .arg(url)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn();
-        if let Err(e) = spawned {
-            log::warn(&format!("Could not run {opener}: {e}"));
+        match spawned {
+            // Dropping a `Child` detaches the handle but does not reap the
+            // process — Rust installs no `SIGCHLD` handler — so once the
+            // opener exited it stayed in the process table as a zombie with
+            // nothing left to collect it. That is nothing in a one-shot tool
+            // and an accumulating leak in a window front end that lives for
+            // days and spawns one of these per event click.
+            //
+            // A thread per opener rather than a `waitpid` loop somewhere
+            // central: it costs one short-lived thread, it is the only place
+            // that knows a child exists, and it keeps the caller unblocked,
+            // which was the point of not waiting in the first place.
+            Ok(mut child) => {
+                let opener = opener.to_owned();
+                let reaper = std::thread::Builder::new()
+                    .name("tpmplaner-opener".into())
+                    .spawn(move || {
+                        if let Err(e) = child.wait() {
+                            log::warn(&format!("Could not wait for {opener}: {e}"));
+                        }
+                    });
+                if let Err(e) = reaper {
+                    log::warn(&format!("Could not start the reaper thread: {e}"));
+                }
+            }
+            Err(e) => log::warn(&format!("Could not run {opener}: {e}")),
         }
     }
 
@@ -74,31 +98,25 @@ impl Host for UnixHost {
 
     /// Cryptographically secure random bytes from `/dev/urandom`.
     ///
-    /// This is the one method whose portable fallback is actively unsafe: it
-    /// returns zeros, and a PKCE verifier of zeros is no verifier at all.
-    ///
-    /// A failure aborts, because there is no value this can return that is
-    /// safe. Returning fewer bytes — nothing at all, even — does not fail
-    /// closed: the callers base64-encode whatever comes back, so an empty
-    /// buffer yields an empty verifier and an empty `state`, and the callback
-    /// check compares that empty `state` against whatever the callback carries.
-    /// A caller with `state=` set to nothing then passes. Losing PKCE and the
-    /// CSRF check together, quietly, is worse than not starting: the sign-in
-    /// would appear to work. The Windows side asserts on `BCryptGenRandom` for
-    /// the same reason.
-    fn random_bytes(&self, len: usize) -> Vec<u8> {
+    /// `None` on failure, which fails the sign-in and leaves the rest of the
+    /// widget running. This used to abort. The reasoning was right — there is
+    /// no value it could return that is safe, see [`Host::random_bytes`] — but
+    /// the conclusion was not: opening a file has transient failure modes that
+    /// have nothing to do with the randomness. `EMFILE` and `ENFILE` mean the
+    /// process or the machine is briefly out of descriptors, and with
+    /// `panic = "abort"` set for release, a passing spike took the whole widget
+    /// down instead of one sign-in that can simply be tried again. The Windows
+    /// side is not the same case: `BCryptGenRandom` needs no descriptor and has
+    /// no such failure mode.
+    fn random_bytes(&self, len: usize) -> Option<Vec<u8>> {
         let mut buf = vec![0u8; len];
         match std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut buf)) {
-            Ok(()) => buf,
+            Ok(()) => Some(buf),
             Err(e) => {
-                // Logged before the abort: the panic message alone does not
-                // reach the log file.
                 log::error(&format!(
                     "/dev/urandom is unreadable ({e}) — cannot generate a sign-in secret"
                 ));
-                panic!(
-                    "/dev/urandom is unreadable ({e}) — refusing to continue without a secure random source"
-                );
+                None
             }
         }
     }
