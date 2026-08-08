@@ -53,6 +53,29 @@ All notable changes to this project are documented here. The format follows
   handed the metrics the window used, and the shadow is skipped when there is
   no margin to draw it in — twelve rectangles that cannot grow outwards are not
   a soft edge but twelve coats of black over the panel.
+- A named theme file is watched alongside `config.json`. Editing
+  `midnight.theme.json` is the advertised way to use `"appearance": "midnight"`,
+  and only the settings file was checked for changes — so the edit did nothing
+  until `config.json` happened to be written for some unrelated reason.
+- A colour no longer rebuilds the renderer. Only the half of a customisation
+  that is fixed at construction — the font family, weight and size offset, the
+  density and the surface style — needs the Direct3D and Direct2D pipeline torn
+  down and the window resized. Colours are uploaded per frame, so nudging
+  `colors.now` in a theme file repaints instead of flickering the whole panel on
+  every save.
+- A contrast theme ignores the surface style in the window geometry, not only in
+  the palette. `"surface": "borderless"` dropped the shadow margin from the
+  window while the palette — which returns before it reaches the surface under
+  contrast — still drew the shadow and the border into it.
+- The note explaining that a panel colour crossed into the other appearance
+  named the wrong theme. It read the theme after switching to it, so a near-white
+  panel under the dark theme reported itself "lighter than the light theme
+  expects", which is the opposite of what happened.
+- Corrections are logged when the system contrast or theme changes, instead of
+  being suppressed as repetition. They are not repetition: whether custom
+  colours are ignored at all depends on contrast, and what has to be corrected
+  to stay readable depends on the background — so the note saying the custom
+  colours are being ignored was the one going missing.
 
 ## [1.0.2] - 2026-08-07
 

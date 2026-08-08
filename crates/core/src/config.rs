@@ -8,7 +8,23 @@
 
 use crate::theme::Appearance;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// Reads a settings file, minus the byte order mark several Windows editors
+/// add.
+///
+/// Windows PowerShell with `-Encoding UTF8` is one of them. JSON has no concept
+/// of a BOM, and without trimming it the parse fails on an invisible first
+/// character, with an error message nobody can act on. The settings and the
+/// theme files both come through here, so that tolerance cannot drift between
+/// them.
+///
+/// `None` means there is no file — the ordinary case at first start, and for a
+/// theme that was never written.
+fn read_json_text(path: &Path) -> Option<String> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    Some(raw.trim_start_matches('\u{feff}').to_string())
+}
 
 /// How `appearance` is written in `config.json`.
 ///
@@ -48,19 +64,14 @@ impl AppearanceRef {
     /// malformed falls back to the system look, and says so rather than
     /// looking like a setting that had no effect.
     pub fn resolve(&self) -> (Appearance, Vec<String>) {
-        let name = match self {
-            AppearanceRef::Inline(custom) => return ((**custom).clone(), Vec::new()),
-            AppearanceRef::Named(name) => name.trim(),
-        };
-        if name.is_empty()
-            || name.eq_ignore_ascii_case("system")
-            || name.eq_ignore_ascii_case("none")
-        {
-            return (Appearance::default(), Vec::new());
+        if let AppearanceRef::Inline(custom) = self {
+            return ((**custom).clone(), Vec::new());
         }
-
-        let path = theme_path(name);
-        let Ok(raw) = std::fs::read_to_string(&path) else {
+        // No name, or a name meaning "nothing customised".
+        let Some(path) = self.file() else {
+            return (Appearance::default(), Vec::new());
+        };
+        let Some(raw) = read_json_text(&path) else {
             return (
                 Appearance::default(),
                 vec![format!(
@@ -69,9 +80,7 @@ impl AppearanceRef {
                 )],
             );
         };
-        // Same byte order mark tolerance as the settings file: several Windows
-        // editors add one, and JSON has no concept of it.
-        match serde_json::from_str::<Appearance>(raw.trim_start_matches('\u{feff}')) {
+        match serde_json::from_str::<Appearance>(&raw) {
             Ok(custom) => (custom, Vec::new()),
             Err(e) => (
                 Appearance::default(),
@@ -82,6 +91,27 @@ impl AppearanceRef {
                 )],
             ),
         }
+    }
+
+    /// The theme file this points at, if it points at one.
+    ///
+    /// `None` for an inline block and for the names that mean "nothing
+    /// customised": there is no separate file to read — nor, which is the other
+    /// caller, to watch for changes. A named theme is a file of its own, and
+    /// editing it is the whole point of having one, so the widget has to notice
+    /// when it moves.
+    pub fn file(&self) -> Option<PathBuf> {
+        let AppearanceRef::Named(name) = self else {
+            return None;
+        };
+        let name = name.trim();
+        if name.is_empty()
+            || name.eq_ignore_ascii_case("system")
+            || name.eq_ignore_ascii_case("none")
+        {
+            return None;
+        }
+        Some(theme_path(name))
     }
 }
 
@@ -192,17 +222,12 @@ impl Config {
     /// the status line.
     pub fn load() -> (Self, Option<String>) {
         let path = config_path();
-        let Ok(raw) = std::fs::read_to_string(&path) else {
+        let Some(raw) = read_json_text(&path) else {
             // No file yet, which is the normal case at first start.
             return (Self::default(), None);
         };
-        // Many Windows editors — Windows PowerShell with `-Encoding UTF8`
-        // among them — put a byte order mark in front of the file. JSON has no
-        // concept of a BOM, and without trimming it the parse fails on an
-        // invisible first character, with an error message nobody can act on.
-        let raw = raw.trim_start_matches('\u{feff}');
 
-        match serde_json::from_str::<Config>(raw) {
+        match serde_json::from_str::<Config>(&raw) {
             Ok(cfg) => (cfg.sanitized(), None),
             Err(e) => (
                 Self::default(),
@@ -397,5 +422,32 @@ mod tests {
         assert_eq!(cfg.scale, 3.0);
         assert_eq!(cfg.opacity, 0.15);
         assert_eq!(cfg.appearance.resolve().0.font_size_offset(), 8.0);
+    }
+
+    /// Only a named theme has a file, and only a file can be watched.
+    ///
+    /// The widget re-reads its settings when `config.json` changes; a named
+    /// theme lives elsewhere, so its path has to be watched as well or editing
+    /// it — the advertised way to use one — does nothing until `config.json`
+    /// is written for some unrelated reason.
+    #[test]
+    fn a_named_theme_names_a_file_to_watch() {
+        assert_eq!(
+            AppearanceRef::Named("midnight".into()).file(),
+            Some(theme_path("midnight"))
+        );
+        // Nothing customised: no second file involved.
+        for none in ["system", "none", "", "  "] {
+            assert_eq!(
+                AppearanceRef::Named(none.into()).file(),
+                None,
+                "{none:?} names no file"
+            );
+        }
+        assert_eq!(
+            AppearanceRef::Inline(Box::new(Appearance::default())).file(),
+            None,
+            "an inline block is already in config.json"
+        );
     }
 }

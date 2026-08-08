@@ -309,8 +309,47 @@ impl Default for Appearance {
 }
 
 impl Appearance {
+    /// Do these two differ in anything the renderer fixes at construction?
+    ///
+    /// The split matters because the two answers cost very different things.
+    /// The font family, the header weight, the size offset, the density and the
+    /// surface style are baked into the DirectWrite text formats and into
+    /// [`Metrics`], neither of which can be changed afterwards, so a change
+    /// there means building the renderer again — tearing down the Direct3D and
+    /// Direct2D pipeline and resizing the window. Colours are uploaded per
+    /// frame and only need `set_palette`.
+    ///
+    /// Comparing whole `Appearance` values instead would rebuild everything for
+    /// a one-character edit to a colour, which is the common case: someone
+    /// nudging `colors.now` in a theme file sees the widget flicker on every
+    /// save.
+    pub fn layout_differs(&self, other: &Self) -> bool {
+        self.surface != other.surface
+            || self.density != other.density
+            || self.font_family != other.font_family
+            || self.header_weight != other.header_weight
+            || (self.font_size_offset() - other.font_size_offset()).abs() > f32::EPSILON
+    }
+
     pub fn surface(&self) -> Surface {
         Surface::parse(&self.surface)
+    }
+
+    /// The surface style actually in force.
+    ///
+    /// A contrast theme keeps its own flatness — that is the point of it — so
+    /// [`Palette::customize`] returns before it ever reaches `apply_surface`,
+    /// and the palette stays on [`Surface::System`]. `Metrics` has to make the
+    /// same call or the window is sized for one surface while the palette draws
+    /// another: a contrast theme with `"surface": "borderless"` would drop the
+    /// shadow margin from the geometry while the palette still drew the shadow
+    /// and the border into it.
+    pub fn effective_surface(&self, high_contrast: bool) -> Surface {
+        if high_contrast {
+            Surface::System
+        } else {
+            self.surface()
+        }
     }
 
     pub fn density(&self) -> Density {
@@ -512,12 +551,16 @@ impl Palette {
         // to ask for, and it has to remain usable.
         let now_dark = l < 0.5;
         if now_dark != self.dark {
+            // Read before `follow_panel_lightness`, which is what changes it.
+            // Naming the theme afterwards names the one being switched *to*,
+            // and the message then contradicts itself.
+            let was_dark = self.dark;
             self.follow_panel_lightness(now_dark);
             notes.push(format!(
                 "The panel colour #{base:06X} is {} than the {} theme expects, so the text, \
                  separators and edges were taken from the other one.",
                 if now_dark { "darker" } else { "lighter" },
-                if self.dark { "dark" } else { "light" },
+                if was_dark { "dark" } else { "light" },
             ));
         }
     }
@@ -1092,9 +1135,20 @@ impl Metrics {
     /// Density and the font size offset apply even under a contrast theme.
     /// They are not part of the bargain a contrast theme strikes — nothing
     /// about more room or larger text works against contrast — and somebody
-    /// who needs one very often needs the other.
-    pub fn resolve(scale: f32, backdrop_leaves_room: bool, custom: &Appearance) -> Self {
-        let mut m = Self::with_shadow(scale, backdrop_leaves_room && custom.surface().has_shadow());
+    /// who needs one very often needs the other. The surface style is the part
+    /// that does not survive it, which is why `high_contrast` is needed here
+    /// and not only in [`Palette::customize`]: see
+    /// [`Appearance::effective_surface`].
+    pub fn resolve(
+        scale: f32,
+        backdrop_leaves_room: bool,
+        custom: &Appearance,
+        high_contrast: bool,
+    ) -> Self {
+        let mut m = Self::with_shadow(
+            scale,
+            backdrop_leaves_room && custom.effective_surface(high_contrast).has_shadow(),
+        );
 
         // A font offset is not just a bigger glyph. Every box that holds text
         // has to grow with it or the text is clipped in a container that did
@@ -1264,7 +1318,7 @@ mod tests {
             assert_eq!(customised.border_outer_alpha, base.border_outer_alpha);
         }
 
-        let metrics = Metrics::resolve(1.0, true, &custom);
+        let metrics = Metrics::resolve(1.0, true, &custom, false);
         let plain = Metrics::new(1.0);
         assert_eq!(metrics.pad, plain.pad);
         assert_eq!(metrics.event_row_h, plain.event_row_h);
@@ -1320,6 +1374,7 @@ mod tests {
                 font_size_offset: 2.0,
                 ..Appearance::default()
             },
+            false,
         );
         assert!(roomy.pad > Metrics::new(1.0).pad);
         assert!(roomy.fs_row > Metrics::new(1.0).fs_row);
@@ -1378,6 +1433,15 @@ mod tests {
             "a white separator on light glass is invisible"
         );
         assert!(!notes.is_empty(), "such a swap has to be explained");
+        // The note names the theme that was active, not the one being switched
+        // to. Reading `self.dark` after the switch made this say "lighter than
+        // the light theme expects", which is self-contradictory and tells the
+        // reader the opposite of what happened.
+        let note = notes.join(" ");
+        assert!(
+            note.contains("lighter than the dark theme expects"),
+            "the note names the wrong theme: {note}"
+        );
     }
 
     /// The settings file must not be able to produce invisible text.
@@ -1484,7 +1548,8 @@ mod tests {
                 &Appearance {
                     surface: "flat".into(),
                     ..Appearance::default()
-                }
+                },
+                false,
             )
             .shadow,
             0.0
@@ -1497,7 +1562,8 @@ mod tests {
                 &Appearance {
                     surface: "aero".into(),
                     ..Appearance::default()
-                }
+                },
+                false,
             )
             .shadow
                 > 0.0
@@ -1509,12 +1575,107 @@ mod tests {
                 &Appearance {
                     surface: "aero".into(),
                     ..Appearance::default()
-                }
+                },
+                false,
             )
             .shadow,
             0.0,
             "the acrylic backdrop fills the whole window rectangle"
         );
+    }
+
+    /// The geometry and the palette have to agree about the surface.
+    ///
+    /// `customize` returns before `apply_surface` under a contrast theme, so
+    /// the palette keeps the shadow. If the metrics still honoured
+    /// `borderless`, the window would be sized without the margin the palette
+    /// then drew the shadow and the border into.
+    #[test]
+    fn a_contrast_theme_ignores_the_surface_style_in_the_metrics_too() {
+        let borderless = Appearance {
+            surface: "borderless".into(),
+            ..Appearance::default()
+        };
+        assert_eq!(
+            Metrics::resolve(1.0, true, &borderless, false).shadow,
+            0.0,
+            "borderless reserves no margin when it is honoured"
+        );
+        assert_eq!(
+            Metrics::resolve(1.0, true, &borderless, true).shadow,
+            Metrics::new(1.0).shadow,
+            "under contrast the surface style is ignored, as it is in the palette"
+        );
+
+        // The same question, asked of the palette: it never reaches
+        // `apply_surface`, so the border stays.
+        let mut palette = Palette::resolve(
+            ThemePref::Contrast,
+            "system",
+            SystemVisuals {
+                high_contrast: true,
+                ..SystemVisuals::default()
+            },
+        );
+        let before = palette.border_outer_alpha;
+        let _ = palette.customize(&borderless);
+        assert_eq!(
+            palette.border_outer_alpha, before,
+            "a contrast theme keeps its border"
+        );
+    }
+
+    /// Colours are uploaded per frame; typography and the surface are not.
+    #[test]
+    fn only_the_baked_in_half_of_a_customisation_forces_a_rebuild() {
+        let base = Appearance::default();
+
+        let recoloured = Appearance {
+            colors: Colors {
+                panel: "#101820".into(),
+                ..Colors::default()
+            },
+            ..Appearance::default()
+        };
+        assert_ne!(recoloured, base, "the value really did change");
+        assert!(
+            !base.layout_differs(&recoloured),
+            "a colour must not tear down the renderer"
+        );
+
+        let mut per_calendar = Appearance::default();
+        per_calendar
+            .calendar_colors
+            .insert("work".into(), "#ff8800".into());
+        assert!(!base.layout_differs(&per_calendar));
+
+        for changed in [
+            Appearance {
+                surface: "flat".into(),
+                ..Appearance::default()
+            },
+            Appearance {
+                density: "roomy".into(),
+                ..Appearance::default()
+            },
+            Appearance {
+                font_family: "Segoe UI".into(),
+                ..Appearance::default()
+            },
+            Appearance {
+                header_weight: "bold".into(),
+                ..Appearance::default()
+            },
+            Appearance {
+                font_size_offset: 2.0,
+                ..Appearance::default()
+            },
+        ] {
+            assert!(
+                base.layout_differs(&changed),
+                "{changed:?} is baked in at construction"
+            );
+        }
     }
 
     /// A bigger font in a box that did not grow is a clipped label.
@@ -1528,6 +1689,7 @@ mod tests {
                 font_size_offset: 3.0,
                 ..Appearance::default()
             },
+            false,
         );
 
         assert_eq!(bigger.fs_row, plain.fs_row + 3.0);
@@ -1544,6 +1706,7 @@ mod tests {
                 font_size_offset: 3.0,
                 ..Appearance::default()
             },
+            false,
         );
         assert_eq!(at_two.fs_row, Metrics::new(2.0).fs_row + 6.0);
 
@@ -1555,6 +1718,7 @@ mod tests {
                 font_size_offset: -3.0,
                 ..Appearance::default()
             },
+            false,
         );
         assert!(tiny.fs_footer >= 6.0, "{}", tiny.fs_footer);
         assert!(tiny.fs_section >= 6.0, "{}", tiny.fs_section);
@@ -1570,6 +1734,7 @@ mod tests {
                 density: "compact".into(),
                 ..Appearance::default()
             },
+            false,
         );
         let roomy = Metrics::resolve(
             1.0,
@@ -1578,6 +1743,7 @@ mod tests {
                 density: "roomy".into(),
                 ..Appearance::default()
             },
+            false,
         );
 
         assert!(compact.pad < plain.pad && plain.pad < roomy.pad);
