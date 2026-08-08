@@ -8,6 +8,31 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Fifteen more interface languages: Portuguese (European and Brazilian), Dutch,
+  Swedish, Polish, Czech, Turkish, Russian, Ukrainian, Japanese, Simplified and
+  Traditional Chinese, Korean, Arabic and Hebrew. Twenty catalogues in total.
+  Dates, times and reading direction came from the operating system already, so
+  an unlisted locale was never broken — but the labels a user actually reads
+  were English, and a permanent strip of English in an otherwise localised
+  desktop is exactly the friction this widget exists to avoid.
+- Arabic and Hebrew are the first catalogues with `rtl` set, so the layout
+  mirroring that `ar-SA` has always produced now agrees with the text inside
+  it. The bidi isolation brackets that keep "32 min left" from rearranging
+  itself are applied only while the labels are still Latin, which is what they
+  were written for and what a Persian or Urdu locale still gets.
+- Superseded ISO 639 codes are rewritten before the tag reaches the platform:
+  `iw` becomes `he`, `in` becomes `id`, `ji` becomes `yi`. The catalogue could
+  always read the old codes, but Windows cannot — it rejects `iw` outright —
+  so reading direction, date formatting and DirectWrite's script shaping each
+  fell back to a neutral default, and Hebrew came out laid left to right.
+- Counted messages carry their language's plural rule. English gets by with a
+  comparison against one; Russian needs three forms and has to look at the last
+  two digits, Polish draws the same boundaries differently, Arabic has six
+  categories and Hebrew a dual, while Chinese, Japanese, Korean and Turkish
+  leave the noun alone entirely. The rule and its forms are one choice in the
+  catalogue rather than two that can drift apart, and the forms for one and two
+  may spell the numeral out — "تعارض واحد" reads better than "1 تعارض".
+
 - `appearance` in `config.json`: customisation on top of what the system
   decides. Colours beyond the accent — panel, text, muted text, separator, and
   the semantic `now`, `overdue` and `conflict` — plus a font family, a size
@@ -45,6 +70,14 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- Text was laid out as though it were German whatever the language: the
+  renderer passed a hard-coded `de-DE` to DirectWrite. That name is what
+  selects between the Han glyph shapes a single code point has in Japanese,
+  Simplified and Traditional Chinese, and it decides where a line may break, so
+  the new CJK catalogues would have been drawn legibly and visibly wrong. The
+  configured locale is used now, validated first so a typo in `config.json`
+  cannot stop the widget from starting, and a change of language rebuilds the
+  text formats the same way a change of scale does.
 - With `"backdrop": "acrylic"` the panel was drawn inset by the drop shadow's
   margin inside a window that had deliberately not reserved one, losing 14
   device independent pixels on each side. The renderer derived its own metrics
@@ -76,6 +109,19 @@ All notable changes to this project are documented here. The format follows
   colours are ignored at all depends on contrast, and what has to be corrected
   to stay readable depends on the background — so the note saying the custom
   colours are being ignored was the one going missing.
+
+### Internal
+
+- The consistency checks are driven by the list of shipped catalogues instead
+  of a list written out in the test, so a language cannot be added without
+  being checked. They walk every field through a destructuring that fails to
+  compile if a field is added and not listed, and they enforce a width budget
+  for the labels that sit in a fixed column — a translation that is correct but
+  too long arrives on screen as an ellipsis. The budget counts East Asian and
+  Hangul characters as two columns, because they are drawn that way.
+- `CONTRIBUTING.md` says what a translation pull request is expected to
+  contain: who checked the text, the plural variant the language actually uses,
+  and strings that fit.
 
 ## [1.0.2] - 2026-08-07
 

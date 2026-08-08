@@ -264,6 +264,7 @@ fn wait_for_code(listener: TcpListener, expected_state: &str) -> Result<String> 
         if let Some(err) = error {
             respond(
                 &mut stream,
+                cat,
                 cat.auth_cancelled_title,
                 cat.auth_connected_body,
             );
@@ -274,30 +275,36 @@ fn wait_for_code(listener: TcpListener, expected_state: &str) -> Result<String> 
             // State check against cross-site request forgery: only our own
             // request counts.
             if state.as_deref() != Some(expected_state) {
-                respond(&mut stream, cat.auth_cancelled_title, cat.auth_waiting);
+                respond(&mut stream, cat, cat.auth_cancelled_title, cat.auth_waiting);
                 return Err(Error::NeedsLogin("OAuth state mismatch".into()));
             }
             respond(
                 &mut stream,
+                cat,
                 cat.auth_connected_title,
                 cat.auth_connected_body,
             );
             return Ok(code);
         }
         // Background noise such as a favicon request.
-        respond(&mut stream, "TPMPlaner", cat.auth_waiting);
+        respond(&mut stream, cat, "TPMPlaner", cat.auth_waiting);
     }
 
     Err(Error::NeedsLogin(i18n::global().err_timeout.into()))
 }
 
-fn respond(stream: &mut std::net::TcpStream, title: &str, subtitle: &str) {
+fn respond(stream: &mut std::net::TcpStream, cat: &i18n::Catalog, title: &str, subtitle: &str) {
+    // The catalogue is the caller's, not the global one read afresh: the
+    // callback can be waited on for minutes, and a language switched in
+    // the meantime would put `lang`/`dir` from one catalogue on a page
+    // whose text came from another.
+    let attrs = cat.html_attrs();
     let html = format!(
-        "<!doctype html><meta charset=\"utf-8\"><title>{title}</title>\
+        "<!doctype html><html {attrs}><meta charset=\"utf-8\"><title>{title}</title>\
          <body style=\"font-family:Segoe UI,sans-serif;background:#1b1f24;color:#e8edf3;\
          display:flex;flex-direction:column;align-items:center;justify-content:center;\
          height:100vh;margin:0\"><h2 style=\"font-weight:600\">{title}</h2>\
-         <p style=\"opacity:.65\">{subtitle}</p></body>"
+         <p style=\"opacity:.65\">{subtitle}</p></body></html>"
     );
     let response = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\
