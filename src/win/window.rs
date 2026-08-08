@@ -1031,10 +1031,12 @@ fn copy_agenda(st: &mut State) {
     }
     drop(guard);
 
-    if platform::set_clipboard_text(&out) {
-        log::info("Agenda in die Zwischenablage kopiert");
-    } else {
-        log::warn("Clipboard is not available");
+    // The widget's own window owns the clipboard: with a null handle
+    // `EmptyClipboard` leaves no owner and `SetClipboardData` is documented to
+    // fail. `set_clipboard_text` has already logged which step failed and what
+    // Windows called it.
+    if platform::set_clipboard_text(st.hwnd, &out) {
+        log::info("Agenda copied to the clipboard");
     }
 }
 

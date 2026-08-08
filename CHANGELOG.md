@@ -126,6 +126,18 @@ All notable changes to this project are documented here. The format follows
 - The browser opener is reaped. Rust installs no `SIGCHLD` handler, so dropping
   the `Child` detached the handle without collecting the process, and a front
   end that runs for days accumulated one zombie per opened URL.
+- "Copy agenda" could do nothing at all, silently. Three separate things were
+  wrong with one call. The clipboard was opened with a null window handle,
+  which `EmptyClipboard` is documented to turn into a null owner and that is
+  documented to make `SetClipboardData` fail — the widget's own window owns it
+  now. `OpenClipboard` does not wait its turn but fails outright, and another
+  application holding the clipboard for a few milliseconds while it copies
+  something is ordinary, so it is retried for 200 ms. And all five Win32 calls
+  folded into one `false` with nothing logged, which is why the cause could
+  only be guessed at: each now says which step failed and what Windows called
+  it. The round-trip test creates a real message-only window rather than
+  passing null, so it exercises the path the widget takes instead of the one
+  that was wrong.
 - Text was laid out as though it were German whatever the language: the
   renderer passed a hard-coded `de-DE` to DirectWrite. That name is what
   selects between the Han glyph shapes a single code point has in Japanese,
