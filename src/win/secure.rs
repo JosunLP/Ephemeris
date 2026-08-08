@@ -7,6 +7,7 @@
 //! Windows user account: another user of the same machine cannot read it, and
 //! copying the file to a different machine makes it worthless.
 
+use tpmplaner_core::log;
 use windows::Win32::Foundation::{HLOCAL, LocalFree};
 use windows::Win32::Security::Cryptography::{
     BCRYPT_USE_SYSTEM_PREFERRED_RNG, BCryptGenRandom, CRYPT_INTEGER_BLOB, CryptProtectData,
@@ -78,11 +79,15 @@ pub fn unprotect(cipher: &[u8], tag: &[u8]) -> Option<Vec<u8>> {
 /// Cryptographically secure random bytes for PKCE verifiers and OAuth state.
 ///
 /// Uses the system generator directly rather than carrying an RNG crate.
-pub fn random_bytes(len: usize) -> Vec<u8> {
+/// `None` rather than a short or zeroed buffer on failure — see
+/// [`tpmplaner_core::host::Host::random_bytes`] for why there is nothing safe
+/// to substitute.
+pub fn random_bytes(len: usize) -> Option<Vec<u8>> {
     let mut buf = vec![0u8; len];
-    unsafe {
-        let status = BCryptGenRandom(None, &mut buf, BCRYPT_USE_SYSTEM_PREFERRED_RNG);
-        assert!(status.is_ok(), "BCryptGenRandom failed");
+    let status = unsafe { BCryptGenRandom(None, &mut buf, BCRYPT_USE_SYSTEM_PREFERRED_RNG) };
+    if status.is_err() {
+        log::error(&format!("BCryptGenRandom failed: {status:?}"));
+        return None;
     }
-    buf
+    Some(buf)
 }

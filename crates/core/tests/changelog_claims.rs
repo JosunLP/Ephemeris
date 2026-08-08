@@ -30,7 +30,7 @@ impl Host for TempHost {
     fn unprotect(&self, cipher: &[u8], tag: &[u8]) -> Option<Vec<u8>> {
         PortableHost.unprotect(cipher, tag)
     }
-    fn random_bytes(&self, len: usize) -> Vec<u8> {
+    fn random_bytes(&self, len: usize) -> Option<Vec<u8>> {
         PortableHost.random_bytes(len)
     }
 }

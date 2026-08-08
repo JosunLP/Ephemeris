@@ -8,6 +8,33 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- The binary builds and runs on macOS and Linux. Not the widget — the window
+  that sits below every other window and above the desktop has not been written
+  for those platforms yet — but the whole portable half: settings, locale,
+  accounts, the same sync thread the Windows front end drives, and the agenda
+  printed instead of drawn. `TPMPLANER_DEMO=1` works there too.
+- A `Host` for macOS and Linux. The data directory follows each platform's
+  convention and is created readable by its owner alone, a browser is opened
+  through `open` or `xdg-open`, and random bytes come from `/dev/urandom`.
+  Credential storage is not implemented and says so plainly: the Keychain and
+  the Secret Service are still to be written, and pretending to encrypt is
+  worse than not encrypting.
+- `Host::random_bytes` returns `Option`. It is the one method whose portable
+  fallback was actively unsafe — it returned zeros, and a PKCE verifier of
+  zeros is no verifier at all. There is no shorter buffer that fails closed
+  either, because the callers encode whatever comes back, and an empty `state`
+  would be compared against a callback's empty `state` and match. Refusing is
+  the only safe answer, and refusing in the return type means the sign-in
+  fails rather than the process: opening `/dev/urandom` has transient failure
+  modes — `EMFILE`, `ENFILE` — that say nothing about the randomness, and with
+  `panic = "abort"` a passing spike would have taken the whole widget down.
+- `docs/development/porting.md`: what a front end has to provide, and the
+  decisions taken before the code that depends on them. No cross-platform
+  toolkit, and why. macOS first, with the API for each piece named. On Linux,
+  X11 and `wlr-layer-shell` — and under GNOME, which implements neither, the
+  widget will say that stacking below other windows is unavailable rather than
+  quietly becoming an ordinary window that has stopped doing the one thing it
+  is for.
 - Fifteen more interface languages: Portuguese (European and Brazilian), Dutch,
   Swedish, Polish, Czech, Turkish, Russian, Ukrainian, Japanese, Simplified and
   Traditional Chinese, Korean, Arabic and Hebrew. Twenty catalogues in total.
@@ -32,7 +59,6 @@ All notable changes to this project are documented here. The format follows
   leave the noun alone entirely. The rule and its forms are one choice in the
   catalogue rather than two that can drift apart, and the forms for one and two
   may spell the numeral out — "تعارض واحد" reads better than "1 تعارض".
-
 - `appearance` in `config.json`: customisation on top of what the system
   decides. Colours beyond the accent — panel, text, muted text, separator, and
   the semantic `now`, `overdue` and `conflict` — plus a font family, a size
@@ -58,6 +84,17 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- The front end is behind a platform boundary. `src/main.rs` calls four
+  functions — `install_host`, `acquire_single_instance`, `run`, `fatal` — and a
+  `#[cfg]` decides which module supplies them, so the Windows code moved to
+  `src/win` and the new one lives in `src/unix`. Adding a platform is adding a
+  directory rather than threading conditionals through the program. The Win32
+  bindings became a Windows-only dependency at the same time, so they are not
+  compiled at all elsewhere.
+- Continuous integration builds the whole workspace on Ubuntu and macOS, not
+  only the core crate, and runs the resulting binary in demo mode in two
+  languages. "The core is portable" was a claim about a crate that compiles; it
+  is now a claim about a program that runs.
 - Accessibility keeps winning. A contrast theme ignores the custom colours and
   the surface style, because its colours come from the system and its flatness
   is the point; typography and density still apply, since nothing about a
@@ -70,6 +107,37 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- The agenda cache is replaced by rename rather than truncated and rewritten in
+  place, so nothing can read it half written. Two copies of the program can now
+  overlap — the Unix single-instance check is still a stub, and a timer firing
+  over a slow sync is enough — and the loser of that race used to leave a
+  truncated file behind. It parsed as no cache at all, which is safe but throws
+  away the day the cache exists to carry across a restart.
+- Waiting for the first sync no longer spins a core if the sync thread stops.
+  A dropped channel returns from `recv_timeout` immediately rather than
+  blocking, so treating it like a timeout meant looping flat out for the full
+  ninety seconds and then reporting a timeout that never happened. It now says
+  the sync stopped and prints what is cached.
+- Scratch files from the cache write are cleaned up whichever step failed, not
+  only a failed rename, and any an earlier run left behind are swept at
+  start-up. The name carries the writing process's id, so nothing later ever
+  reused one: a full disk, or a process killed between the write and the
+  rename, left one more file in the data directory on every restart.
+- The browser opener is reaped. Rust installs no `SIGCHLD` handler, so dropping
+  the `Child` detached the handle without collecting the process, and a front
+  end that runs for days accumulated one zombie per opened URL.
+- "Copy agenda" could do nothing at all, silently. Three separate things were
+  wrong with one call. The clipboard was opened with a null window handle,
+  which `EmptyClipboard` is documented to turn into a null owner and that is
+  documented to make `SetClipboardData` fail — the widget's own window owns it
+  now. `OpenClipboard` does not wait its turn but fails outright, and another
+  application holding the clipboard for a few milliseconds while it copies
+  something is ordinary, so it is retried ten times over 180 ms. And all five
+  Win32 calls folded into one `false` with nothing logged, which is why the
+  cause could only be guessed at: each now says which step failed and what
+  Windows called it. The round-trip test creates a real message-only window rather than
+  passing null, so it exercises the path the widget takes instead of the one
+  that was wrong.
 - Text was laid out as though it were German whatever the language: the
   renderer passed a hard-coded `de-DE` to DirectWrite. That name is what
   selects between the Han glyph shapes a single code point has in Japanese,
@@ -109,9 +177,68 @@ All notable changes to this project are documented here. The format follows
   colours are ignored at all depends on contrast, and what has to be corrected
   to stay readable depends on the background — so the note saying the custom
   colours are being ignored was the one going missing.
+- The process exits with a failure status when it could not start, instead of
+  reporting success after printing the reason. It never mattered while the only
+  front end put the message in a message box nobody's shell was reading; it
+  matters now that one of them is a command, where `tpmplaner || …`, a systemd
+  unit and the smoke test all decide by the status. Another copy already owning
+  the desktop stays a success, deliberately: nothing went wrong, this copy just
+  has nothing to do.
+- Only web links are handed to the platform's opener, on every front end.
+  `ShellExecuteW` with the `open` verb, `open` on macOS and `xdg-open` on Linux
+  do not browse — they launch whatever is registered for the scheme or the file
+  type — and one of the things opened is an event's `htmlLink`, which arrives
+  in the calendar server's JSON. A shared calendar somebody else can write to
+  was therefore enough to turn a click on an agenda row into a UNC path or a
+  `file:` link being executed. The rule lives beside `Host::open_url` so both
+  front ends answer alike, and opening a local file — the settings, the data
+  folder, the log — is now a separate function that says so, rather than the
+  same one with a path squeezed through it.
+- A failed "Copy agenda" no longer leaks the memory it allocated for the text.
+  The clipboard takes ownership of that block only once `SetClipboardData` has
+  succeeded, and the two ways out before that returned without freeing it. Kept
+  company by the retry message, which reported the budget the constants
+  describe rather than the time that actually elapsed: ten attempts leave nine
+  gaps, so the wait is 180 ms, and that line exists to be held against a
+  timestamp in a bug report.
+- Writing the agenda cache says why it failed. Every step discarded its error,
+  and the only symptom — a blank panel for a moment at every start — points
+  nowhere on its own. The rename that replaced the truncating write is the step
+  most worth hearing about: replacing a file another process holds open is a
+  sharing violation on Windows, and every copy opens this file at start-up.
+- On macOS and Linux, the message printed when the widget cannot start no
+  longer panics if stderr has gone away. `tpmplaner 2>&1 | head -1` closes it,
+  and so does a supervisor, and the panic hook would then write a broken pipe
+  into the log the user was about to attach — on the one path that only runs
+  when something has already gone wrong.
+- The owner-only mode on the data directory is applied to the data directory
+  and not to its parents. `DirBuilder` carries one mode and uses it for every
+  level it creates, so on a fresh account `~/.config` — or a Mac somehow
+  missing `~/Library/Application Support` — would have been made owner-only
+  too, and those belong to the platform rather than to us.
 
 ### Internal
 
+- The second smoke test says what it observes. It pins a French locale and
+  checks the output, and that selects the catalogue and nothing else: the Unix
+  front end leaves the portable locale backend in force, whose formatters
+  ignore the tag they are handed. The comment claimed the date format was being
+  observed too, which would have read as a false reassurance to whoever writes
+  the real backend and wonders why nothing caught their bug — it now points at
+  the assertion that step is waiting to become. The check also looks for
+  `TÂCHES`, which is French alone, beside an `AGENDA` that six catalogues
+  share.
+- The scratch directory in the cache sweep test carries the process id. It was
+  a fixed path under the shared temp directory, so two overlapping test runs —
+  two checkouts, an editor running tests while the terminal does — had one
+  deleting the other's fixtures mid-assertion, and the failure looked like a
+  bug in the code under test.
+- The text front end's module documentation says its columns are not
+  authoritative. The first column is padded by `char` count while a terminal
+  counts columns, and the two part company in exactly the languages continuous
+  integration was extended to cover. The point of that front end is to be
+  something to compare a renderer against, so what it is not a reference for is
+  worth stating.
 - The consistency checks are driven by the list of shipped catalogues instead
   of a list written out in the test, so a language cannot be added without
   being checked. They walk every field through a destructuring that fails to
@@ -122,6 +249,30 @@ All notable changes to this project are documented here. The format follows
 - `CONTRIBUTING.md` says what a translation pull request is expected to
   contain: who checked the text, the plural variant the language actually uses,
   and strings that fit.
+- The source really does read in one language now, which the 1.0.2 entry below
+  has claimed since it was written. Twenty-four places: the module header of
+  `src/win/platform.rs` and six section banners in `src/win/window.rs`, four
+  more comments across those two and `src/win/render.rs`, an `unreachable!` and
+  three assertion messages, the log lines for copying the agenda and toggling
+  autostart, and eleven test fixture titles. Searching for German words is what
+  missed most of them twice; searching for *comments with no English function
+  words in them* is what found them.
+- Five error messages the Google provider shows the user were German while the
+  CalDAV and Microsoft ones beside them were English — so since the twenty
+  catalogues landed, a Korean or Arabic user hit German at exactly the moment
+  something had gone wrong. They now read as their siblings already did
+  ("Network error", "Unexpected response", "I/O error"), and an event or task
+  with no title is "(no title)" rather than "(ohne Titel)", which is the
+  wording `caldav.rs` was already using. Not translated: the detail beside them
+  comes from Google in English, so a translated prefix on an English payload
+  would be for show. Putting them in the catalogues is a separate change, and
+  `CONTRIBUTING.md` is right that it needs a human per language.
+- Still German on purpose, because it is content rather than prose about the
+  code: the `de` catalogue, the demo data, `"dunkel"`/`"hell"` accepted beside
+  `"dark"`/`"light"` in `config.json` and `"strg"`/`"umschalt"` beside
+  `"ctrl"`/`"shift"` in `peek_hotkey` — settings users have already written,
+  and not ours to invalidate for tidiness — and the umlauts in the two tests
+  that exist to prove non-ASCII survives.
 
 ## [1.0.2] - 2026-08-07
 

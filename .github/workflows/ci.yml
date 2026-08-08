@@ -50,8 +50,14 @@ jobs:
   # in `tpmplaner-core` fails here rather than on somebody's laptop months
   # later. Windows is left out on purpose — the `check` job already compiles
   # and tests the core there as part of `--workspace`.
+  #
+  # Since the platform split the whole binary builds here as well, so this job
+  # also links `src/unix` and runs it. "The core is portable" was previously a
+  # claim about a crate that compiles; the smoke step makes it a claim about a
+  # program that runs, on both systems, with the settings, the locale, the
+  # model and the palette all exercised end to end.
   core:
-    name: Core on ${{ matrix.os }}
+    name: Core and Unix front end on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
@@ -65,9 +71,69 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: Clippy
-        run: cargo clippy --locked -p tpmplaner-core --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - name: Tests
-        run: cargo test --locked -p tpmplaner-core
+        run: cargo test --locked --workspace --all-targets
+
+      # Demo mode needs no account and reaches no network, which is what makes
+      # it usable as a smoke test. The output is checked rather than merely the
+      # exit status: a front end that prints nothing at all would otherwise
+      # pass.
+      #
+      # The locale is pinned for the same reason the second step pins one: the
+      # strings below are the English catalogue, and which catalogue the widget
+      # loads is decided by the runner's own environment. A runner image that
+      # exports a German or French locale would fail this step with nothing
+      # wrong in the product. All three variables, because
+      # `PortableLocale::user_default_tag` reads them in turn and moves on from
+      # any that is unset or "C".
+      - name: Smoke test the Unix front end
+        env:
+          TPMPLANER_DEMO: "1"
+          LC_ALL: en_US.UTF-8
+          LC_TIME: en_US.UTF-8
+          LANG: en_US.UTF-8
+        run: |
+          cargo run --locked --quiet > agenda.txt
+          cat agenda.txt
+          grep -q "SCHEDULE" agenda.txt
+          grep -q "TASKS" agenda.txt
+
+      # Which catalogue the locale selects, and nothing more. The date format
+      # does *not* come from the platform on this front end: `install_host`
+      # deliberately leaves `PortableLocale` in force, and its four formatters
+      # ignore the tag they are handed — English names and a hard 24-hour clock
+      # in every locale. So this step proves one mechanism, not two.
+      #
+      # TODO: once a real `LocaleBackend` lands for macOS and Linux
+      # (`NSDateFormatter` / `icu4x`, see docs/development/porting.md), assert a
+      # formatted date here as well. That is the regression test this step is
+      # shaped to become, and until then the aspiration is a comment rather than
+      # a check that would pass for the wrong reason.
+      #
+      # `TÂCHES` rather than only `AGENDA`: `AGENDA` is `section_events` in
+      # French, Spanish, Italian, both Portuguese catalogues and Dutch, so on
+      # its own it proves "not English". `TÂCHES` is French and nothing else.
+      #
+      # `LC_ALL` rather than `LANG`: it is the variable that outranks the rest,
+      # and it is the first one `PortableLocale::user_default_tag` reads — so
+      # the test says what locale it wants rather than hoping the runner has
+      # not already said something else. Setting only `LANG` failed on the
+      # macOS runner for exactly that reason.
+      #
+      # Written to a file rather than piped into `grep -q`, which would close
+      # the pipe on its first match and leave the program writing into it.
+      - name: Smoke test a second language
+        env:
+          TPMPLANER_DEMO: "1"
+          LC_ALL: fr_FR.UTF-8
+          LC_TIME: fr_FR.UTF-8
+          LANG: fr_FR.UTF-8
+        run: |
+          cargo run --locked --quiet > agenda-fr.txt
+          cat agenda-fr.txt
+          grep -q "AGENDA" agenda-fr.txt
+          grep -q "TÂCHES" agenda-fr.txt
 
   check:
     name: Lint and test

@@ -21,7 +21,7 @@
 //! roughly 60 Hz while an animation runs. Once everything has settled, drawing
 //! stops completely.
 
-use crate::platform;
+use crate::win::platform;
 use tpmplaner_core::anim::Animations;
 use tpmplaner_core::i18n::Locale;
 use tpmplaner_core::log;
@@ -2368,7 +2368,7 @@ fn icon_format(dwrite: &IDWriteFactory, size: f32) -> Result<IDWriteTextFormat> 
 /// Computed by hand rather than through `Matrix3x2::rotation_around`, because
 /// there the angle unit (degrees or radians) is not evident from the
 /// signature.
-/// D2D verwendet Zeilenvektoren: `[x y 1] · M`.
+/// D2D uses row vectors: `[x y 1] · M`.
 fn rotation(rad: f32, cx: f32, cy: f32) -> Matrix3x2 {
     let (s, c) = rad.sin_cos();
     Matrix3x2 {

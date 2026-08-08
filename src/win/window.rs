@@ -20,8 +20,8 @@
 //! (clock, sync due, configuration check), ~60 Hz during an animation, and
 //! 100 ms while an undo grace period is running.
 
-use crate::platform;
-use crate::render::{self, Frame, Hit, HitRegion, Renderer, UndoView};
+use crate::win::platform;
+use crate::win::render::{self, Frame, Hit, HitRegion, Renderer, UndoView};
 use chrono::{DateTime, Duration as ChronoDuration, Local, Timelike};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -144,7 +144,7 @@ struct State {
     sync: Option<SyncHandle>,
     renderer: Option<Renderer>,
 
-    /// Wird pro Frame neu befuellt statt neu alloziert.
+    /// Refilled once per frame rather than allocated again.
     hits: Vec<HitRegion>,
     hover: Option<Hit>,
     tracking_mouse: bool,
@@ -341,7 +341,7 @@ pub fn run() -> Result<()> {
         if !demo {
             st.sync = Some(sync::spawn(
                 shared,
-                std::sync::Arc::new(crate::host_impl::WindowWaker {
+                std::sync::Arc::new(crate::win::host_impl::WindowWaker {
                     hwnd: hwnd.0 as isize,
                     message: WM_APP_SYNC_DONE,
                 }),
@@ -514,7 +514,7 @@ fn arm_tick(hwnd: HWND) {
     }
 }
 
-// --- Animationsantrieb ------------------------------------------------------
+// --- Animation driver -------------------------------------------------------
 
 /// Starts the animation timer if needed and takes a step immediately, so the
 /// response does not feel delayed by up to 16 ms.
@@ -779,7 +779,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
     }
 }
 
-// --- Rueckgaengig -----------------------------------------------------------
+// --- Undo -------------------------------------------------------------------
 
 /// Records the tick provisionally and starts the grace period.
 fn begin_pending(st: &mut State, idx: usize) {
@@ -819,7 +819,7 @@ fn begin_pending(st: &mut State, idx: usize) {
     redraw(st);
 }
 
-/// Bedenkzeit abgelaufen? Dann absenden.
+/// Has the grace period run out? Then send it.
 fn on_undo_tick(st: &mut State) {
     let expired = st
         .pending
@@ -1031,10 +1031,12 @@ fn copy_agenda(st: &mut State) {
     }
     drop(guard);
 
-    if platform::set_clipboard_text(&out) {
-        log::info("Agenda in die Zwischenablage kopiert");
-    } else {
-        log::warn("Clipboard is not available");
+    // The widget's own window owns the clipboard: with a null handle
+    // `EmptyClipboard` leaves no owner and `SetClipboardData` is documented to
+    // fail. `set_clipboard_text` has already logged which step failed and what
+    // Windows called it.
+    if platform::set_clipboard_text(st.hwnd, &out) {
+        log::info("Agenda copied to the clipboard");
     }
 }
 
@@ -1142,7 +1144,7 @@ fn end_peek(st: &mut State) {
     redraw(st);
 }
 
-// --- Zeitplanung ------------------------------------------------------------
+// --- Scheduling -------------------------------------------------------------
 
 fn on_tick(st: &mut State) {
     let now = Local::now();
@@ -1202,7 +1204,7 @@ fn on_sync_done(st: &mut State) {
             st.next_sync_at = Local::now() + ChronoDuration::minutes(interval);
         }
         Status::NeedsSetup(_) | Status::NeedsLogin(_) => {
-            // Ohne Benutzeraktion bringt ein Wiederholen nichts.
+            // Retrying achieves nothing without the user acting first.
             st.next_sync_at = Local::now() + ChronoDuration::minutes(interval.max(15));
         }
         _ => {
@@ -1225,7 +1227,7 @@ fn on_sync_done(st: &mut State) {
     kick(st);
 }
 
-/// Uebernimmt Aenderungen an `config.json` ohne Neustart.
+/// Picks up changes to `config.json` without a restart.
 fn reload_config_if_changed(st: &mut State) {
     if config_mtime(st.theme_file.as_deref()) == st.config_mtime {
         return;
@@ -1396,7 +1398,7 @@ fn config_mtime(theme_file: Option<&Path>) -> Stamps {
     (stamp(&config::config_path()), theme_file.and_then(stamp))
 }
 
-// --- Maus -------------------------------------------------------------------
+// --- Mouse ------------------------------------------------------------------
 
 fn on_mouse_move(st: &mut State, lparam: LPARAM) {
     unsafe {
@@ -1456,7 +1458,7 @@ fn on_mouse_move(st: &mut State, lparam: LPARAM) {
     let hover = hit_at(st, x, y);
     if hover != st.hover {
         st.hover = hover;
-        // Beim Wechsel neu aufblenden statt hart umzuspringen.
+        // Fade in again on a change rather than jumping.
         st.anim.hover.jump(0.0);
         st.anim.hover.set(if hover.is_some() { 1.0 } else { 0.0 });
         kick(st);
@@ -1519,7 +1521,7 @@ fn on_left_down(st: &mut State, lparam: LPARAM) {
             }
         }
 
-        // Leere Flaeche: Fenster verschieben.
+        // Empty space: drag the window.
         None => unsafe {
             let mut cursor = POINT::default();
             let _ = GetCursorPos(&mut cursor);
@@ -1696,7 +1698,7 @@ fn rescue_offscreen(st: &mut State) {
     }
 }
 
-// --- Zeichnen ---------------------------------------------------------------
+// --- Drawing ----------------------------------------------------------------
 
 fn redraw(st: &mut State) {
     // Copy the Arc, not the contents: during an animation this runs 60 times
@@ -1799,7 +1801,7 @@ fn current_size_px(hwnd: HWND) -> (u32, u32) {
     }
 }
 
-// --- Kontextmenue -----------------------------------------------------------
+// --- Context menu -----------------------------------------------------------
 
 fn show_menu(st: &mut State) {
     unsafe {
@@ -1856,7 +1858,7 @@ fn show_menu(st: &mut State) {
         if !sources.is_empty() {
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
         }
-        // Untermenues muessen leben, bis `TrackPopupMenu` zurueckkehrt.
+        // Submenus have to stay alive until `TrackPopupMenu` returns.
         let mut submenus = Vec::new();
         for (label, entries, selected, base) in sources {
             let Ok(sub) = CreatePopupMenu() else { continue };
@@ -1928,9 +1930,9 @@ fn show_menu(st: &mut State) {
             CMD_AUTOSTART => {
                 platform::set_autostart(!autostart);
                 log::info(if autostart {
-                    "Autostart deaktiviert"
+                    "Autostart disabled"
                 } else {
-                    "Autostart aktiviert"
+                    "Autostart enabled"
                 });
             }
             CMD_CONFIG => {

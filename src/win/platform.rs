@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 TPMPlaner contributors
-//! Kleine Windows-Helfer: Browser oeffnen, Autostart, Speicher trimmen.
+//! Small Windows helpers: opening a browser, autostart, trimming memory.
 
+use tpmplaner_core::log;
 use tpmplaner_core::theme::{ContrastColors, SystemVisuals};
 use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError, HWND, RECT};
 use windows::Win32::Graphics::Gdi::{
@@ -27,9 +28,43 @@ pub fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+/// Opens a URL, but only one of the schemes we are prepared to open.
+///
+/// The check is not ceremony. Some of what reaches here is `Event::html_link`,
+/// which arrives in the calendar server's JSON — a shared calendar somebody
+/// else can write to is enough to make it hostile — and `ShellExecuteW` with
+/// the `open` verb is not a browser call. It takes a plain path or a UNC path
+/// as readily as an `https:` URL, so `\\attacker\share\evil.exe` or a `file:`
+/// link would turn one click on an agenda row into program execution.
+///
+/// Deliberately separate from [`open_path`], which passes a local path this
+/// program built and would fail a URL rule for good reason: `C:\Users\…` reads
+/// as a scheme called `C`.
 pub fn open_in_browser(url: &str) {
+    // Trimmed once, so the string checked and the string opened are the same
+    // bytes.
+    let url = url.trim();
+    if !tpmplaner_core::host::is_openable_url(url) {
+        log::warn(&format!("Refusing to open '{url}': not an openable URL"));
+        return;
+    }
+    shell_open(url);
+}
+
+/// Opens a path in its associated program: the settings file, the data folder.
+///
+/// Every caller passes a path from [`config`](tpmplaner_core::config) or the
+/// log — ours, not a server's — which is why this does not go through the URL
+/// rule.
+pub fn open_path(path: &std::path::Path) {
+    shell_open(&path.to_string_lossy());
+}
+
+/// Hands a target to the shell. Private, because whether a target may be handed
+/// over at all is decided by the two functions above.
+fn shell_open(target: &str) {
     let verb = wide("open");
-    let target = wide(url);
+    let target = wide(target);
     unsafe {
         ShellExecuteW(
             Some(HWND::default()),
@@ -40,11 +75,6 @@ pub fn open_in_browser(url: &str) {
             SW_SHOWNORMAL,
         );
     }
-}
-
-/// Opens a path in its associated program: the settings file, the data folder.
-pub fn open_path(path: &std::path::Path) {
-    open_in_browser(&path.to_string_lossy());
 }
 
 pub fn autostart_enabled() -> bool {
@@ -282,42 +312,98 @@ pub fn sys_color(index: windows::Win32::Graphics::Gdi::SYS_COLOR_INDEX) -> u32 {
     (r << 16) | (g << 8) | b
 }
 
-/// Puts text on the clipboard as Unicode.
+/// How often [`open_clipboard`] tries, and how long it waits between attempts.
+///
+/// Two hundred milliseconds in total: longer than another application keeps
+/// the clipboard for a copy of its own, and short enough that the menu click
+/// this runs on cannot feel stuck.
+const CLIPBOARD_ATTEMPTS: u32 = 10;
+const CLIPBOARD_RETRY: std::time::Duration = std::time::Duration::from_millis(20);
+
+/// Opens the clipboard for `owner`, retrying for a moment before giving up.
+///
+/// Only one task may have the clipboard open at a time and `OpenClipboard`
+/// does not wait its turn — it fails at once. Clipboard managers, remote
+/// desktop bridges and other editors all take it for a few milliseconds when
+/// something is copied, which is ordinary rather than exceptional, so giving
+/// up on the first attempt turns an everyday overlap into a copy that silently
+/// did nothing. Retrying is Microsoft's own advice for this.
+fn open_clipboard(owner: HWND) -> bool {
+    use windows::Win32::System::DataExchange::OpenClipboard;
+    for attempt in 0..CLIPBOARD_ATTEMPTS {
+        if unsafe { OpenClipboard(Some(owner)) }.is_ok() {
+            return true;
+        }
+        // Not after the last one: that would only delay the failure.
+        if attempt + 1 < CLIPBOARD_ATTEMPTS {
+            std::thread::sleep(CLIPBOARD_RETRY);
+        }
+    }
+    false
+}
+
+/// Puts text on the clipboard as Unicode, owned by `owner`.
 ///
 /// That is how the day's plan reaches an email, a ticket or a screen reader —
 /// the widget itself, being a non-activatable tool window, is practically
 /// unreachable for assistive technology.
-pub fn set_clipboard_text(text: &str) -> bool {
-    use windows::Win32::Foundation::HANDLE;
-    use windows::Win32::System::DataExchange::{
-        CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
-    };
+///
+/// **`owner` must be a real window.** Opening the clipboard with a null handle
+/// is what this used to do, and it is documented to leave the clipboard owner
+/// null once `EmptyClipboard` has run — which makes `SetClipboardData` fail.
+/// The copy then did nothing, intermittently and with nothing written down
+/// about why, since every step folded into one `false`. Each step now says
+/// which one it was and what Windows called it.
+pub fn set_clipboard_text(owner: HWND, text: &str) -> bool {
+    use windows::Win32::Foundation::{GlobalFree, HANDLE};
+    use windows::Win32::System::DataExchange::{CloseClipboard, EmptyClipboard, SetClipboardData};
     use windows::Win32::System::Memory::{GHND, GlobalAlloc, GlobalLock, GlobalUnlock};
     use windows::Win32::System::Ole::CF_UNICODETEXT;
 
     let wide_text = wide(text);
     let bytes = wide_text.len() * std::mem::size_of::<u16>();
 
+    if !open_clipboard(owner) {
+        // The sleep is skipped after the last attempt, so ten attempts cost
+        // nine gaps and the wait is one gap short of the budget the constants
+        // describe. This line exists to be held against a timestamp in a bug
+        // report, so it says the time that actually elapsed.
+        let waited = (CLIPBOARD_ATTEMPTS - 1) as u128 * CLIPBOARD_RETRY.as_millis();
+        log::warn(&format!(
+            "Clipboard stayed busy for {waited} ms — nothing was copied"
+        ));
+        return false;
+    }
     unsafe {
-        if OpenClipboard(None).is_err() {
-            return false;
-        }
         let result = (|| {
-            EmptyClipboard().ok()?;
-            // The clipboard takes ownership of the memory, so it must not be
-            // freed here.
-            let handle = GlobalAlloc(GHND, bytes).ok()?;
+            EmptyClipboard().map_err(|e| format!("EmptyClipboard: {e}"))?;
+            let handle = GlobalAlloc(GHND, bytes).map_err(|e| format!("GlobalAlloc: {e}"))?;
+            // The clipboard takes ownership of the block, but only once
+            // `SetClipboardData` has succeeded. Until then it is still ours,
+            // and both ways out of here before that point have to free it —
+            // otherwise every failed copy leaks the agenda for the life of a
+            // widget that runs for days.
             let target = GlobalLock(handle);
             if target.is_null() {
-                return None;
+                let _ = GlobalFree(Some(handle));
+                return Err("GlobalLock returned nothing".to_owned());
             }
             std::ptr::copy_nonoverlapping(wide_text.as_ptr(), target as *mut u16, wide_text.len());
             let _ = GlobalUnlock(handle);
-            SetClipboardData(CF_UNICODETEXT.0 as u32, Some(HANDLE(handle.0))).ok()?;
-            Some(())
+            if let Err(e) = SetClipboardData(CF_UNICODETEXT.0 as u32, Some(HANDLE(handle.0))) {
+                let _ = GlobalFree(Some(handle));
+                return Err(format!("SetClipboardData: {e}"));
+            }
+            Ok(())
         })();
         let _ = CloseClipboard();
-        result.is_some()
+        match result {
+            Ok(()) => true,
+            Err(step) => {
+                log::warn(&format!("Copying to the clipboard failed at {step}"));
+                false
+            }
+        }
     }
 }
 
@@ -439,9 +525,10 @@ pub fn trim_working_set() {
 #[cfg(test)]
 mod tests {
     use super::{
-        autostart_enabled, autostart_enabled_in, parse_hotkey, set_autostart, set_autostart_in,
-        set_clipboard_text,
+        autostart_enabled, autostart_enabled_in, open_clipboard, parse_hotkey, set_autostart,
+        set_autostart_in, set_clipboard_text, wide,
     };
+    use windows::Win32::Foundation::HWND;
     use windows::core::PCWSTR;
 
     /// Autostart is a registry write, so reading the code proves nothing about
@@ -611,25 +698,63 @@ mod tests {
         }
     }
 
-    /// Virtual key codes: 'K' is 0x4B, F5 is 0x74.
+    /// A message-only window, to own the clipboard the way the widget does.
+    ///
+    /// `"STATIC"` is a class the system has already registered, so this needs
+    /// no class of its own; `HWND_MESSAGE` keeps it off the screen entirely.
+    /// Passing a real window rather than a null handle is the whole point —
+    /// with a null one `EmptyClipboard` leaves no owner and `SetClipboardData`
+    /// is documented to fail, so a test that passed null would be exercising
+    /// the bug rather than the fix.
+    fn message_only_window() -> HWND {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, HWND_MESSAGE, WINDOW_EX_STYLE, WINDOW_STYLE,
+        };
+        let class = wide("STATIC");
+        unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                PCWSTR(class.as_ptr()),
+                PCWSTR::null(),
+                WINDOW_STYLE(0),
+                0,
+                0,
+                0,
+                0,
+                Some(HWND_MESSAGE),
+                None,
+                None,
+                None,
+            )
+        }
+        .expect("could not create a message-only window")
+    }
+
     /// Round trip through the real clipboard.
     ///
     /// "Copy agenda" is only reachable from the context menu, which a test
     /// cannot open, so the clipboard call itself is verified here instead —
     /// including that non-ASCII survives, since the day's agenda is full of it.
+    ///
+    /// Reading back goes through [`open_clipboard`] for the same reason the
+    /// writing does: another application holding the clipboard for a moment is
+    /// not this test failing, and without the retry it reported one.
     #[test]
     fn text_survives_a_round_trip_through_the_clipboard() {
-        use windows::Win32::System::DataExchange::{
-            CloseClipboard, GetClipboardData, OpenClipboard,
-        };
+        use windows::Win32::System::DataExchange::{CloseClipboard, GetClipboardData};
         use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
         use windows::Win32::System::Ole::CF_UNICODETEXT;
+        use windows::Win32::UI::WindowsAndMessaging::DestroyWindow;
 
+        let owner = message_only_window();
         let sample = "Tuesday - 09:00 Sprint Review - überfällig - 予定 - ✓";
-        assert!(set_clipboard_text(sample), "clipboard was not writable");
+        assert!(
+            set_clipboard_text(owner, sample),
+            "clipboard was not writable"
+        );
 
+        assert!(open_clipboard(owner), "could not open the clipboard");
         let read_back = unsafe {
-            assert!(OpenClipboard(None).is_ok(), "could not open the clipboard");
             let handle = GetClipboardData(CF_UNICODETEXT.0 as u32).expect("no text on clipboard");
             let ptr = GlobalLock(windows::Win32::Foundation::HGLOBAL(handle.0)) as *const u16;
             assert!(!ptr.is_null(), "clipboard memory could not be locked");
@@ -643,9 +768,13 @@ mod tests {
             text
         };
 
+        unsafe {
+            let _ = DestroyWindow(owner);
+        }
         assert_eq!(read_back, sample);
     }
 
+    /// Virtual key codes: 'K' is 0x4B, F5 is 0x74.
     #[test]
     fn common_combinations_parse() {
         let (m, k) = parse_hotkey("Win+Alt+K").unwrap();

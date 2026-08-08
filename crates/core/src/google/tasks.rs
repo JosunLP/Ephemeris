@@ -143,7 +143,7 @@ pub fn list_tasks(
             id: t.id.clone(),
             tasklist_id: list.id.clone(),
             title: if t.title.trim().is_empty() {
-                "(ohne Titel)".into()
+                "(no title)".into()
             } else {
                 t.title.clone()
             },

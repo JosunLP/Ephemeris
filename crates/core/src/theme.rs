@@ -480,7 +480,7 @@ impl Palette {
         let light = match pref {
             ThemePref::Dark => false,
             ThemePref::Light => true,
-            ThemePref::Contrast => unreachable!("oben abgefangen"),
+            ThemePref::Contrast => unreachable!("caught by the high contrast branch above"),
             ThemePref::System => vis.light,
         };
 
@@ -1302,9 +1302,9 @@ mod tests {
         // unusable as a text colour.
         for input in [0x000000, 0xFFFFFF, 0x0A0A64] {
             let (_, _, l_dark) = rgb_to_hsl(readable_accent(input, false));
-            assert!((0.57..=0.77).contains(&l_dark), "dunkel: {input:06X}");
+            assert!((0.57..=0.77).contains(&l_dark), "dark: {input:06X}");
             let (_, _, l_light) = rgb_to_hsl(readable_accent(input, true));
-            assert!((0.29..=0.47).contains(&l_light), "hell: {input:06X}");
+            assert!((0.29..=0.47).contains(&l_light), "light: {input:06X}");
         }
     }
 
@@ -1327,7 +1327,7 @@ mod tests {
         let (h_adj, _, _) = rgb_to_hsl(adjusted);
         assert!(
             hue_distance(h_acc, h_adj) >= 0.07,
-            "Warnfarbe {adjusted:06X} liegt zu nah am Akzent {red_accent:06X}"
+            "warning colour {adjusted:06X} sits too close to the accent {red_accent:06X}"
         );
     }
 

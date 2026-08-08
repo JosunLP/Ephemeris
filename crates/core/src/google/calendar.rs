@@ -159,7 +159,7 @@ pub fn list_events(
                 title: item
                     .summary
                     .filter(|s| !s.trim().is_empty())
-                    .unwrap_or_else(|| "(ohne Titel)".into()),
+                    .unwrap_or_else(|| "(no title)".into()),
                 start,
                 end,
                 all_day,

@@ -17,6 +17,7 @@ use crate::provider::{
 };
 use chrono::{Duration as ChronoDuration, Local};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -55,7 +56,7 @@ pub struct Shared {
     pub agenda: Agenda,
     pub status: Status,
     pub config: Config,
-    /// Syntaxfehler in `config.json`, falls vorhanden.
+    /// Syntax error in `config.json`, if there is one.
     pub config_error: Option<String>,
     /// Available calendars as `(id, name)`, the basis for picking them in the
     /// context menu. Before this, the ids had to be typed into the settings
@@ -218,6 +219,10 @@ pub fn spawn(shared: Arc<Mutex<Shared>>, waker: Arc<dyn Waker>) -> SyncHandle {
 }
 
 fn worker(shared: Arc<Mutex<Shared>>, waker: Arc<dyn Waker>, rx: Receiver<Command>) {
+    // Here rather than in `spawn`, so a directory listing never lands on the
+    // front end's thread. Once per process is enough: nothing but this thread
+    // writes the cache.
+    sweep_stale_cache_files();
     let mut providers = build_providers(&snapshot_config(&shared).effective_accounts());
     let mut meta: Option<Meta> = None;
     // Ride along with the sync run rather than opening a second connection.
@@ -548,12 +553,141 @@ pub fn read_cache() -> Option<Agenda> {
     Some(agenda)
 }
 
+/// Replaces the cache in one step.
+///
+/// A plain write truncates first, so anything reading concurrently can catch
+/// the file half written — and nothing stops a second copy of the program from
+/// running: the Unix front end's single-instance check is still a stub. Writing
+/// beside the file and renaming over it means every reader sees one complete
+/// version or the other. `rename` replaces an existing file on POSIX and on
+/// Windows alike.
+///
+/// [`read_cache`] would survive the torn file — it treats unparseable JSON as
+/// no cache — but at the cost of the day's agenda, which is the thing the cache
+/// exists to keep across a restart.
+///
+/// The process id in the temporary name keeps two writers off the same scratch
+/// path.
 fn write_cache(agenda: &Agenda) {
     let path = config::cache_path();
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
+    if let Some(dir) = path.parent()
+        && let Err(e) = std::fs::create_dir_all(dir)
+    {
+        log::warn(&format!("Could not create {}: {e}", dir.display()));
+        return;
     }
-    if let Ok(json) = serde_json::to_string(agenda) {
-        let _ = std::fs::write(path, json);
+    let json = match serde_json::to_string(agenda) {
+        Ok(json) => json,
+        Err(e) => {
+            log::warn(&format!("Could not encode the agenda for the cache: {e}"));
+            return;
+        }
+    };
+    let tmp = path.with_extension(format!("tmp{}", std::process::id()));
+    // Every step says why it failed. Silence here has one symptom — the widget
+    // is blank for a moment at every start, because `read_cache` finds nothing
+    // — and that symptom points nowhere on its own. The rename in particular
+    // fails in a way the plain write did not: on Windows, replacing a file
+    // another process holds open is a sharing violation, and `read_cache` opens
+    // this file at every start-up of every copy.
+    //
+    // Cleaned up whichever step failed, not only a failed rename: a write that
+    // failed part-way — a full disk is the ordinary cause — leaves the file
+    // behind, and the name carries the process id, so nothing later reuses it.
+    if let Err(e) = std::fs::write(&tmp, &json) {
+        log::warn(&format!("Could not write {}: {e}", tmp.display()));
+    } else if let Err(e) = std::fs::rename(&tmp, &path) {
+        log::warn(&format!("Could not replace {}: {e}", path.display()));
+    } else {
+        return;
+    }
+    let _ = std::fs::remove_file(&tmp);
+}
+
+/// Removes scratch files an earlier run left behind.
+///
+/// [`write_cache`] cleans up after itself, but it cannot clean up after a
+/// process that was killed between the write and the rename — and the name
+/// carries that process's id, so nothing later ever reclaims it. Called once at
+/// start-up, where the cost is one directory listing.
+///
+/// Only this program's own scratch names, and only in its own data directory.
+/// Another copy of the widget running right now would have its file swept from
+/// under it; that is why the sweep is at start-up rather than on every write,
+/// where the window would be wide open.
+fn sweep_stale_cache_files() {
+    for path in stale_tmp_files(&config::cache_path(), std::process::id()) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+/// Which scratch files beside `cache` are not this process's own.
+///
+/// Split from [`sweep_stale_cache_files`] so the matching can be tested against
+/// a directory of its own, without standing up a host to point
+/// [`config::cache_path`] somewhere safe. Deleting is the easy half; picking
+/// exactly the right files is the half worth a test.
+fn stale_tmp_files(cache: &Path, my_pid: u32) -> Vec<PathBuf> {
+    let (Some(dir), Some(stem)) = (cache.parent(), cache.file_stem()) else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let prefix = format!("{}.tmp", stem.to_string_lossy());
+    let mine = format!("{prefix}{my_pid}");
+    entries
+        .flatten()
+        .filter(|e| {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            // The suffix has to be a process id and nothing else, or a
+            // `cache.tmp.bak` somebody left in the folder counts as ours.
+            name.strip_prefix(&prefix)
+                .is_some_and(|pid| !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit()))
+                && name != mine.as_str()
+        })
+        .map(|e| e.path())
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_sweep_takes_stale_scratch_files_and_nothing_else() {
+        // The process id is in the directory name, not just for tidiness: a
+        // fixed path under the shared temp directory is the same path for every
+        // run on the machine, so two overlapping `cargo test` invocations —
+        // two checkouts, an editor testing while the terminal does — would have
+        // one deleting the other's fixtures mid-assertion, and the failure
+        // would look like a bug in `stale_tmp_files`.
+        let dir = std::env::temp_dir().join(format!("tpmplaner-test-sweep{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch directory");
+        let cache = dir.join("cache.json");
+
+        for name in [
+            "cache.json",     // the cache itself
+            "cache.tmp4242",  // another run's leftover — the one to take
+            "cache.tmp99",    // and another
+            "cache.tmp1234",  // ours, still being written
+            "cache.tmp",      // no process id at all
+            "cache.tmp.bak",  // not a scratch file
+            "cache.json.bak", // nor this
+            "config.json",    // and nothing else in the folder
+        ] {
+            std::fs::write(dir.join(name), "{}").expect("fixture");
+        }
+
+        let mut found: Vec<String> = stale_tmp_files(&cache, 1234)
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        found.sort();
+        assert_eq!(found, ["cache.tmp4242", "cache.tmp99"]);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

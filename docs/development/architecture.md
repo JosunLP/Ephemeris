@@ -12,17 +12,29 @@ crates/core/          tpmplaner-core   — portable, no operating system calls
   host.rs             the traits the platform must supply
   update.rs           release check
 
-src/                  tpmplaner       — the Windows front end
-  render.rs           Direct2D / DirectWrite / DirectComposition
-  window.rs           Win32 window, input, timers, menu
-  host_impl.rs        Host, LocaleBackend and Waker for Windows
-  platform.rs         registry, monitors, clipboard, shortcuts
-  secure.rs           DPAPI
+src/                  tpmplaner       — the front ends
+  main.rs             platform-neutral: picks a front end, and nothing else
+  win/                #[cfg(windows)]
+    render.rs         Direct2D / DirectWrite / DirectComposition
+    window.rs         Win32 window, input, timers, menu
+    host_impl.rs      Host, LocaleBackend and Waker for Windows
+    platform.rs       registry, monitors, clipboard, shortcuts
+    secure.rs         DPAPI
+  unix/               #[cfg(unix)] — macOS and Linux
+    host.rs           Host: XDG paths, xdg-open/open, /dev/urandom
+    text.rs           prints the agenda; the window is not ported yet
 ```
 
 The core has **no dependency on the `windows` crate** and calls no platform
 API. Continuous integration builds and tests it on Ubuntu, macOS and Windows,
 so that boundary is enforced rather than merely intended.
+
+`main.rs` sees one thing from a front end: `install_host`,
+`acquire_single_instance`, `run` and `fatal`. Which module supplies them is a
+`#[cfg]` and nothing else, so adding a platform is adding a directory rather
+than threading conditionals through the program. See
+[Porting](/development/porting) for what a new front end has to provide and
+which decisions have already been made.
 
 ## The three traits
 
