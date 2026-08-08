@@ -570,22 +570,38 @@ pub fn read_cache() -> Option<Agenda> {
 /// path.
 fn write_cache(agenda: &Agenda) {
     let path = config::cache_path();
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    let Ok(json) = serde_json::to_string(agenda) else {
+    if let Some(dir) = path.parent()
+        && let Err(e) = std::fs::create_dir_all(dir)
+    {
+        log::warn(&format!("Could not create {}: {e}", dir.display()));
         return;
+    }
+    let json = match serde_json::to_string(agenda) {
+        Ok(json) => json,
+        Err(e) => {
+            log::warn(&format!("Could not encode the agenda for the cache: {e}"));
+            return;
+        }
     };
     let tmp = path.with_extension(format!("tmp{}", std::process::id()));
-    // Cleaned up whichever step failed, not only a failed rename. `&&`
-    // short-circuits, so a write that failed part-way — a full disk is the
-    // ordinary cause, and it leaves the file behind — skipped the removal
-    // entirely. The name carries the process id, so those never get reused
-    // either: every restart on a full disk left one more behind for good.
-    let wrote = std::fs::write(&tmp, json).is_ok();
-    if !wrote || std::fs::rename(&tmp, &path).is_err() {
-        let _ = std::fs::remove_file(&tmp);
+    // Every step says why it failed. Silence here has one symptom — the widget
+    // is blank for a moment at every start, because `read_cache` finds nothing
+    // — and that symptom points nowhere on its own. The rename in particular
+    // fails in a way the plain write did not: on Windows, replacing a file
+    // another process holds open is a sharing violation, and `read_cache` opens
+    // this file at every start-up of every copy.
+    //
+    // Cleaned up whichever step failed, not only a failed rename: a write that
+    // failed part-way — a full disk is the ordinary cause — leaves the file
+    // behind, and the name carries the process id, so nothing later reuses it.
+    if let Err(e) = std::fs::write(&tmp, &json) {
+        log::warn(&format!("Could not write {}: {e}", tmp.display()));
+    } else if let Err(e) = std::fs::rename(&tmp, &path) {
+        log::warn(&format!("Could not replace {}: {e}", path.display()));
+    } else {
+        return;
     }
+    let _ = std::fs::remove_file(&tmp);
 }
 
 /// Removes scratch files an earlier run left behind.
@@ -641,7 +657,13 @@ mod tests {
 
     #[test]
     fn the_sweep_takes_stale_scratch_files_and_nothing_else() {
-        let dir = std::env::temp_dir().join("tpmplaner-test-sweep");
+        // The process id is in the directory name, not just for tidiness: a
+        // fixed path under the shared temp directory is the same path for every
+        // run on the machine, so two overlapping `cargo test` invocations —
+        // two checkouts, an editor testing while the terminal does — would have
+        // one deleting the other's fixtures mid-assertion, and the failure
+        // would look like a bug in `stale_tmp_files`.
+        let dir = std::env::temp_dir().join(format!("tpmplaner-test-sweep{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("scratch directory");
         let cache = dir.join("cache.json");

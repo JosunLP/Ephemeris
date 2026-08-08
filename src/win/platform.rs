@@ -28,9 +28,43 @@ pub fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+/// Opens a URL, but only one of the schemes we are prepared to open.
+///
+/// The check is not ceremony. Some of what reaches here is `Event::html_link`,
+/// which arrives in the calendar server's JSON — a shared calendar somebody
+/// else can write to is enough to make it hostile — and `ShellExecuteW` with
+/// the `open` verb is not a browser call. It takes a plain path or a UNC path
+/// as readily as an `https:` URL, so `\\attacker\share\evil.exe` or a `file:`
+/// link would turn one click on an agenda row into program execution.
+///
+/// Deliberately separate from [`open_path`], which passes a local path this
+/// program built and would fail a URL rule for good reason: `C:\Users\…` reads
+/// as a scheme called `C`.
 pub fn open_in_browser(url: &str) {
+    // Trimmed once, so the string checked and the string opened are the same
+    // bytes.
+    let url = url.trim();
+    if !tpmplaner_core::host::is_openable_url(url) {
+        log::warn(&format!("Refusing to open '{url}': not an openable URL"));
+        return;
+    }
+    shell_open(url);
+}
+
+/// Opens a path in its associated program: the settings file, the data folder.
+///
+/// Every caller passes a path from [`config`](tpmplaner_core::config) or the
+/// log — ours, not a server's — which is why this does not go through the URL
+/// rule.
+pub fn open_path(path: &std::path::Path) {
+    shell_open(&path.to_string_lossy());
+}
+
+/// Hands a target to the shell. Private, because whether a target may be handed
+/// over at all is decided by the two functions above.
+fn shell_open(target: &str) {
     let verb = wide("open");
-    let target = wide(url);
+    let target = wide(target);
     unsafe {
         ShellExecuteW(
             Some(HWND::default()),
@@ -41,11 +75,6 @@ pub fn open_in_browser(url: &str) {
             SW_SHOWNORMAL,
         );
     }
-}
-
-/// Opens a path in its associated program: the settings file, the data folder.
-pub fn open_path(path: &std::path::Path) {
-    open_in_browser(&path.to_string_lossy());
 }
 
 pub fn autostart_enabled() -> bool {
@@ -326,7 +355,7 @@ fn open_clipboard(owner: HWND) -> bool {
 /// about why, since every step folded into one `false`. Each step now says
 /// which one it was and what Windows called it.
 pub fn set_clipboard_text(owner: HWND, text: &str) -> bool {
-    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Foundation::{GlobalFree, HANDLE};
     use windows::Win32::System::DataExchange::{CloseClipboard, EmptyClipboard, SetClipboardData};
     use windows::Win32::System::Memory::{GHND, GlobalAlloc, GlobalLock, GlobalUnlock};
     use windows::Win32::System::Ole::CF_UNICODETEXT;
@@ -335,26 +364,36 @@ pub fn set_clipboard_text(owner: HWND, text: &str) -> bool {
     let bytes = wide_text.len() * std::mem::size_of::<u16>();
 
     if !open_clipboard(owner) {
+        // The sleep is skipped after the last attempt, so ten attempts cost
+        // nine gaps and the wait is one gap short of the budget the constants
+        // describe. This line exists to be held against a timestamp in a bug
+        // report, so it says the time that actually elapsed.
+        let waited = (CLIPBOARD_ATTEMPTS - 1) as u128 * CLIPBOARD_RETRY.as_millis();
         log::warn(&format!(
-            "Clipboard stayed busy for {} ms — nothing was copied",
-            CLIPBOARD_ATTEMPTS as u128 * CLIPBOARD_RETRY.as_millis()
+            "Clipboard stayed busy for {waited} ms — nothing was copied"
         ));
         return false;
     }
     unsafe {
         let result = (|| {
             EmptyClipboard().map_err(|e| format!("EmptyClipboard: {e}"))?;
-            // The clipboard takes ownership of the memory, so it must not be
-            // freed here.
             let handle = GlobalAlloc(GHND, bytes).map_err(|e| format!("GlobalAlloc: {e}"))?;
+            // The clipboard takes ownership of the block, but only once
+            // `SetClipboardData` has succeeded. Until then it is still ours,
+            // and both ways out of here before that point have to free it —
+            // otherwise every failed copy leaks the agenda for the life of a
+            // widget that runs for days.
             let target = GlobalLock(handle);
             if target.is_null() {
+                let _ = GlobalFree(Some(handle));
                 return Err("GlobalLock returned nothing".to_owned());
             }
             std::ptr::copy_nonoverlapping(wide_text.as_ptr(), target as *mut u16, wide_text.len());
             let _ = GlobalUnlock(handle);
-            SetClipboardData(CF_UNICODETEXT.0 as u32, Some(HANDLE(handle.0)))
-                .map_err(|e| format!("SetClipboardData: {e}"))?;
+            if let Err(e) = SetClipboardData(CF_UNICODETEXT.0 as u32, Some(HANDLE(handle.0))) {
+                let _ = GlobalFree(Some(handle));
+                return Err(format!("SetClipboardData: {e}"));
+            }
             Ok(())
         })();
         let _ = CloseClipboard();

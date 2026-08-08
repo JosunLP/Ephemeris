@@ -29,6 +29,15 @@ supplies four functions — `install_host`, `acquire_single_instance`, `run`,
 in a channel, which is enough to prove the trait is not Windows-shaped, but not
 a run loop.
 
+Two things a front end does not decide for itself. `main` turns a `run` that
+returned `Err` into a failure exit status — a command is judged by it, and a
+widget that could not start must not tell a shell or a service manager that all
+is well; `acquire_single_instance` returning `false` is a success, because
+nothing went wrong. And whatever `open_url` is given goes through
+`host::is_openable_url` first: an event's link comes from the calendar server,
+and every platform's opener launches what is registered for a scheme rather
+than merely browsing to it.
+
 Then a renderer for what `theme.rs` and the layout metrics describe, and a
 window with the behaviour the widget is defined by: below every normal window
 but above the desktop, no taskbar entry, no window-switcher entry, never steals

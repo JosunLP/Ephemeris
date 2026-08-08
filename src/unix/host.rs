@@ -11,7 +11,7 @@
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use tpmplaner_core::host::{Host, PortableHost};
+use tpmplaner_core::host::{Host, PortableHost, is_openable_url};
 use tpmplaner_core::log;
 
 pub struct UnixHost;
@@ -28,14 +28,21 @@ impl Host for UnixHost {
     }
 
     fn open_url(&self, url: &str) {
-        if !is_openable(url) {
-            log::warn(&format!("Refusing to open '{url}': not a URL"));
+        let Some(url) = openable_target(url) else {
+            log::warn(&format!("Refusing to open '{url}': not an openable URL"));
             return;
-        }
+        };
         // `xdg-open` on Linux, `open` on macOS. Neither goes through a shell
         // here — the URL is one argv element — so there is nothing to quote
-        // and nothing to inject. Some of these URLs come from a calendar
-        // server rather than from us, which is why [`is_openable`] runs first.
+        // and nothing to inject.
+        //
+        // Both of this trait method's callers hand it a URL this program built
+        // — the sign-in endpoints and the loopback callback — so the scheme
+        // check above is not what stands between them and the platform. It is
+        // here for the caller that is coming: `Event::html_link` arrives in the
+        // calendar server's JSON, and an opener launches whatever is registered
+        // for the scheme rather than merely browsing. The rule, and why it is
+        // an allowlist, is in `tpmplaner_core::host::is_openable_url`.
         let opener = if cfg!(target_os = "macos") {
             "open"
         } else {
@@ -122,28 +129,15 @@ impl Host for UnixHost {
     }
 }
 
-/// Is this something an opener should be handed at all?
+/// The string to hand the opener, or `None` if it must not be opened at all.
 ///
-/// Two rules. It must carry a scheme, because a bare path or a search term is
-/// not what any caller here means. And it must not begin with `-`, or the
-/// opener parses it as one of its own options — the one way a URL can act as
-/// something other than an argument when no shell is involved.
-fn is_openable(url: &str) -> bool {
+/// Exists so the trimming and the checking cannot come apart. Checking one set
+/// of bytes and passing another is how a check stops meaning anything, even
+/// when — as here — the difference is only whitespace: returning the value that
+/// passed makes it the only one the caller has.
+fn openable_target(url: &str) -> Option<&str> {
     let url = url.trim();
-    if url.starts_with('-') {
-        return false;
-    }
-    match url.split_once(':') {
-        Some((scheme, rest)) => {
-            !rest.is_empty()
-                && !scheme.is_empty()
-                && scheme.starts_with(|c: char| c.is_ascii_alphabetic())
-                && scheme
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
-        }
-        None => false,
-    }
+    is_openable_url(url).then_some(url)
 }
 
 /// Creates the data directory readable by its owner only.
@@ -161,6 +155,19 @@ pub fn prepare_data_dir() {
     if dir.exists() {
         return;
     }
+    // The parents first, at whatever the umask says. `DirBuilder` carries one
+    // mode and applies it to every level `recursive` creates, so a single call
+    // would make `~/.config` — or, on a Mac where it is somehow missing,
+    // `~/Library/Application Support` — owner-only as well. Those belong to the
+    // platform and to every other program that keeps something there; only the
+    // leaf is ours to lock down.
+    if let Some(parent) = dir.parent()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        log::warn(&format!("Could not create {}: {e}", parent.display()));
+    }
+    // Still `recursive`, which is what makes it a no-op if another copy won the
+    // race between the check above and this line.
     let created = std::fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
@@ -174,27 +181,19 @@ pub fn prepare_data_dir() {
 mod tests {
     use super::*;
 
+    /// The rule itself is tested where it lives, in
+    /// `tpmplaner_core::host::is_openable_url`. What is this front end's own is
+    /// that the opener is handed exactly the string that passed the check.
     #[test]
-    fn only_real_urls_are_handed_to_the_opener() {
-        for good in [
-            "https://calendar.google.com/event?eid=1",
-            "http://127.0.0.1:8731/callback?code=x",
-            "msteams://l/meetup-join/19%3ameeting",
-        ] {
-            assert!(is_openable(good), "{good}");
-        }
-        for bad in [
-            "",
-            "not a url",
-            "/etc/passwd",
-            // Would be read as an option by the opener rather than as a target.
-            "--version",
-            "-x https://example.com",
-            // A scheme with nothing after it opens nothing.
-            "https:",
-            "1https://example.com",
-        ] {
-            assert!(!is_openable(bad), "{bad}");
-        }
+    fn what_is_checked_is_what_is_opened() {
+        assert_eq!(
+            openable_target("  https://example.com  "),
+            Some("https://example.com")
+        );
+        // Padding does not get an option or a launchable scheme past the check
+        // either.
+        assert_eq!(openable_target("  --version  "), None);
+        assert_eq!(openable_target("  file:///bin/sh  "), None);
+        assert_eq!(openable_target(""), None);
     }
 }

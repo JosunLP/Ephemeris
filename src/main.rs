@@ -41,7 +41,15 @@ use unix as frontend;
 
 use tpmplaner_core::log;
 
-fn main() {
+/// The exit status is part of the contract now that one of the front ends is a
+/// command. On Windows nothing ever read it — `fatal` puts up a message box and
+/// the process is started from a shortcut — but `tpmplaner || notify-send …`, a
+/// systemd unit and the smoke test in continuous integration all read it, and a
+/// program that could not start must not report success to them.
+///
+/// Another copy already owning the desktop is the one early return that is
+/// *not* a failure: nothing went wrong, this copy simply has nothing to do.
+fn main() -> std::process::ExitCode {
     // First of all: without the hook the widget vanishes from the desktop
     // without a word when something goes wrong.
     log::install_panic_hook();
@@ -50,7 +58,7 @@ fn main() {
     frontend::install_host();
 
     if !frontend::acquire_single_instance() {
-        return;
+        return std::process::ExitCode::SUCCESS;
     }
 
     if let Err(e) = frontend::run() {
@@ -59,5 +67,7 @@ fn main() {
             "{}\n\n{e}",
             tpmplaner_core::i18n::global().fatal_start
         ));
+        return std::process::ExitCode::FAILURE;
     }
+    std::process::ExitCode::SUCCESS
 }

@@ -132,10 +132,10 @@ All notable changes to this project are documented here. The format follows
   documented to make `SetClipboardData` fail — the widget's own window owns it
   now. `OpenClipboard` does not wait its turn but fails outright, and another
   application holding the clipboard for a few milliseconds while it copies
-  something is ordinary, so it is retried for 200 ms. And all five Win32 calls
-  folded into one `false` with nothing logged, which is why the cause could
-  only be guessed at: each now says which step failed and what Windows called
-  it. The round-trip test creates a real message-only window rather than
+  something is ordinary, so it is retried ten times over 180 ms. And all five
+  Win32 calls folded into one `false` with nothing logged, which is why the
+  cause could only be guessed at: each now says which step failed and what
+  Windows called it. The round-trip test creates a real message-only window rather than
   passing null, so it exercises the path the widget takes instead of the one
   that was wrong.
 - Text was laid out as though it were German whatever the language: the
@@ -177,9 +177,68 @@ All notable changes to this project are documented here. The format follows
   colours are ignored at all depends on contrast, and what has to be corrected
   to stay readable depends on the background — so the note saying the custom
   colours are being ignored was the one going missing.
+- The process exits with a failure status when it could not start, instead of
+  reporting success after printing the reason. It never mattered while the only
+  front end put the message in a message box nobody's shell was reading; it
+  matters now that one of them is a command, where `tpmplaner || …`, a systemd
+  unit and the smoke test all decide by the status. Another copy already owning
+  the desktop stays a success, deliberately: nothing went wrong, this copy just
+  has nothing to do.
+- Only web links are handed to the platform's opener, on every front end.
+  `ShellExecuteW` with the `open` verb, `open` on macOS and `xdg-open` on Linux
+  do not browse — they launch whatever is registered for the scheme or the file
+  type — and one of the things opened is an event's `htmlLink`, which arrives
+  in the calendar server's JSON. A shared calendar somebody else can write to
+  was therefore enough to turn a click on an agenda row into a UNC path or a
+  `file:` link being executed. The rule lives beside `Host::open_url` so both
+  front ends answer alike, and opening a local file — the settings, the data
+  folder, the log — is now a separate function that says so, rather than the
+  same one with a path squeezed through it.
+- A failed "Copy agenda" no longer leaks the memory it allocated for the text.
+  The clipboard takes ownership of that block only once `SetClipboardData` has
+  succeeded, and the two ways out before that returned without freeing it. Kept
+  company by the retry message, which reported the budget the constants
+  describe rather than the time that actually elapsed: ten attempts leave nine
+  gaps, so the wait is 180 ms, and that line exists to be held against a
+  timestamp in a bug report.
+- Writing the agenda cache says why it failed. Every step discarded its error,
+  and the only symptom — a blank panel for a moment at every start — points
+  nowhere on its own. The rename that replaced the truncating write is the step
+  most worth hearing about: replacing a file another process holds open is a
+  sharing violation on Windows, and every copy opens this file at start-up.
+- On macOS and Linux, the message printed when the widget cannot start no
+  longer panics if stderr has gone away. `tpmplaner 2>&1 | head -1` closes it,
+  and so does a supervisor, and the panic hook would then write a broken pipe
+  into the log the user was about to attach — on the one path that only runs
+  when something has already gone wrong.
+- The owner-only mode on the data directory is applied to the data directory
+  and not to its parents. `DirBuilder` carries one mode and uses it for every
+  level it creates, so on a fresh account `~/.config` — or a Mac somehow
+  missing `~/Library/Application Support` — would have been made owner-only
+  too, and those belong to the platform rather than to us.
 
 ### Internal
 
+- The second smoke test says what it observes. It pins a French locale and
+  checks the output, and that selects the catalogue and nothing else: the Unix
+  front end leaves the portable locale backend in force, whose formatters
+  ignore the tag they are handed. The comment claimed the date format was being
+  observed too, which would have read as a false reassurance to whoever writes
+  the real backend and wonders why nothing caught their bug — it now points at
+  the assertion that step is waiting to become. The check also looks for
+  `TÂCHES`, which is French alone, beside an `AGENDA` that six catalogues
+  share.
+- The scratch directory in the cache sweep test carries the process id. It was
+  a fixed path under the shared temp directory, so two overlapping test runs —
+  two checkouts, an editor running tests while the terminal does — had one
+  deleting the other's fixtures mid-assertion, and the failure looked like a
+  bug in the code under test.
+- The text front end's module documentation says its columns are not
+  authoritative. The first column is padded by `char` count while a terminal
+  counts columns, and the two part company in exactly the languages continuous
+  integration was extended to cover. The point of that front end is to be
+  something to compare a renderer against, so what it is not a reference for is
+  worth stating.
 - The consistency checks are driven by the list of shipped catalogues instead
   of a list written out in the test, so a language cannot be added without
   being checked. They walk every field through a destructuring that fails to

@@ -50,6 +50,51 @@ pub trait Host: Send + Sync {
     fn random_bytes(&self, len: usize) -> Option<Vec<u8>>;
 }
 
+/// The schemes a URL may carry before any front end hands it to the platform.
+///
+/// Deliberately two, and adding a third is meant to be a deliberate act rather
+/// than something inherited from "it parsed as a scheme". Everything this
+/// program opens today is one of these: the loopback callback during sign-in,
+/// the authorisation endpoints, and `Event::html_link`, which is an Outlook or
+/// Google Calendar page. Meeting deep links (`msteams:`, `zoommtg:`) would be a
+/// one-line addition here once something actually produces them.
+const OPENABLE_SCHEMES: &[&str] = &["http", "https"];
+
+/// May this be handed to the platform's opener at all?
+///
+/// It lives here, next to [`Host::open_url`], because every front end needs the
+/// same answer and the input is not always ours. `Event::html_link` comes
+/// straight out of the calendar server's JSON, and a shared calendar somebody
+/// else can write to is enough to make that hostile. What the openers do with
+/// what they are given is not browsing: `ShellExecuteW` with the `open` verb,
+/// `open` on macOS and `xdg-open` on Linux all launch whatever is registered
+/// for the scheme or the file type, so `file://…`, a UNC path like
+/// `\\attacker\share\evil.exe` and any `x-whatever:` handler are all program
+/// execution one click away from an agenda row.
+///
+/// Three rules:
+///
+/// * The scheme must be one of [`OPENABLE_SCHEMES`].
+/// * It must not begin with `-`, or the opener parses it as one of its own
+///   options — the one way a URL can act as something other than an argument
+///   when no shell is involved.
+/// * Something has to follow the scheme; `https:` on its own opens nothing.
+///
+/// The caller must open the *same* string it checked. Front ends trim first and
+/// pass the trimmed value on, so that the bytes checked here and the bytes
+/// handed to the opener cannot drift apart.
+pub fn is_openable_url(url: &str) -> bool {
+    if url.starts_with('-') {
+        return false;
+    }
+    match url.split_once(':') {
+        Some((scheme, rest)) => {
+            !rest.is_empty() && OPENABLE_SCHEMES.contains(&scheme.to_ascii_lowercase().as_str())
+        }
+        None => false,
+    }
+}
+
 /// Locale-aware date and time formatting.
 ///
 /// Kept separate from [`Host`] because the platform answers are very different
@@ -270,6 +315,38 @@ mod tests {
         assert_eq!(convert("de_DE.UTF-8"), "de-DE");
         assert_eq!(convert("en_US"), "en-US");
         assert_eq!(convert("fr"), "fr");
+    }
+
+    #[test]
+    fn only_web_urls_are_handed_to_an_opener() {
+        for good in [
+            "https://calendar.google.com/event?eid=1",
+            "http://127.0.0.1:8731/callback?code=x",
+            // The scheme is case-insensitive; the rest is not ours to judge.
+            "HTTPS://outlook.office365.com/owa/",
+        ] {
+            assert!(is_openable_url(good), "{good}");
+        }
+        for bad in [
+            "",
+            "not a url",
+            "/etc/passwd",
+            // A calendar server can put any of these in `htmlLink`, and every
+            // one of them is a program launch rather than a page.
+            "file:///Applications/Calculator.app",
+            r"\\attacker\share\evil.exe",
+            "smb://attacker/share",
+            "x-anything://run",
+            "msteams://l/meetup-join/19%3ameeting",
+            // Would be read as an option by the opener rather than as a target.
+            "--version",
+            "-x https://example.com",
+            // A scheme with nothing after it opens nothing.
+            "https:",
+            "1https://example.com",
+        ] {
+            assert!(!is_openable_url(bad), "{bad}");
+        }
     }
 
     #[test]

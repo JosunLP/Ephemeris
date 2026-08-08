@@ -17,6 +17,14 @@
 //!   runs.
 //! * It gives whoever writes the real front end a working data path to render
 //!   against, and something to compare against when the drawing is wrong.
+//!
+//! **The columns here are not authoritative.** The first column is padded with
+//! `{:>9}`, which counts `char`s. A terminal counts columns, and the two part
+//! company in exactly the languages continuous integration was extended to
+//! cover: `終日` is two `char`s and four columns wide, and `Locale::label`
+//! prefixes a right-to-left string with a directional mark that costs a `char`
+//! and no width at all. The data is right; the ragged edge is this module's,
+//! not the renderer's, and it is not worth a width table in a stopgap.
 
 use std::io::{self, Write};
 use std::sync::mpsc::{RecvTimeoutError, SyncSender, sync_channel};

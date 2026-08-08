@@ -68,6 +68,14 @@ pub fn run() -> Result<(), String> {
 
 /// There is a console here, which is exactly why the Windows front end needs a
 /// message box and this does not.
+///
+/// `writeln!` rather than `eprintln!`, which panics if stderr is gone —
+/// `tpmplaner 2>&1 | head -1` reaches that, and so does a supervisor that
+/// closed the inherited handle. [`text::run`] takes the same care with stdout
+/// for the same reason: a panic report in the log users are asked to attach is
+/// worse than no message, and this is the one path that only runs when
+/// something has already gone wrong.
 pub fn fatal(message: &str) {
-    eprintln!("{message}");
+    use std::io::Write;
+    let _ = writeln!(std::io::stderr(), "{message}");
 }

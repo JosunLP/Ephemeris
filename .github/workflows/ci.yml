@@ -99,8 +99,21 @@ jobs:
           grep -q "SCHEDULE" agenda.txt
           grep -q "TASKS" agenda.txt
 
-      # The interface language is compiled in, the date format comes from the
-      # platform, and this is the one place both can be observed together.
+      # Which catalogue the locale selects, and nothing more. The date format
+      # does *not* come from the platform on this front end: `install_host`
+      # deliberately leaves `PortableLocale` in force, and its four formatters
+      # ignore the tag they are handed — English names and a hard 24-hour clock
+      # in every locale. So this step proves one mechanism, not two.
+      #
+      # TODO: once a real `LocaleBackend` lands for macOS and Linux
+      # (`NSDateFormatter` / `icu4x`, see docs/development/porting.md), assert a
+      # formatted date here as well. That is the regression test this step is
+      # shaped to become, and until then the aspiration is a comment rather than
+      # a check that would pass for the wrong reason.
+      #
+      # `TÂCHES` rather than only `AGENDA`: `AGENDA` is `section_events` in
+      # French, Spanish, Italian, both Portuguese catalogues and Dutch, so on
+      # its own it proves "not English". `TÂCHES` is French and nothing else.
       #
       # `LC_ALL` rather than `LANG`: it is the variable that outranks the rest,
       # and it is the first one `PortableLocale::user_default_tag` reads — so
@@ -120,6 +133,7 @@ jobs:
           cargo run --locked --quiet > agenda-fr.txt
           cat agenda-fr.txt
           grep -q "AGENDA" agenda-fr.txt
+          grep -q "TÂCHES" agenda-fr.txt
 
   check:
     name: Lint and test
