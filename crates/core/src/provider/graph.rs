@@ -337,6 +337,7 @@ impl CalendarProvider for GraphProvider {
                     join_url,
                     color: calendar.color,
                     calendar_name: calendar.name.clone(),
+                    calendar_id: calendar.id.clone(),
                 }
             })
             .collect())

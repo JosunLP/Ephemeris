@@ -168,6 +168,7 @@ pub fn list_events(
                 join_url: None,
                 color: cal.color,
                 calendar_name: cal.name.clone(),
+                calendar_id: cal.id.clone(),
             });
         }
 
