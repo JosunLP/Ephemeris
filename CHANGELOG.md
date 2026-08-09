@@ -24,8 +24,12 @@ All notable changes to this project are documented here. The format follows
   the token never reaches the file at all. Where there is no keyring, on a
   headless machine or in a container, the bytes go into the file as they were
   before and a warning says so once; pretending to encrypt would be worse than
-  not encrypting, and so would refusing to start. A file written either way
-  reads back either way.
+  not encrypting, and so would refusing to start. A keyring that is there and
+  says no is a different answer and gets a different one back: a locked
+  keychain, a dismissed passphrase prompt, a daemon a login item started faster
+  than are all true now and false in a minute, and the plain copy the fallback
+  writes would not be. Nothing is written at all there, which costs one
+  sign-in. A file written either way reads back either way.
 - Dates and times on macOS and Linux come from the platform's own locale
   database. They used to read `4 August 2026` on a twenty-four-hour clock in
   every locale, which is right for nobody in particular and exactly the trap
@@ -256,6 +260,17 @@ All notable changes to this project are documented here. The format follows
   level it creates, so on a fresh account `~/.config` — or a Mac somehow
   missing `~/Library/Application Support` — would have been made owner-only
   too, and those belong to the platform rather than to us.
+- A click in a right-to-left layout lands on what was drawn under it. The
+  rectangles a click is tested against are unmirrored, like all the layout
+  arithmetic, while the drawing is folded across the panel's axis at the
+  drawing primitives — and the two were never brought into the same
+  coordinates. Rows span the full width and hid it; the two regions that do not
+  showed it plainly. In Arabic or Hebrew the refresh button was drawn in the
+  top left and did nothing, while clicking the empty top right corner
+  refreshed, and a task's tick circle opened the task in the browser while the
+  far end of its row ticked it off. The fold now happens where the click enters
+  the hit test, in the core, so the second front end inherits the rule rather
+  than the bug.
 
 ### Internal
 

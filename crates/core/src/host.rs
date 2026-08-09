@@ -228,6 +228,66 @@ impl Host for PortableHost {
     }
 }
 
+/// What a POSIX locale name says about the language to use.
+///
+/// Three-valued on purpose, because "unset" and "`C`" are not the same answer.
+/// The first is a question the next source in line gets asked; the second is a
+/// deliberate choice of no language, which is how a script or a service unit
+/// asks a program for reproducible output. Collapsing the two is how a widget
+/// ends up disagreeing with every other program on the machine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PosixLocale {
+    /// A language, as a BCP-47 tag.
+    Language(String),
+    /// `C` or `POSIX`.
+    Neutral,
+    /// Unset, empty, or nothing but whitespace — a variable that was never
+    /// really set.
+    Unset,
+}
+
+/// Reads a POSIX locale name as a language tag.
+///
+/// `de_DE.UTF-8@euro` is `de-DE`: the codeset and the modifier are the C
+/// library's business and no part of the language.
+///
+/// Public because the Unix host reads the same variables and has to apply the
+/// same rule. It used to carry its own copy — better, and fixed on its own,
+/// which is exactly what a second parser does.
+pub fn posix_locale(raw: &str) -> PosixLocale {
+    let name = raw.split(['.', '@']).next().unwrap_or(raw).trim();
+    if name.is_empty() {
+        return PosixLocale::Unset;
+    }
+    if name == "C" || name == "POSIX" {
+        return PosixLocale::Neutral;
+    }
+    PosixLocale::Language(name.replace('_', "-"))
+}
+
+/// The locale the POSIX environment asks for: `LC_ALL`, then `LC_TIME`, then
+/// `LANG`.
+///
+/// That is the order the C library resolves them in, and the first variable
+/// that says anything decides — including when what it says is `C`. The C
+/// library does not fall through there, so neither does this: under
+/// `LC_ALL=C LANG=de_DE.UTF-8` the answer is the neutral locale, not German.
+pub fn posix_environment_locale() -> PosixLocale {
+    for key in ["LC_ALL", "LC_TIME", "LANG"] {
+        let Some(value) = std::env::var_os(key) else {
+            continue;
+        };
+        match posix_locale(&value.to_string_lossy()) {
+            // Set to nothing is not set. A launcher that exports an empty
+            // `LC_ALL` has not chosen a language, and the C library ignores it
+            // as well.
+            PosixLocale::Unset => continue,
+            answered => return answered,
+        }
+    }
+    PosixLocale::Unset
+}
+
 /// The fallback locale backend: ISO ordering and English names.
 ///
 /// Deliberately plain. A real implementation reaches into the platform's
@@ -237,18 +297,13 @@ pub struct PortableLocale;
 
 impl LocaleBackend for PortableLocale {
     fn user_default_tag(&self) -> String {
-        // The POSIX convention, reduced to a BCP-47 tag: "de_DE.UTF-8" is
-        // "de-DE".
-        for key in ["LC_ALL", "LC_TIME", "LANG"] {
-            if let Some(value) = std::env::var_os(key) {
-                let raw = value.to_string_lossy().to_string();
-                let tag = raw.split('.').next().unwrap_or(&raw).replace('_', "-");
-                if !tag.is_empty() && tag != "C" && tag != "POSIX" {
-                    return tag;
-                }
-            }
+        // The neutral locale and an environment that said nothing both land on
+        // the same answer here: this backend has one set of names and they are
+        // English, so English *is* what `C` asks for.
+        match posix_environment_locale() {
+            PosixLocale::Language(tag) => tag,
+            PosixLocale::Neutral | PosixLocale::Unset => "en-US".to_string(),
         }
-        "en-US".to_string()
     }
 
     fn is_rtl(&self, tag: &str) -> bool {
@@ -311,10 +366,32 @@ mod tests {
     #[test]
     fn a_posix_locale_becomes_a_bcp47_tag() {
         // The conversion itself, independent of the environment.
-        let convert = |raw: &str| raw.split('.').next().unwrap_or(raw).replace('_', "-");
-        assert_eq!(convert("de_DE.UTF-8"), "de-DE");
-        assert_eq!(convert("en_US"), "en-US");
-        assert_eq!(convert("fr"), "fr");
+        let language = |raw: &str| match posix_locale(raw) {
+            PosixLocale::Language(tag) => tag,
+            other => panic!("{raw} should name a language, got {other:?}"),
+        };
+        assert_eq!(language("de_DE.UTF-8"), "de-DE");
+        assert_eq!(language("en_US"), "en-US");
+        assert_eq!(language("fr"), "fr");
+        // The modifier is no more part of the language than the codeset is,
+        // and a variable can arrive with the whitespace a shell script left on
+        // it.
+        assert_eq!(language("de_DE.UTF-8@euro"), "de-DE");
+        assert_eq!(language("ca_ES@valencia"), "ca-ES");
+        assert_eq!(language(" de_DE.UTF-8 "), "de-DE");
+    }
+
+    #[test]
+    fn the_c_locale_is_an_answer_rather_than_a_gap() {
+        // The distinction the widget needs is three-valued. `LC_ALL=C` is how
+        // a script asks for reproducible output, and reading it as "nothing
+        // set" makes `LANG` win — so the widget would print a German agenda
+        // where every other program on the machine printed English.
+        assert_eq!(posix_locale("C"), PosixLocale::Neutral);
+        assert_eq!(posix_locale("POSIX"), PosixLocale::Neutral);
+        assert_eq!(posix_locale("C.UTF-8"), PosixLocale::Neutral);
+        assert_eq!(posix_locale(""), PosixLocale::Unset);
+        assert_eq!(posix_locale("   "), PosixLocale::Unset);
     }
 
     #[test]

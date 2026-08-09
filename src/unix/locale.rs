@@ -43,7 +43,30 @@
 //! [`PortableLocale`]: tpmplaner_core::host::PortableLocale
 
 use chrono::{DateTime, Local, NaiveDate};
-use tpmplaner_core::host::{LocaleBackend, PortableLocale};
+use tpmplaner_core::host::{LocaleBackend, PortableLocale, PosixLocale, posix_environment_locale};
+
+/// The tag that stands for no language at all.
+///
+/// Passed on as a tag rather than resolved to English here, so the rest of the
+/// program sees what the environment actually said and each part answers it in
+/// its own terms: [`patterns::posix_candidates`] produces nothing for it, so
+/// the C library is never asked; [`platform::format`] on macOS declines it for
+/// the same reason; the catalogue lookup falls through to English. What draws
+/// the dates is then [`PortableLocale`] — ISO order, English names — which is
+/// what the C locale is.
+const NEUTRAL_TAG: &str = "C";
+
+/// Does this tag name no language?
+///
+/// `C` and `POSIX` are locales rather than languages, and neither platform's
+/// database has any business being asked about them: Core Foundation would
+/// answer with whatever it takes the root locale to be, and the C library would
+/// be asked for the absence of a locale. Declining lands on [`PortableLocale`]
+/// — ISO order, English names — which is what the C locale is.
+fn names_no_language(tag: &str) -> bool {
+    let primary = tag.split(['-', '_', '.', '@']).next().unwrap_or(tag);
+    primary.eq_ignore_ascii_case("C") || primary.eq_ignore_ascii_case("POSIX")
+}
 
 pub struct UnixLocale;
 
@@ -56,15 +79,23 @@ impl LocaleBackend for UnixLocale {
     /// System Settings says and knows nothing about the environment. Somebody
     /// who sets the variable has said which language they want, explicitly, for
     /// this run — that outranks a system-wide preference by definition.
-    ///
-    /// With nothing set — which is the normal case for anything started from
-    /// the Dock or a login item — Core Foundation is the better answer on
-    /// macOS and there is no answer at all on Linux, where the environment is
-    /// the mechanism.
     fn user_default_tag(&self) -> String {
-        environment_tag()
-            .or_else(platform::user_default_tag)
-            .unwrap_or_else(|| PortableLocale.user_default_tag())
+        match posix_environment_locale() {
+            PosixLocale::Language(tag) => tag,
+            // `LC_ALL=C` is the standard way to ask for reproducible output,
+            // and it is an answer: the C library stops there rather than
+            // falling through to `LANG`. This used to skip it, so
+            // `LC_ALL=C LANG=de_DE.UTF-8` printed a German agenda on a machine
+            // where every other program printed English.
+            PosixLocale::Neutral => NEUTRAL_TAG.to_string(),
+            // Nothing set, which is the normal case for anything started from
+            // the Dock or a login item: Core Foundation is the better answer
+            // on macOS and there is no answer at all on Linux, where the
+            // environment is the mechanism.
+            PosixLocale::Unset => {
+                platform::user_default_tag().unwrap_or_else(|| PortableLocale.user_default_tag())
+            }
+        }
     }
 
     /// Delegated on purpose. Which languages are written right to left is a
@@ -98,40 +129,6 @@ impl LocaleBackend for UnixLocale {
     fn format_day_month(&self, tag: &str, date: NaiveDate) -> Option<String> {
         platform::format_day_month(tag, date).or_else(|| PortableLocale.format_day_month(tag, date))
     }
-}
-
-/// The language the POSIX environment asks for, if it asks for one.
-///
-/// `LC_ALL`, then `LC_TIME`, then `LANG` — the order the C library resolves
-/// them in, so the widget agrees with everything else on the machine about
-/// which one wins. `C` and `POSIX` name no language and are skipped rather
-/// than treated as one.
-///
-/// [`PortableLocale::user_default_tag`] reads the same three and is not reused,
-/// because it answers `en-US` when they say nothing: useful as a last resort
-/// and useless here, where "the environment said nothing" has to be
-/// distinguishable so the platform can be asked instead.
-fn environment_tag() -> Option<String> {
-    ["LC_ALL", "LC_TIME", "LANG"]
-        .into_iter()
-        .filter_map(std::env::var_os)
-        .find_map(|value| tag_from_posix_name(&value.to_string_lossy()))
-}
-
-/// A POSIX locale name as a BCP-47 tag, or `None` if it names no language.
-///
-/// `de_DE.UTF-8@euro` is `de-DE`: the codeset and the modifier are the C
-/// library's business and no part of the language. `C` and `POSIX` are the
-/// absence of a locale rather than a choice of one, and an empty variable is a
-/// variable that was never really set.
-fn tag_from_posix_name(raw: &str) -> Option<String> {
-    let tag = raw
-        .split(['.', '@'])
-        .next()
-        .unwrap_or(raw)
-        .trim()
-        .replace('_', "-");
-    (!tag.is_empty() && tag != "C" && tag != "POSIX").then_some(tag)
 }
 
 /// Midday on a date, as Unix seconds.
@@ -176,7 +173,9 @@ mod patterns {
             return Vec::new();
         };
         let language = language.to_ascii_lowercase();
-        if language == "c" || language == "posix" {
+        // The same rule the macOS back end applies, from the same place: `C`
+        // names no language, so there is nothing here to ask the C library for.
+        if super::names_no_language(&language) {
             return Vec::new();
         }
         // The first two-or-three-letter subtag after the language that is not a
@@ -214,41 +213,65 @@ mod patterns {
     /// Scanning for the hour field alone found nothing there and called the
     /// most twelve-hour locale in the world a twenty-four-hour one.
     pub(super) fn is_twelve_hour(t_fmt: &str) -> bool {
-        specifiers(t_fmt).any(|c| c == 'I' || c == 'l' || c == 'r')
-    }
-
-    /// The conversion specifiers in a `strftime` pattern, in order.
-    ///
-    /// `%%` is a literal per cent and carries no specifier, so it is stepped over
-    /// rather than read as one. `E` and `O` are modifiers — `%Ex`, `%Od` — and the
-    /// letter after them is the specifier.
-    fn specifiers(fmt: &str) -> impl Iterator<Item = char> + '_ {
-        let mut chars = fmt.chars();
-        std::iter::from_fn(move || {
-            loop {
-                if chars.next()? != '%' {
-                    continue;
-                }
-                let mut c = chars.next()?;
-                if c == '%' {
-                    continue;
-                }
-                if c == 'E' || c == 'O' {
-                    c = chars.next()?;
-                }
-                return Some(c);
-            }
-        })
+        tokenize(t_fmt)
+            .iter()
+            .any(|t| matches!(t, Token::Conversion(_, 'I' | 'l' | 'r')))
     }
 
     /// A `strftime` pattern split into literal runs and conversions, so a field can
     /// be replaced or removed without disturbing the locale's own punctuation.
     #[derive(Debug, PartialEq)]
     enum Token {
-        /// The whole conversion including the leading `%` and any modifier, and
-        /// the specifier letter on its own.
+        /// The whole conversion including the leading `%`, any flags, any field
+        /// width and any modifier — and the specifier letter on its own.
         Conversion(String, char),
         Literal(String),
+    }
+
+    /// Reads one conversion, the `%` having been consumed already.
+    ///
+    /// The shape is `%`, then flags, then an optional field width, then an
+    /// optional `E` or `O` modifier, then the specifier letter. Everything
+    /// before the letter has to be stepped over to find it, and skipping only
+    /// the modifier is what this got wrong: glibc writes `cs_CZ`'s and
+    /// `sk_SK`'s short date as `%-d.%-m.%Y`, where `-` is the GNU "do not pad"
+    /// flag. Reading the `-` as the specifier shredded the pattern — the due
+    /// column ended in a bare `%`, and the month was never recognised as one to
+    /// widen. `%_d`, `%02d` and `%^a` fail the same way.
+    ///
+    /// The specifier is `None` when the pattern ends part-way through a
+    /// conversion, which makes it not a conversion at all: the caller keeps the
+    /// text as a literal, which is what `strftime` prints for it.
+    fn read_conversion(chars: &mut std::iter::Peekable<std::str::Chars>) -> (String, Option<char>) {
+        let mut conversion = String::from('%');
+        // The GNU flags, then a width. `0` is both a flag and a digit, which
+        // costs nothing here: either loop consumes it.
+        while let Some(&c) = chars.peek() {
+            if !matches!(c, '-' | '_' | '0' | '^' | '#') {
+                break;
+            }
+            conversion.push(c);
+            chars.next();
+        }
+        while let Some(&c) = chars.peek() {
+            if !c.is_ascii_digit() {
+                break;
+            }
+            conversion.push(c);
+            chars.next();
+        }
+        let Some(mut spec) = chars.next() else {
+            return (conversion, None);
+        };
+        conversion.push(spec);
+        if (spec == 'E' || spec == 'O')
+            && let Some(&after) = chars.peek()
+        {
+            chars.next();
+            conversion.push(after);
+            spec = after;
+        }
+        (conversion, Some(spec))
     }
 
     fn tokenize(fmt: &str) -> Vec<Token> {
@@ -260,25 +283,18 @@ mod patterns {
                 literal.push(c);
                 continue;
             }
-            let Some(&next) = chars.peek() else {
-                literal.push('%');
-                break;
-            };
-            if next == '%' {
+            if chars.peek() == Some(&'%') {
                 chars.next();
                 literal.push('%');
                 continue;
             }
-            let mut conversion = String::from('%');
-            let mut spec = chars.next().unwrap_or('%');
-            conversion.push(spec);
-            if (spec == 'E' || spec == 'O')
-                && let Some(&after) = chars.peek()
-            {
-                chars.next();
-                conversion.push(after);
-                spec = after;
-            }
+            let (conversion, spec) = read_conversion(&mut chars);
+            let Some(spec) = spec else {
+                // The pattern ran out mid-conversion, so there is no field
+                // here — only the text that was mistaken for one.
+                literal.push_str(&conversion);
+                break;
+            };
             if !literal.is_empty() {
                 out.push(Token::Literal(std::mem::take(&mut literal)));
             }
@@ -288,6 +304,30 @@ mod patterns {
             out.push(Token::Literal(literal));
         }
         out
+    }
+
+    /// The `E` or `O` a conversion carried, so a field that is substituted for
+    /// it keeps what the locale asked for.
+    ///
+    /// `ja_JP` asks for `%EY` — the era year — and Arabic locales for `%Od`,
+    /// alternative digits. Widening `%Od` to a bare `%e` answers a question the
+    /// locale did not ask. The flags and the width are deliberately *not*
+    /// carried across: they describe the padding of the field that is being
+    /// replaced, and the replacement is a different field, often a name rather
+    /// than a number.
+    fn modifier(raw: &str) -> &'static str {
+        let mut back = raw.chars().rev();
+        back.next();
+        match back.next() {
+            Some('E') => "E",
+            Some('O') => "O",
+            _ => "",
+        }
+    }
+
+    /// A conversion for `spec`, keeping `raw`'s modifier.
+    fn substitute(raw: &str, spec: char) -> String {
+        format!("%{}{spec}", modifier(raw))
     }
 
     fn is_year(spec: char) -> bool {
@@ -357,6 +397,9 @@ mod patterns {
         let mut out = String::new();
         let mut pending_literal: Option<String> = None;
         let mut previous: Option<char> = None;
+        // Set when a weekday was dropped before anything had been written, so
+        // the separator it left behind can be dropped with it.
+        let mut weekday_led = false;
 
         for token in tokens {
             match token {
@@ -364,12 +407,20 @@ mod patterns {
                 Token::Conversion(raw, spec) => {
                     if is_weekday(spec) {
                         // Drop the separator that came with it as well, or the
-                        // line starts with a stray comma.
+                        // line starts with a stray comma. Which side that
+                        // separator is on depends on where the weekday sat:
+                        // `%d, %a` carries it in front, `%a, %d` behind.
                         pending_literal = None;
+                        weekday_led |= previous.is_none();
                         continue;
                     }
+                    // Only the separator a dropped leading weekday left behind
+                    // is suppressed. Anything else is text the locale wrote —
+                    // `long_date_pattern("le %d/%m/%Y")` begins with `le `, and
+                    // gating this on "something has been written already" threw
+                    // it away.
                     if let Some(text) = pending_literal.take()
-                        && previous.is_some()
+                        && !(weekday_led && previous.is_none())
                     {
                         out.push_str(&if name_the_month {
                             spaced(&text, previous)
@@ -378,9 +429,17 @@ mod patterns {
                         });
                     }
                     match spec {
-                        'm' | 'b' | 'h' if name_the_month => out.push_str("%B"),
-                        'y' | 'C' | 'g' => out.push_str("%Y"),
-                        _ if is_day(spec) && name_the_month => out.push_str("%e"),
+                        'm' | 'b' | 'h' if name_the_month => {
+                            out.push_str(&substitute(&raw, 'B'));
+                        }
+                        // `%G` is a year like the rest — [`is_year`] counts it,
+                        // so the due column already drops it — and leaving it
+                        // here let an ISO week-based year through unwidened,
+                        // which differs from the calendar year over new year.
+                        'y' | 'C' | 'g' | 'G' => out.push_str(&substitute(&raw, 'Y')),
+                        _ if is_day(spec) && name_the_month => {
+                            out.push_str(&substitute(&raw, 'e'));
+                        }
                         _ => out.push_str(&raw),
                     }
                     previous = Some(spec);
@@ -388,11 +447,12 @@ mod patterns {
             }
         }
         // A trailing literal belongs to the last field — `%Y年%m月%d日` ends in
-        // one. It is left alone: there is no following field for it to separate
-        // from, so it is part of the date rather than a gap in it.
+        // one, and so does `hu_HU`'s `%Y.%m.%d.`, where the closing stop is the
+        // Hungarian ordinal marker. It is left alone rather than spaced: there
+        // is no following field for it to separate from, so it is part of the
+        // date rather than a gap in it.
         if let Some(text) = pending_literal
             && previous.is_some()
-            && !name_the_month
         {
             out.push_str(&text);
         }
@@ -401,6 +461,105 @@ mod patterns {
         } else {
             out
         }
+    }
+
+    /// The locale's own short time: its `T_FMT` with the seconds taken out.
+    ///
+    /// `T_FMT` carries more than the hour convention — it carries the field
+    /// *order*, and a twelve-hour locale need not put the meridiem last. The
+    /// shape glibc records for a Korean twelve-hour time is
+    /// `%p %I시 %M분 %S초` and for a Taiwanese one `%p %I時%M分%S秒`, so a
+    /// pattern invented here as `%I:%M %p` would read `08:00 오전` where the
+    /// locale reads `오전 8:00`. Field order is not guessable from a language;
+    /// that is the design note this module opens with, and the date path has
+    /// obeyed it all along.
+    ///
+    /// A widget clock has no use for seconds, so that field goes, and with it
+    /// the punctuation that came with it — on whichever side the locale keeps
+    /// it. A separator between numbers introduces the field it precedes;
+    /// a separator that carries the field's *unit*, as `%M分%S秒` does, follows
+    /// it.
+    pub(super) fn short_time_pattern(t_fmt: &str) -> String {
+        let mut tokens = tokenize(&expand_compound(t_fmt));
+        if let Some(at) = tokens
+            .iter()
+            .position(|t| matches!(t, Token::Conversion(_, 'S')))
+        {
+            let unit_follows = matches!(
+                tokens.get(at + 1),
+                Some(Token::Literal(text)) if !text.is_ascii()
+            );
+            if unit_follows {
+                tokens.remove(at + 1);
+                tokens.remove(at);
+            } else {
+                tokens.remove(at);
+                if at > 0 && matches!(tokens.get(at - 1), Some(Token::Literal(_))) {
+                    tokens.remove(at - 1);
+                }
+            }
+        }
+
+        // Rebuilt verbatim, with none of the respacing the date path does: a
+        // locale's own time punctuation is already right for a time, and there
+        // is no field here being widened into a word.
+        let mut out = String::new();
+        for token in &tokens {
+            match token {
+                Token::Literal(text) => out.push_str(text),
+                Token::Conversion(raw, _) => out.push_str(raw),
+            }
+        }
+        let out = out.trim();
+        if out.is_empty() {
+            "%H:%M".into()
+        } else {
+            out.to_owned()
+        }
+    }
+
+    /// Writes the compound specifiers out as the fields they stand for.
+    ///
+    /// `%r`, `%T` and `%R` name a whole time rather than a field, and glibc
+    /// uses them: `en_US`'s `T_FMT` is `%r` and nothing else. There is no
+    /// seconds field to drop from a pattern that is one letter long, so it is
+    /// replaced by the one POSIX defines it as.
+    fn expand_compound(t_fmt: &str) -> String {
+        let mut out = String::with_capacity(t_fmt.len());
+        for token in tokenize(t_fmt) {
+            match token {
+                Token::Literal(text) => out.push_str(&text),
+                Token::Conversion(raw, spec) => out.push_str(match spec {
+                    'r' => "%I:%M:%S %p",
+                    'T' => "%H:%M:%S",
+                    'R' => "%H:%M",
+                    _ => &raw,
+                }),
+            }
+        }
+        out
+    }
+
+    /// Takes the padding zero off the hour on a twelve-hour clock.
+    ///
+    /// No clock anywhere writes `07:13 AM`. `%I` pads to two digits and `%l`,
+    /// which pads with a space instead, is not in POSIX — so the zero comes off
+    /// the rendered text. The first run of digits rather than the start of the
+    /// string, because the hour is not always first: `ko_KR` puts the meridiem
+    /// in front of it. Two digits and no more, so `10:07` keeps its own.
+    pub(super) fn drop_hour_padding(rendered: &str) -> String {
+        let Some(start) = rendered.find(|c: char| c.is_ascii_digit()) else {
+            return rendered.to_owned();
+        };
+        let run = &rendered[start..];
+        let end = run.find(|c: char| !c.is_ascii_digit()).unwrap_or(run.len());
+        if end != 2 || !run.starts_with('0') {
+            return rendered.to_owned();
+        }
+        let mut out = String::with_capacity(rendered.len() - 1);
+        out.push_str(&rendered[..start]);
+        out.push_str(&rendered[start + 1..]);
+        out
     }
 
     /// The same short date with the year taken out, for the task due column.
@@ -443,10 +602,10 @@ mod patterns {
                     text.clone()
                 }),
                 Token::Conversion(raw, spec) => {
-                    out.push_str(match spec {
-                        _ if is_month(*spec) && name_the_month => "%b",
-                        _ if is_day(*spec) && name_the_month => "%e",
-                        _ => raw,
+                    out.push_str(&match spec {
+                        _ if is_month(*spec) && name_the_month => substitute(raw, 'b'),
+                        _ if is_day(*spec) && name_the_month => substitute(raw, 'e'),
+                        _ => raw.clone(),
                     });
                     previous = Some(*spec);
                 }
@@ -512,6 +671,101 @@ mod patterns {
             assert!(!is_twelve_hour("%R"));
             // A literal per cent is not a conversion.
             assert!(!is_twelve_hour("%H%%I"));
+            // A GNU flag sits between the per cent and the specifier, and
+            // stepping over only `E` and `O` found `-` where the hour was —
+            // the same silent failure the `%r` case above is about.
+            assert!(is_twelve_hour("%-I:%M:%S %p"));
+            assert!(is_twelve_hour("%_I:%M %p"));
+            assert!(!is_twelve_hour("%-H:%M"));
+        }
+
+        #[test]
+        fn a_flag_or_a_field_width_belongs_to_the_conversion_and_not_to_the_text() {
+            // glibc's `cs_CZ` and `sk_SK` short date. Reading `-` as the
+            // specifier left the day unrecognised and the pattern ending in a
+            // bare `%`, so a Czech due column read `4. %`.
+            assert_eq!(
+                tokenize("%-d.%-m.%Y"),
+                vec![
+                    Token::Conversion("%-d".into(), 'd'),
+                    Token::Literal(".".into()),
+                    Token::Conversion("%-m".into(), 'm'),
+                    Token::Literal(".".into()),
+                    Token::Conversion("%Y".into(), 'Y'),
+                ]
+            );
+            assert_eq!(long_date_pattern("%-d.%-m.%Y"), "%e. %B %Y");
+            assert_eq!(day_month_pattern("%-d.%-m.%Y"), "%e. %b");
+            // A space-padding flag and a field width, both of which glibc
+            // accepts and both of which used to shred the pattern.
+            assert_eq!(day_month_pattern("%_d/%_m/%Y"), "%e %b");
+            assert_eq!(day_month_pattern("%02d/%02m/%Y"), "%e %b");
+            // A pattern that stops part-way through a conversion has no field
+            // in it, so what is there is text.
+            assert_eq!(tokenize("%"), vec![Token::Literal("%".into())]);
+            assert_eq!(tokenize("%-"), vec![Token::Literal("%-".into())]);
+        }
+
+        #[test]
+        fn a_substituted_field_keeps_the_modifier_the_locale_asked_for() {
+            // `%Od` is alternative digits and `%Ey` an era year. Widening the
+            // field is not licence to answer a different question.
+            assert_eq!(long_date_pattern("%Od.%Om.%Y"), "%Oe. %OB %Y");
+            assert_eq!(long_date_pattern("%d.%m.%Ey"), "%e. %B %EY");
+            assert_eq!(day_month_pattern("%Od.%Om.%Y"), "%Oe. %Ob");
+            // `%G` is a year like the others — `day_month_pattern` already
+            // drops it — so the long date widens it rather than letting an ISO
+            // week-based year through.
+            assert_eq!(long_date_pattern("%G-%m-%d"), "%Y %B %e");
+            assert_eq!(day_month_pattern("%G-%m-%d"), "%b %e");
+        }
+
+        #[test]
+        fn text_at_either_end_of_the_pattern_is_the_locales_and_stays() {
+            // Leading: the guard that suppresses a separator orphaned by a
+            // dropped weekday used to swallow genuine text with it.
+            assert_eq!(long_date_pattern("le %d/%m/%Y"), "le %e %B %Y");
+            // Trailing: glibc's `hu_HU` is `%Y.%m.%d.`, where the closing stop
+            // is the Hungarian ordinal marker rather than a separator —
+            // `2026. augusztus 4.` reads wrong without it.
+            assert_eq!(long_date_pattern("%Y.%m.%d."), "%Y %B %e.");
+            // And the case the guard was there for still works, because the
+            // weekday branch drops its own separator on whichever side it is.
+            assert_eq!(long_date_pattern("%a, %d %b %Y"), "%e %B %Y");
+            assert_eq!(long_date_pattern("%d %b %Y, %a"), "%e %B %Y");
+        }
+
+        #[test]
+        fn the_short_time_keeps_the_locales_field_order_and_loses_the_seconds() {
+            // European: the separator introduces the field it precedes.
+            assert_eq!(short_time_pattern("%H:%M:%S"), "%H:%M");
+            assert_eq!(short_time_pattern("%I:%M:%S %p"), "%I:%M %p");
+            // The compound specifiers name a whole time, and glibc uses them:
+            // `en_US`'s `T_FMT` is `%r` and nothing more.
+            assert_eq!(short_time_pattern("%r"), "%I:%M %p");
+            assert_eq!(short_time_pattern("%T"), "%H:%M");
+            assert_eq!(short_time_pattern("%R"), "%H:%M");
+            // Korean and Taiwanese put the meridiem first. Inventing
+            // `%I:%M %p` here wrote `08:00 오전` for a locale that reads
+            // `오전 8:00`.
+            assert_eq!(short_time_pattern("%p %I시 %M분 %S초"), "%p %I시 %M분");
+            assert_eq!(short_time_pattern("%p %I時%M分%S秒"), "%p %I時%M分");
+            // A separator carrying the field's unit follows it, so that is the
+            // one that goes with the seconds.
+            assert_eq!(short_time_pattern("%H時%M分%S秒"), "%H時%M分");
+            // Nothing usable still has to yield a clock.
+            assert_eq!(short_time_pattern(""), "%H:%M");
+        }
+
+        #[test]
+        fn a_twelve_hour_clock_drops_the_padding_wherever_the_hour_sits() {
+            assert_eq!(drop_hour_padding("07:13 AM"), "7:13 AM");
+            // Ten past ten keeps its own zero, and so does the minute.
+            assert_eq!(drop_hour_padding("10:07 AM"), "10:07 AM");
+            // The hour is not always first.
+            assert_eq!(drop_hour_padding("오전 08:00"), "오전 8:00");
+            assert_eq!(drop_hour_padding("AM"), "AM");
+            assert_eq!(drop_hour_padding(""), "");
         }
 
         #[test]
@@ -625,6 +879,8 @@ mod platform {
 
     use super::*;
     use crate::unix::cf::{self, CFAbsoluteTime, CFIndex, CFOptionFlags, CFStringRef, CFTypeRef};
+    use std::cell::RefCell;
+    use std::collections::HashMap;
 
     type CFLocaleRef = CFTypeRef;
     type CFDateFormatterRef = CFTypeRef;
@@ -664,26 +920,79 @@ mod platform {
         cf::Owned::new(unsafe { CFLocaleCreate(std::ptr::null(), identifier.as_raw()) })
     }
 
-    /// Formats one instant with the pattern this locale writes `skeleton` in.
-    fn format(tag: &str, skeleton: &str, unix_seconds: i64) -> Option<String> {
-        let locale = locale_for(tag)?;
-        let template = cf::string(skeleton)?;
-        let pattern = cf::Owned::new(unsafe {
-            CFDateFormatterCreateDateFormatFromTemplate(
-                std::ptr::null(),
-                template.as_raw(),
-                0,
-                locale.as_raw(),
-            )
-        })?;
-        let formatter = cf::Owned::new(unsafe {
-            CFDateFormatterCreate(std::ptr::null(), locale.as_raw(), NO_STYLE, NO_STYLE)
-        })?;
-        unsafe { CFDateFormatterSetFormat(formatter.as_raw(), pattern.as_raw()) };
+    thread_local! {
+        /// A ready formatter per skeleton and tag, built once.
+        ///
+        /// Nested rather than keyed on a pair, so a lookup borrows the tag it
+        /// was handed instead of allocating a key to ask with.
+        ///
+        /// The `cf` module's own doc gives the reason this exists: *"The widget
+        /// formats a clock every minute for days, so this is not a rounding
+        /// error."* It applies here with more force — the clock is one call,
+        /// but the renderer asks for a time label per visible event and a due
+        /// date per task on every frame. Each of those used to build a
+        /// `CFLocale`, a template string, a derived pattern and a formatter and
+        /// throw all four away, and
+        /// `CFDateFormatterCreateDateFormatFromTemplate` derives a CLDR pattern
+        /// every time it is called.
+        ///
+        /// The set is tiny and fixed — four skeletons against one or two tags —
+        /// and a formatter is immutable once its pattern is set, so there is
+        /// nothing to invalidate. Per thread because a `CFDateFormatter` is not
+        /// documented as safe to use from several at once.
+        static FORMATTERS: RefCell<HashMap<&'static str, HashMap<String, cf::Owned>>> =
+            RefCell::new(HashMap::new());
+    }
 
+    /// The formatter that writes `skeleton` the way `tag` writes it.
+    ///
+    /// A raw reference rather than the [`cf::Owned`]: the owner stays in the
+    /// cache for the life of the thread and nothing removes it, and handing
+    /// back a borrow would keep the `RefCell` borrowed across the format call.
+    fn formatter(tag: &str, skeleton: &'static str) -> Option<CFDateFormatterRef> {
+        FORMATTERS.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            let by_tag = cache.entry(skeleton).or_default();
+            if let Some(ready) = by_tag.get(tag) {
+                return Some(ready.as_raw());
+            }
+            let locale = locale_for(tag)?;
+            let template = cf::string(skeleton)?;
+            // A *skeleton* names the fields wanted; this is what turns it into
+            // the pattern this locale actually writes them in.
+            let pattern = cf::Owned::new(unsafe {
+                CFDateFormatterCreateDateFormatFromTemplate(
+                    std::ptr::null(),
+                    template.as_raw(),
+                    0,
+                    locale.as_raw(),
+                )
+            })?;
+            let built = cf::Owned::new(unsafe {
+                CFDateFormatterCreate(std::ptr::null(), locale.as_raw(), NO_STYLE, NO_STYLE)
+            })?;
+            unsafe { CFDateFormatterSetFormat(built.as_raw(), pattern.as_raw()) };
+            let raw = built.as_raw();
+            by_tag.insert(tag.to_owned(), built);
+            Some(raw)
+        })
+    }
+
+    /// Formats one instant with the pattern this locale writes `skeleton` in.
+    fn format(tag: &str, skeleton: &'static str, unix_seconds: i64) -> Option<String> {
+        // The neutral locale is not a language, and Core Foundation would
+        // answer for it anyway with whatever it takes the root locale to be.
+        // Declining lands on the portable formatter — ISO order, English names
+        // — which is what `LC_ALL=C` asks for. The C library back end reaches
+        // the same answer through `posix_candidates`, which produces nothing
+        // for it.
+        if super::names_no_language(tag) {
+            return None;
+        }
+        let formatter = formatter(tag, skeleton)?;
         let at = unix_seconds as CFAbsoluteTime - cf::EPOCH_OFFSET;
         let out = cf::Owned::new(unsafe {
-            CFDateFormatterCreateStringWithAbsoluteTime(std::ptr::null(), formatter.as_raw(), at)
+            CFDateFormatterCreateStringWithAbsoluteTime(std::ptr::null(), formatter, at)
         })?;
         unsafe { cf::to_string(out.as_raw()) }
     }
@@ -731,39 +1040,104 @@ mod platform {
     //! and would start formatting a server's dates in the user's language
     //! halfway through a request.
 
-    use super::patterns::{day_month_pattern, is_twelve_hour, long_date_pattern, posix_candidates};
+    use super::patterns::{
+        day_month_pattern, drop_hour_padding, is_twelve_hour, long_date_pattern, posix_candidates,
+        short_time_pattern,
+    };
     use super::*;
     use chrono::{Datelike, Timelike};
+    use std::cell::RefCell;
+    use std::collections::HashMap;
     use std::ffi::CString;
 
-    /// Everything the C library is asked to render, at once, so one locale
-    /// lookup serves the whole call.
-    fn with_locale<T>(tag: &str, f: impl FnOnce() -> Option<T>) -> Option<T> {
-        for name in posix_candidates(tag) {
-            let Ok(c_name) = CString::new(name) else {
-                continue;
-            };
-            // `LC_ALL_MASK` rather than `LC_TIME_MASK` alone: `strftime` reads
-            // `LC_TIME`, but the month and weekday names come back in the
-            // codeset `LC_CTYPE` describes, and a mismatch there is how a
-            // UTF-8 name arrives as question marks.
-            let loc = unsafe {
-                libc::newlocale(libc::LC_ALL_MASK, c_name.as_ptr(), std::ptr::null_mut())
-            };
-            if loc.is_null() {
-                // Not generated on this machine. Try the next spelling.
-                continue;
+    /// A `locale_t`, freed when the thread that built it goes away.
+    struct Handle(libc::locale_t);
+
+    impl Drop for Handle {
+        fn drop(&mut self) {
+            // Nothing of ours is installed at this point: [`with_locale`]
+            // restores the previous locale before it returns, every time.
+            unsafe { libc::freelocale(self.0) };
+        }
+    }
+
+    thread_local! {
+        /// The locales a tag resolved to, built once per thread.
+        ///
+        /// `newlocale` opens and parses the locale archive, and this is not a
+        /// once-per-day path: `src/win/render.rs` asks for a time label per
+        /// visible event and a due date per task on every frame — sixty times a
+        /// second while a reveal or hover animation runs. A locale is immutable
+        /// once built, so there is nothing to invalidate, and the widget uses
+        /// one tag.
+        ///
+        /// Per thread rather than shared: a `locale_t` is installed with
+        /// `uselocale`, which is a property of the calling thread, and the sync
+        /// threads have no business reaching into a handle the drawing thread
+        /// is formatting through.
+        static LOCALES: RefCell<HashMap<String, Vec<Handle>>> = RefCell::new(HashMap::new());
+    }
+
+    /// Every candidate spelling of `tag` that this machine actually has, in
+    /// order of preference.
+    fn locales_for(tag: &str) -> Vec<libc::locale_t> {
+        LOCALES.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            if !cache.contains_key(tag) {
+                let handles: Vec<Handle> = posix_candidates(tag)
+                    .into_iter()
+                    .filter_map(|name| CString::new(name).ok())
+                    .filter_map(|name| {
+                        // `LC_ALL_MASK` rather than `LC_TIME_MASK` alone:
+                        // `strftime` reads `LC_TIME`, but the month and weekday
+                        // names come back in the codeset `LC_CTYPE` describes,
+                        // and a mismatch there is how a UTF-8 name arrives as
+                        // question marks.
+                        let loc = unsafe {
+                            libc::newlocale(libc::LC_ALL_MASK, name.as_ptr(), std::ptr::null_mut())
+                        };
+                        // Null means the locale is not generated on this
+                        // machine. Try the next spelling.
+                        //
+                        // `then` rather than `then_some`, which takes a value
+                        // and so would build the `Handle` either way — and a
+                        // `Handle` built around null is dropped a moment later
+                        // into `freelocale(NULL)`, which is a segmentation
+                        // fault rather than a no-op.
+                        (!loc.is_null()).then(|| Handle(loc))
+                    })
+                    .collect();
+                // The empty case is cached too: a tag this machine has nothing
+                // for must not retry five `newlocale` calls every frame.
+                cache.insert(tag.to_owned(), handles);
             }
+            // Copied out so the borrow ends before the caller's closure runs.
+            // The handles stay in the map for the life of the thread and
+            // nothing removes them, so the pointers stay good.
+            cache[tag].iter().map(|h| h.0).collect()
+        })
+    }
+
+    /// Runs `f` under each candidate locale until one of them can answer.
+    ///
+    /// Not until one of them *loads*: a locale that loads and cannot produce a
+    /// usable answer must not end the search. `de_DE` generated in ISO-8859-1
+    /// on a machine that also has `de.UTF-8` is the case — `strftime` writes
+    /// Latin-1 bytes for `März`, the UTF-8 conversion fails, and stopping there
+    /// dropped the whole back end to the English fallback with a perfectly good
+    /// Unicode locale one line further down the list. That is the codeset
+    /// mismatch the `LC_ALL_MASK` note above is about, one layer up.
+    fn with_locale<T>(tag: &str, mut f: impl FnMut() -> Option<T>) -> Option<T> {
+        for loc in locales_for(tag) {
             let previous = unsafe { libc::uselocale(loc) };
             let out = f();
-            // Restored before the locale is freed: freeing the locale that is
-            // still installed is undefined, and this thread goes on to format
-            // other things.
-            unsafe {
-                libc::uselocale(previous);
-                libc::freelocale(loc);
+            // Restored whatever happened: this thread goes on to format other
+            // things, and the sync threads must not inherit a locale from a
+            // frame.
+            unsafe { libc::uselocale(previous) };
+            if out.is_some() {
+                return out;
             }
-            return out;
         }
         None
     }
@@ -867,30 +1241,19 @@ mod platform {
     pub fn format_time(tag: &str, dt: DateTime<Local>) -> Option<String> {
         with_locale(tag, || {
             let t_fmt = langinfo(libc::T_FMT)?;
-            // The locale's own `T_FMT` carries seconds, which a widget clock
-            // has no use for. What is taken from it is the hour convention;
-            // minutes and the meridiem marker are then placed the way every
-            // short time format places them.
-            let twelve = is_twelve_hour(&t_fmt);
-            let pattern = if twelve { "%I:%M %p" } else { "%H:%M" };
+            // The locale's own `T_FMT`, with the seconds a widget clock has no
+            // use for taken out of it — rather than a pattern invented here,
+            // which would put the meridiem where English puts it. The hour
+            // convention comes out of the same string.
             let tm = tm_for(dt.date_naive(), dt.hour(), dt.minute());
-            let rendered = strftime(pattern, &tm)?;
+            let rendered = strftime(&short_time_pattern(&t_fmt), &tm)?;
 
-            if !twelve {
+            if !is_twelve_hour(&t_fmt) {
                 // `07:13` is right on a twenty-four-hour clock, where the
                 // leading zero is what keeps the column the same width all day.
                 return Some(rendered);
             }
-            // On a twelve-hour clock it is not: no clock anywhere writes
-            // `07:13 AM`. `%I` pads to two digits and `%l`, which pads with a
-            // space instead, is not in POSIX — so the zero comes off here.
-            // Only a leading one, so `10:07 AM` keeps its own.
-            Some(
-                rendered
-                    .strip_prefix('0')
-                    .map(str::to_owned)
-                    .unwrap_or(rendered),
-            )
+            Some(drop_hour_padding(&rendered))
         })
     }
 
@@ -966,26 +1329,39 @@ mod backend {
     /// conversion and the precedence the lookup applies to whatever it finds.
     #[test]
     fn the_environment_is_read_before_the_system_preference() {
-        assert_eq!(tag_from_posix_name("fr_FR.UTF-8").as_deref(), Some("fr-FR"));
+        // The parsing itself lives in the core now — one rule, one place, with
+        // its own tests. What this checks is the precedence applied to what it
+        // reports, and that whatever this machine happens to say comes back as
+        // a tag rather than a raw POSIX name.
+        let tag = UnixLocale.user_default_tag();
+        assert!(!tag.is_empty());
+        assert!(!tag.contains('_') && !tag.contains('.'), "{tag}");
+    }
+
+    /// The neutral locale is a choice, and every part of the back end answers
+    /// it the same way.
+    ///
+    /// `LC_ALL=C` is how a script or a service unit asks a program for
+    /// reproducible output. Reading it as "nothing set" let `LANG` win, so
+    /// `LC_ALL=C LANG=de_DE.UTF-8` printed a German agenda where everything
+    /// else on the machine printed English.
+    #[test]
+    fn the_c_locale_is_declined_by_the_platform_rather_than_answered() {
+        assert!(names_no_language("C"));
+        assert!(names_no_language("POSIX"));
+        assert!(names_no_language("C.UTF-8"));
+        assert!(!names_no_language("ca-ES"));
+        assert!(!names_no_language("cs_CZ"));
+
+        // So the platform gives nothing for it and the portable formatter —
+        // ISO order, English names — is what draws the date.
+        let date = subject();
+        assert_eq!(platform::format_date(NEUTRAL_TAG, date), None);
+        assert_eq!(platform::format_day_month(NEUTRAL_TAG, date), None);
         assert_eq!(
-            tag_from_posix_name("de_DE.UTF-8@euro").as_deref(),
-            Some("de-DE")
+            UnixLocale.format_date(NEUTRAL_TAG, date),
+            PortableLocale.format_date(NEUTRAL_TAG, date)
         );
-        assert_eq!(tag_from_posix_name("pt_BR").as_deref(), Some("pt-BR"));
-
-        // The whole reason this exists rather than a reuse of the portable
-        // lookup, which answers `en-US` here: saying "nothing" is what lets the
-        // platform be asked next instead of being overruled by a default.
-        assert_eq!(tag_from_posix_name("C"), None);
-        assert_eq!(tag_from_posix_name("POSIX"), None);
-        assert_eq!(tag_from_posix_name(""), None);
-        assert_eq!(tag_from_posix_name("  "), None);
-
-        // And whatever this machine happens to say, the result is a tag rather
-        // than a raw POSIX name.
-        if let Some(tag) = environment_tag() {
-            assert!(!tag.contains('_') && !tag.contains('.'), "{tag}");
-        }
     }
 
     #[test]

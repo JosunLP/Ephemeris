@@ -89,8 +89,13 @@ pub struct Owned(CFTypeRef);
 impl Owned {
     /// `None` for a null return, so a failure part-way through a chain ends the
     /// chain rather than being carried on as a pointer to nothing.
+    ///
+    /// `then` rather than `then_some`, which takes a value and would build the
+    /// `Owned` either way — including around the null this is here to catch,
+    /// and that one is dropped a moment later into `CFRelease(NULL)`, which
+    /// Core Foundation treats as a fatal error rather than as nothing to do.
     pub fn new(raw: CFTypeRef) -> Option<Self> {
-        (!raw.is_null()).then_some(Self(raw))
+        (!raw.is_null()).then(|| Self(raw))
     }
 
     pub fn as_raw(&self) -> CFTypeRef {

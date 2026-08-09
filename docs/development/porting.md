@@ -46,7 +46,11 @@ reference to it. That is a better shape than DPAPI's rather than a compromise:
 the token never reaches the file, so a copied `token.bin` is worth nothing.
 Where there is no keyring — a container, a headless session — the bytes go into
 the file as they are and a warning says so once, which is the documented
-fallback this page asked for. Linux drives `secret-tool` rather than speaking
+fallback this page asked for. A keyring that is present and refuses is not that
+case and does not take that route: a locked keychain, a cancelled passphrase
+prompt or a daemon that is a second behind are all temporary, and a plain copy
+on disk is not, so nothing is written and the token is stored on the next
+refresh instead. Linux drives `secret-tool` rather than speaking
 D-Bus, for reasons set out in `src/unix/secure.rs`; when the window arrives it
 will need a D-Bus connection anyway for the portals, and that is the moment to
 change it.

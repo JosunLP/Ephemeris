@@ -29,6 +29,7 @@ use std::time::{Duration, Instant, SystemTime};
 use tpmplaner_core::anim::Animations;
 use tpmplaner_core::config::{self, Config};
 use tpmplaner_core::i18n::Locale;
+use tpmplaner_core::layout::{Panel, hit_point};
 use tpmplaner_core::log;
 use tpmplaner_core::sync::{self, Command, Shared, Status, SyncHandle};
 use tpmplaner_core::theme::{Appearance, Metrics, Palette, SystemVisuals, ThemePref};
@@ -1638,7 +1639,20 @@ fn save_geometry(st: &mut State) {
 /// Hit testing back to front: the regions drawn last (those on top) win —
 /// which is how the tick circle beats the task row, and the undo area beats
 /// them both.
+///
+/// The point is folded first. The rectangles come out of `tpmplaner_core`
+/// unmirrored and the drawing is mirrored at the primitives, so a raw client
+/// position and a hit rectangle are in different coordinates in a right-to-left
+/// layout. See [`hit_point`].
 fn hit_at(st: &State, x: f32, y: f32) -> Option<Hit> {
+    let (x, y) = if st.loc.rtl {
+        // No renderer means nothing has been drawn, so there are no regions to
+        // be wrong about either.
+        let (w, h) = st.renderer.as_ref()?.size_dip();
+        hit_point(&Panel::new(w, h, &st.metrics), true, x, y)
+    } else {
+        (x, y)
+    };
     st.hits
         .iter()
         .rev()

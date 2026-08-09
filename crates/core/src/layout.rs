@@ -123,9 +123,29 @@ pub struct HitRegion {
 }
 
 impl HitRegion {
+    /// `x` and `y` are unmirrored, as everything else here is. A front end
+    /// holding a raw client position has to put it through [`hit_point`] first.
     pub fn contains(&self, x: f32, y: f32) -> bool {
         self.rect.contains(x, y)
     }
+}
+
+/// A raw client position in the coordinates the hit rectangles are written in.
+///
+/// The module note above says coordinates are unmirrored and that right-to-left
+/// is folded at the drawing primitives. That holds for the *drawing*; a click
+/// arrives from the window system in the mirrored coordinates the user is
+/// actually looking at, so it has to be folded back before it is compared
+/// against anything in here.
+///
+/// Skipping this is invisible for the full-width rows, which is how it
+/// survived, and quite visible for the regions that are not: in an Arabic
+/// layout the refresh button is drawn at the left while its rectangle stays on
+/// the right, so the button does nothing and the empty opposite corner
+/// refreshes — and clicking a task's tick circle opens the task in the browser
+/// while clicking the far end of the row ticks it off.
+pub fn hit_point(panel: &Panel, rtl: bool, x: f32, y: f32) -> (f32, f32) {
+    (if rtl { panel.mirror_axis - x } else { x }, y)
 }
 
 /// A list row bleeds this far past the content columns on each side, so the
@@ -1071,6 +1091,40 @@ mod tests {
                 .check_hit
                 .contains(nested.check_center.0, nested.check_center.1)
         );
+    }
+
+    /// A click has to be folded before it is compared, or a mirrored layout
+    /// hits the wrong target.
+    ///
+    /// The drawing is folded across the panel's axis at the primitives while
+    /// the rectangles here stay unmirrored, so the two only meet if the point
+    /// is put back. The rows span the whole width and hide it; the refresh
+    /// button and the tick circle do not.
+    #[test]
+    fn a_click_in_a_mirrored_layout_lands_on_what_was_drawn_under_it() {
+        let m = metrics();
+        let p = Panel::new(360.0, 500.0, &m);
+
+        // Left to right, a click is itself.
+        assert_eq!(hit_point(&p, false, 12.0, 40.0), (12.0, 40.0));
+        // Folded twice is where it started, and y never moves.
+        let (once, y) = hit_point(&p, true, 12.0, 40.0);
+        assert_eq!(hit_point(&p, true, once, y), (12.0, 40.0));
+
+        // The refresh button is drawn in the top corner the reading ends at.
+        // In Arabic that is the left of the window, and a click there has to
+        // reach the rectangle that still describes the right.
+        let button = refresh_button(&p, p.rect.top, &m);
+        let drawn = button.mirrored(p.mirror_axis);
+        let (x, y) = hit_point(&p, true, drawn.center_x(), drawn.center_y());
+        assert!(button.contains(x, y), "{button:?} from {drawn:?}");
+
+        // And the tick circle, which is the other region that is not the full
+        // width of the row — ticking a task off rather than opening it.
+        let task = task_geometry(&p, 200.0, 0, &m);
+        let circle = task.check_hit.mirrored(p.mirror_axis);
+        let (x, y) = hit_point(&p, true, circle.center_x(), circle.center_y());
+        assert!(task.check_hit.contains(x, y));
     }
 
     #[test]
