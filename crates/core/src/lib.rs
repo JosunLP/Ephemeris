@@ -21,6 +21,7 @@ pub mod demo;
 pub mod google;
 pub mod host;
 pub mod i18n;
+pub mod layout;
 pub mod log;
 pub mod model;
 pub mod provider;

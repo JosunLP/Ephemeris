@@ -24,10 +24,33 @@
 use crate::win::platform;
 use tpmplaner_core::anim::Animations;
 use tpmplaner_core::i18n::Locale;
+use tpmplaner_core::layout::{self, EventList, Panel, Rect, TaskList};
 use tpmplaner_core::log;
 use tpmplaner_core::model::{Agenda, Event, Task};
 use tpmplaner_core::sync::Status;
 use tpmplaner_core::theme::{self, Appearance, Metrics, Palette, mix};
+
+/// What a click means, and the rectangle it landed in. Both live in the core
+/// now — the window translates a click into one of these without drawing
+/// anything, and every front end needs the identical set. Re-exported so the
+/// window still reaches them through the renderer it already imports.
+pub use tpmplaner_core::layout::{Hit, HitRegion};
+
+/// Converts the portable rectangle into the Direct2D one.
+///
+/// The two have the same shape and the same meaning; only the type differs, and
+/// the portable crate must not know what Direct2D is. Every call below is a
+/// point where computed geometry meets the graphics API, and there is no other
+/// kind of conversion happening — mirroring for right-to-left goes through
+/// [`Renderer::mrect`], which ends in this same function.
+fn d2d(r: Rect) -> D2D_RECT_F {
+    D2D_RECT_F {
+        left: r.left,
+        top: r.top,
+        right: r.right,
+        bottom: r.bottom,
+    }
+}
 
 /// Converts the core's toolkit-neutral colour into the Direct2D one.
 ///
@@ -42,7 +65,7 @@ fn rgba(hex: u32, a: f32) -> D2D1_COLOR_F {
         a: c.a,
     }
 }
-use chrono::{DateTime, Local, NaiveDate, Timelike};
+use chrono::{DateTime, Local};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::mem::ManuallyDrop;
@@ -87,38 +110,6 @@ use windows::Win32::Graphics::Dxgi::{
 };
 use windows::core::{HRESULT, Interface, PCWSTR, Result, w};
 use windows_numerics::{Matrix3x2, Vector2};
-
-/// A clickable area, in DIPs relative to the window corner.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Hit {
-    Refresh,
-    /// The circle before a task -> tick it off.
-    TaskCheck(usize),
-    /// A task row -> open it in the web interface.
-    Task(usize),
-    /// The row of a task whose completion can still be undone.
-    Undo(usize),
-    /// An event row -> open it in the calendar.
-    Event(usize),
-    /// The highlighted event in the header area.
-    Hero(usize),
-    /// An event from tomorrow's preview.
-    Tomorrow(usize),
-    /// A status line that needs action (setup, sign-in or configuration).
-    StatusAction,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct HitRegion {
-    pub rect: D2D_RECT_F,
-    pub hit: Hit,
-}
-
-impl HitRegion {
-    pub fn contains(&self, x: f32, y: f32) -> bool {
-        x >= self.rect.left && x < self.rect.right && y >= self.rect.top && y < self.rect.bottom
-    }
-}
 
 /// A task that has been ticked off but not yet sent, and can still be undone.
 #[derive(Debug, Clone, Copy)]
@@ -510,68 +501,63 @@ impl Renderer {
         let m = self.metrics;
         hits.clear();
 
-        // The glass body is inset by the shadow margin.
-        let panel = rect(m.shadow, m.shadow, w - m.shadow, h - m.shadow);
-        let cx0 = panel.left + m.pad;
-        let cx1 = panel.right - m.pad;
-        // Axis for the RTL mirroring: everything inside the glass body is
-        // folded across it, and the body maps onto itself.
-        self.mirror.set(panel.left + panel.right);
+        // The glass body, the content column inside it and the mirror axis for
+        // right-to-left, all from the window size and the metrics.
+        let panel = Panel::new(w, h, &m);
+        // Everything inside the body is folded across this, and the body maps
+        // onto itself.
+        self.mirror.set(panel.mirror_axis);
 
         unsafe {
             self.dc.BeginDraw();
             self.dc.Clear(Some(&rgba(0, 0.0)));
             self.tooltip.replace(None);
 
-            self.draw_shadow(panel)?;
-            self.draw_panel(panel, self.pal.opacity(frame.opacity))?;
+            self.draw_shadow(panel.rect)?;
+            self.draw_panel(panel.rect, self.pal.opacity(frame.opacity))?;
 
-            let mut y = panel.top;
-            y = self.draw_header(cx0, cx1, y, frame, hits)?;
-            y = self.draw_hero(cx0, cx1, y, frame, hits)?;
+            let mut y = panel.rect.top;
+            y = self.draw_header(&panel, y, frame, hits)?;
+            y = self.draw_hero(&panel, y, frame, hits)?;
 
             let content_top = y;
-            let content_bottom = panel.bottom - m.footer_h;
+            let content_bottom = panel.content_bottom(&m);
 
             // Everything between is clipped so scrolled rows cannot run into
             // the header, the footer or the frame.
             self.dc.PushAxisAlignedClip(
-                &rect(
-                    panel.left + 1.0,
-                    content_top,
-                    panel.right - 1.0,
-                    content_bottom,
-                ),
+                &d2d(panel.content_clip(content_top, content_bottom)),
                 Default::default(),
             );
 
             // Reveal: slide up slightly from below while fading in.
             let reveal = frame.anim.reveal.value;
             self.fade.set(reveal.clamp(0.0, 1.0));
-            let slide = (1.0 - reveal) * 10.0;
+            let slide = layout::reveal_slide(reveal);
 
             let mut cy = content_top - frame.anim.scroll.value + slide;
-            cy = self.draw_events_section(cx0, cx1, cy, frame, hits)?;
-            cy = self.draw_tasks_section(cx0, cx1, cy, frame, hits)?;
+            cy = self.draw_events_section(&panel, cy, frame, hits)?;
+            cy = self.draw_tasks_section(&panel, cy, frame, hits)?;
 
             self.fade.set(1.0);
             self.dc.PopAxisAlignedClip();
 
-            let content_height = cy + frame.anim.scroll.value - slide - content_top + m.pad;
+            let content_height =
+                layout::content_height(cy, frame.anim.scroll.value, slide, content_top, &m);
             let viewport_height = content_bottom - content_top;
 
             self.draw_scrollbar(
-                panel,
+                &panel,
                 content_top,
                 content_bottom,
                 content_height,
                 viewport_height,
                 frame,
             )?;
-            self.draw_footer(panel, cx0, cx1, frame, hits)?;
+            self.draw_footer(&panel, frame, hits)?;
             // Last of all, so the overlay sits above everything and is not
             // cut off by the content clip.
-            self.draw_tooltip(panel, content_top, content_bottom)?;
+            self.draw_tooltip(&panel, content_top, content_bottom)?;
 
             self.dc.EndDraw(None, None)?;
             self.swapchain.Present(1, DXGI_PRESENT(0)).ok()?;
@@ -600,7 +586,7 @@ impl Renderer {
     /// an intermediate bitmap and a full effect graph every frame. With twelve
     /// low-opacity fills the result is indistinguishable at this size, and far
     /// cheaper.
-    fn draw_shadow(&self, panel: D2D_RECT_F) -> Result<()> {
+    fn draw_shadow(&self, panel: Rect) -> Result<()> {
         let m = self.metrics;
         // A contrast theme has no shadow: it softens exactly the edge that
         // this mode wants hard. Nor is there one when no margin was reserved
@@ -619,12 +605,12 @@ impl Renderer {
                 self.dc.FillRoundedRectangle(
                     &D2D1_ROUNDED_RECT {
                         // Offset slightly downwards: the light comes from above.
-                        rect: rect(
+                        rect: d2d(rect(
                             panel.left - grow,
                             panel.top - grow * 0.6,
                             panel.right + grow,
                             panel.bottom + grow * 1.2,
-                        ),
+                        )),
                         radiusX: m.corner + grow,
                         radiusY: m.corner + grow,
                     },
@@ -636,12 +622,12 @@ impl Renderer {
     }
 
     /// Gradient, gloss arc and the double edge.
-    fn draw_panel(&self, panel: D2D_RECT_F, opacity: f32) -> Result<()> {
+    fn draw_panel(&self, panel: Rect, opacity: f32) -> Result<()> {
         unsafe {
             let m = self.metrics;
             let p = &self.pal;
             let body = D2D1_ROUNDED_RECT {
-                rect: panel,
+                rect: d2d(panel),
                 radiusX: m.corner,
                 radiusY: m.corner,
             };
@@ -673,7 +659,7 @@ impl Renderer {
             // Gloss arc: a light gradient across the top that fades out
             // completely towards the bottom. Dropped in a contrast theme.
             if p.sheen_gloss > 0.0 {
-                let gloss_h = (panel.bottom - panel.top) * 0.30;
+                let gloss_h = panel.height() * 0.30;
                 let gloss_stops = [
                     D2D1_GRADIENT_STOP {
                         position: 0.0,
@@ -698,7 +684,12 @@ impl Renderer {
                 )?;
                 self.dc.FillRoundedRectangle(
                     &D2D1_ROUNDED_RECT {
-                        rect: rect(panel.left, panel.top, panel.right, panel.top + gloss_h),
+                        rect: d2d(rect(
+                            panel.left,
+                            panel.top,
+                            panel.right,
+                            panel.top + gloss_h,
+                        )),
                         radiusX: m.corner,
                         radiusY: m.corner,
                     },
@@ -714,7 +705,7 @@ impl Renderer {
             if p.sheen_border > 0.0 {
                 self.dc.DrawRoundedRectangle(
                     &D2D1_ROUNDED_RECT {
-                        rect: inset(panel, 1.0),
+                        rect: d2d(panel.inset(1.0)),
                         radiusX: m.corner - 1.0,
                         radiusY: m.corner - 1.0,
                     },
@@ -749,8 +740,7 @@ impl Renderer {
 
     fn draw_header(
         &self,
-        cx0: f32,
-        cx1: f32,
+        panel: &Panel,
         top: f32,
         frame: &Frame,
         hits: &mut Vec<HitRegion>,
@@ -758,16 +748,11 @@ impl Renderer {
         let m = self.metrics;
         let p = &self.pal;
         let loc = frame.loc;
+        let (cx0, cx1) = (panel.content_left, panel.content_right);
         let today = frame.agenda.day.unwrap_or_else(|| frame.now.date_naive());
         let bottom = top + m.header_h;
 
-        // Refresh button
-        let btn = rect(
-            cx1 - m.icon_btn,
-            top + m.pad * 0.65,
-            cx1,
-            top + m.pad * 0.65 + m.icon_btn,
-        );
+        let btn = layout::refresh_button(panel, top, &m);
         let hovered = frame.hover == Some(Hit::Refresh);
         let spinning = matches!(frame.status, Status::Syncing);
 
@@ -778,8 +763,8 @@ impl Renderer {
 
         // \u{E72C} = "Refresh" in Segoe Fluent Icons / MDL2 Assets.
         let angle = frame.anim.spinner;
-        let bx = self.mx((btn.left + btn.right) * 0.5);
-        let by = (btn.top + btn.bottom) * 0.5;
+        let bx = self.mx(btn.center_x());
+        let by = btn.center_y();
         unsafe {
             if angle != 0.0 {
                 self.dc.SetTransform(&rotation(angle, bx, by));
@@ -839,7 +824,7 @@ impl Renderer {
             0.9,
         )?;
 
-        self.draw_day_rail(cx0, cx1, bottom - m.rail_h - 5.0, frame)?;
+        self.draw_day_rail(cx0, cx1, layout::day_rail_top(bottom, &m), frame)?;
 
         let line_y = bottom - 1.0;
         self.line(cx0, line_y, cx1, line_y, p.rule, p.rule_alpha, 1.0, false)?;
@@ -855,40 +840,14 @@ impl Renderer {
     fn draw_day_rail(&self, x0: f32, x1: f32, y: f32, frame: &Frame) -> Result<()> {
         let m = self.metrics;
         let p = &self.pal;
-        let now_min = frame.now.hour() as f32 * 60.0 + frame.now.minute() as f32;
-
-        // The default window is the working day, but it stretches to cover
-        // whatever is actually on. A fixed 06:00-22:00 would squash the 05:00
-        // flight and the 23:00 event against the edges — precisely the
-        // outliers worth seeing.
-        let (mut lo, mut hi) = (6.0 * 60.0_f32, 22.0 * 60.0_f32);
-        for ev in &frame.agenda.events {
-            if ev.all_day {
-                continue;
-            }
-            if let Some(start) = ev.start {
-                let s_min = start.hour() as f32 * 60.0 + start.minute() as f32;
-                lo = lo.min(s_min);
-                hi = hi.max(end_minutes(ev, s_min));
-            }
-        }
-        lo = lo.min(now_min).max(0.0);
-        hi = hi.max(now_min).min(24.0 * 60.0);
-        // On a very empty day the span would otherwise degenerate.
-        if hi - lo < 240.0 {
-            hi = (lo + 240.0).min(24.0 * 60.0);
-            lo = (hi - 240.0).max(0.0);
-        }
-        let span = hi - lo;
-
-        let width = x1 - x0;
-        let pos = |minutes: f32| x0 + width * ((minutes - lo) / span).clamp(0.0, 1.0);
+        let now_min = layout::minutes_of_day(frame.now);
+        let span = layout::RailSpan::of(&frame.agenda.events, frame.now);
 
         let track = rect(x0, y, x1, y + m.rail_h);
         let radius = m.rail_h * 0.5;
         self.fill_round(track, radius, p.rule, p.rule_alpha * 0.9)?;
 
-        let now_x = pos(now_min);
+        let now_x = span.position(now_min, x0, x1);
 
         // The elapsed part of the day. Deliberately very restrained: the rail
         // should be readable in passing, not compete for attention like a
@@ -899,14 +858,9 @@ impl Renderer {
         }
 
         for ev in &frame.agenda.events {
-            if ev.all_day {
+            let Some((sx, ex)) = layout::rail_segment(&span, ev, x0, x1) else {
                 continue;
-            }
-            let Some(start) = ev.start else { continue };
-            let start_min = start.hour() as f32 * 60.0 + start.minute() as f32;
-            let (sx, ex) = (pos(start_min), pos(end_minutes(ev, start_min)));
-            // Short events would otherwise be invisible.
-            let ex = ex.max(sx + 2.5);
+            };
             let running = ev.is_now(frame.now);
             let color = if self.pal.high_contrast {
                 p.text_primary
@@ -916,7 +870,7 @@ impl Renderer {
                 self.calendar_color(ev)
             };
             self.fill_round(
-                rect(sx, y + 1.0, ex.min(x1), y + m.rail_h - 1.0),
+                rect(sx, y + 1.0, ex, y + m.rail_h - 1.0),
                 (m.rail_h - 2.0) * 0.5,
                 color,
                 if running { 1.0 } else { 0.85 },
@@ -924,7 +878,7 @@ impl Renderer {
         }
 
         // The now marker goes on top so no segment can ever hide it.
-        if (lo..=hi).contains(&now_min) {
+        if span.contains(now_min) {
             self.line(
                 now_x,
                 y - 2.0,
@@ -945,8 +899,7 @@ impl Renderer {
     /// looking for — it belongs at the very top, not in a list.
     fn draw_hero(
         &self,
-        cx0: f32,
-        cx1: f32,
+        panel: &Panel,
         top: f32,
         frame: &Frame,
         hits: &mut Vec<HitRegion>,
@@ -954,11 +907,14 @@ impl Renderer {
         let m = self.metrics;
         let p = &self.pal;
         let loc = frame.loc;
-        let Some((idx, ev, running)) = pick_hero(frame.agenda, frame.now) else {
+        let cx1 = panel.content_right;
+        let Some(hero) = layout::pick_hero(frame.agenda, frame.now) else {
             return Ok(top);
         };
+        let (idx, running) = (hero.index, hero.running);
+        let ev = &frame.agenda.events[idx];
 
-        let card = rect(cx0, top + m.pad * 0.55, cx1, top + m.pad * 0.55 + m.hero_h);
+        let card = layout::hero_card(panel, top, &m);
         let hovered = frame.hover == Some(Hit::Hero(idx));
 
         // A running event strongly, an upcoming one quietly.
@@ -1057,9 +1013,7 @@ impl Renderer {
         )?;
 
         // Progress of the running event as a fine line at the foot of the card.
-        if running && let (Some(s), Some(e)) = (ev.start, ev.end) {
-            let total = (e - s).num_seconds().max(1) as f32;
-            let done = ((frame.now - s).num_seconds().max(0) as f32 / total).clamp(0.0, 1.0);
+        if running && let Some(done) = layout::hero_progress(ev, frame.now) {
             let y = card.bottom - 2.5;
             self.line(
                 card.left + 8.0,
@@ -1096,8 +1050,7 @@ impl Renderer {
 
     fn draw_events_section(
         &self,
-        x0: f32,
-        x1: f32,
+        panel: &Panel,
         mut y: f32,
         frame: &Frame,
         hits: &mut Vec<HitRegion>,
@@ -1106,39 +1059,31 @@ impl Renderer {
         let p = &self.pal;
         let loc = frame.loc;
         let now = frame.now;
+        let (x0, x1) = (panel.content_left, panel.content_right);
 
-        // The running event always stays visible, even when past ones are
-        // hidden — otherwise the most important one is the one that vanishes.
-        let visible: Vec<(usize, &Event)> = frame
-            .agenda
-            .events
-            .iter()
-            .enumerate()
-            .filter(|(_, e)| frame.show_past_events || !e.is_past(now) || e.is_now(now))
-            .collect();
-
-        // Double bookings are hard to spot when skimming a list — you would
-        // have to compare the end of one row with the start of the next in
-        // your head.
-        let overlapping = tpmplaner_core::model::mark_overlaps(&frame.agenda.events);
-        let conflicts = overlapping.iter().filter(|&&f| f).count() / 2;
+        // Which rows are visible, which are running, over or just ticked off,
+        // which are double-booked and where the now line goes: all decided in
+        // the core, so the next front end draws the same list rather than
+        // reimplementing the rules. Double bookings in particular are hard to
+        // spot when skimming — you would have to compare the end of one row
+        // with the start of the next in your head.
+        let list = EventList::build(frame.agenda, now, frame.show_past_events);
 
         let mut badges: Vec<(String, u32)> = Vec::new();
-        if conflicts > 0 {
-            badges.push((loc.conflicts(conflicts), p.conflict));
+        if list.conflicts > 0 {
+            badges.push((loc.conflicts(list.conflicts), p.conflict));
         }
 
         y += m.section_gap;
         y = self.section_label(
-            x0,
-            x1,
+            panel,
             y,
             &loc.label(loc.cat.section_events),
-            visible.len(),
+            list.rows.len(),
             &badges,
         )?;
 
-        if visible.is_empty() {
+        if list.is_empty() {
             self.text(
                 &loc.label(loc.cat.no_events),
                 Font::Row,
@@ -1149,21 +1094,15 @@ impl Renderer {
             return Ok(y + m.event_row_h);
         }
 
-        // Only show the calendar name when more than one is in play —
-        // otherwise it is the same redundant label on every row.
-        let multi_cal = visible
-            .iter()
-            .filter(|(_, e)| !e.all_day)
-            .map(|(_, e)| e.calendar_name.as_str())
-            .collect::<std::collections::HashSet<_>>()
-            .len()
-            > 1;
+        let event_of = |row: &layout::EventRow| &frame.agenda.events[row.index];
 
         // Column widths from the actual content rather than fixed values —
         // otherwise the layout only fits one language.
-        let time_labels: Vec<String> = visible
+        let time_labels: Vec<String> = list
+            .rows
             .iter()
-            .map(|(_, e)| {
+            .map(|r| {
+                let e = event_of(r);
                 if e.all_day {
                     loc.label(loc.cat.all_day)
                 } else {
@@ -1177,12 +1116,14 @@ impl Renderer {
             m.time_col_w,
             m.time_col_w * 2.0,
         );
-        let rel_labels: Vec<String> = visible
+        let rel_labels: Vec<String> = list
+            .rows
             .iter()
-            .map(|(_, e)| {
-                if e.is_now(now) {
+            .map(|r| {
+                let e = event_of(r);
+                if r.running {
                     loc.label(loc.cat.running)
-                } else if e.is_past(now) {
+                } else if r.past {
                     e.calendar_name.clone()
                 } else {
                     e.start
@@ -1198,34 +1139,22 @@ impl Renderer {
             m.rel_col_w * 1.6,
         );
 
-        // Where the now line goes: before the first event still to come.
-        let now_line_before = visible
-            .iter()
-            .position(|(_, e)| !e.all_day && e.start.map(|s| s > now).unwrap_or(false));
-
-        for (slot, (idx, ev)) in visible.iter().enumerate() {
-            if now_line_before == Some(slot) {
+        for (slot, row_state) in list.rows.iter().enumerate() {
+            if list.now_line_before == Some(slot) {
                 self.draw_now_line(x0, x1, y, frame)?;
                 y += m.nowline_h;
             }
 
-            let row = rect(x0 - 5.0, y, x1 + 5.0, y + m.event_row_h);
-            // The task this entry is the time block of has just been ticked
-            // off. The row is faded to exactly what the task row does during
-            // the undo window rather than vanishing at once, so taking the
-            // tick back puts everything as it was; once the completion goes
-            // out, both rows leave together.
-            let done = frame.agenda.is_completing(ev);
-            let is_now = ev.is_now(now) && !done;
-            let past = ev.is_past(now) && !is_now;
+            let idx = &row_state.index;
+            let ev = event_of(row_state);
+            let row = layout::row_rect(panel, y, m.event_row_h);
+            // A row whose task has just been ticked off is faded to exactly
+            // what the task row does during the undo window rather than
+            // vanishing at once, so taking the tick back puts everything as it
+            // was; once the completion goes out, both rows leave together.
+            let is_now = row_state.running;
             // Held back, but still comfortable to read.
-            let dim: f32 = if done {
-                0.42
-            } else if past {
-                0.55
-            } else {
-                1.0
-            };
+            let dim = row_state.dim();
 
             if frame.hover == Some(Hit::Event(*idx)) {
                 self.fill_round(row, 5.0, p.hover, p.hover_alpha * frame.anim.hover.value)?;
@@ -1254,14 +1183,13 @@ impl Renderer {
             let tx = x0 + 11.0;
             // Overlapping events get a warning colour on the time — that is
             // where you look when hunting for conflicts.
-            let conflicted = overlapping.get(*idx).copied().unwrap_or(false);
             self.text(
                 &time_labels[slot],
                 Font::Meta,
                 rect(tx, y, tx + time_w, y + m.event_row_h),
                 if is_now {
                     p.accent
-                } else if conflicted {
+                } else if row_state.conflicted {
                     p.conflict
                 } else {
                     p.text_dim
@@ -1270,12 +1198,11 @@ impl Renderer {
             )?;
 
             // Right column: time remaining, or for past events the calendar
-            // name (time remaining would be noise there).
+            // name (time remaining would be noise there). Nothing at all for a
+            // row just ticked off — "in 2 h" next to a finished item reads as a
+            // contradiction.
             let rel_x = x1 - rel_w;
-            if done {
-                // Nothing: "in 2 h" next to an item just ticked off reads as a
-                // contradiction.
-            } else if !ev.all_day && !past {
+            if row_state.shows_countdown(ev) {
                 let rel = if is_now {
                     loc.cat.running.to_string()
                 } else {
@@ -1290,7 +1217,7 @@ impl Renderer {
                     if is_now { p.accent } else { p.text_faint },
                     dim,
                 )?;
-            } else if multi_cal && !ev.calendar_name.is_empty() {
+            } else if !row_state.completing && list.multi_calendar && !ev.calendar_name.is_empty() {
                 self.text(
                     &ev.calendar_name,
                     Font::MetaRight,
@@ -1329,12 +1256,12 @@ impl Renderer {
         }
 
         // Every event is over: the line goes to the end.
-        if now_line_before.is_none() && visible.iter().any(|(_, e)| !e.all_day) {
+        if list.now_line_at_end {
             self.draw_now_line(x0, x1, y, frame)?;
             y += m.nowline_h;
         }
 
-        y = self.draw_tomorrow(x0, x1, y, frame, hits)?;
+        y = self.draw_tomorrow(panel, y, frame, hits)?;
         Ok(y)
     }
 
@@ -1346,8 +1273,7 @@ impl Renderer {
     /// preview never crowds out today.
     fn draw_tomorrow(
         &self,
-        x0: f32,
-        x1: f32,
+        panel: &Panel,
         mut y: f32,
         frame: &Frame,
         hits: &mut Vec<HitRegion>,
@@ -1355,6 +1281,7 @@ impl Renderer {
         let m = self.metrics;
         let p = &self.pal;
         let loc = frame.loc;
+        let (x0, x1) = (panel.content_left, panel.content_right);
         let upcoming: Vec<(usize, &Event)> = frame
             .agenda
             .tomorrow
@@ -1382,7 +1309,7 @@ impl Renderer {
         )?;
 
         for (i, (idx, ev)) in upcoming.iter().enumerate() {
-            let row = rect(x0 - 5.0, y, x1 + 5.0, y + m.event_row_h);
+            let row = layout::row_rect(panel, y, m.event_row_h);
             if frame.hover == Some(Hit::Tomorrow(*idx)) {
                 self.fill_round(row, 5.0, p.hover, p.hover_alpha * frame.anim.hover.value)?;
             }
@@ -1452,8 +1379,7 @@ impl Renderer {
 
     fn draw_tasks_section(
         &self,
-        x0: f32,
-        x1: f32,
+        panel: &Panel,
         mut y: f32,
         frame: &Frame,
         hits: &mut Vec<HitRegion>,
@@ -1461,26 +1387,26 @@ impl Renderer {
         let m = self.metrics;
         let p = &self.pal;
         let loc = frame.loc;
+        let (x0, x1) = (panel.content_left, panel.content_right);
         let today = frame.agenda.day.unwrap_or_else(|| frame.now.date_naive());
         let tasks = &frame.agenda.tasks;
-        let overdue = tasks.iter().filter(|t| t.is_overdue(today)).count();
+        let list = TaskList::build(tasks, today);
 
         y += m.section_gap;
-        let badges: Vec<(String, u32)> = if overdue > 0 {
-            vec![(loc.overdue(overdue), p.overdue)]
+        let badges: Vec<(String, u32)> = if list.overdue > 0 {
+            vec![(loc.overdue(list.overdue), p.overdue)]
         } else {
             Vec::new()
         };
         y = self.section_label(
-            x0,
-            x1,
+            panel,
             y,
             &loc.label(loc.cat.section_tasks),
             tasks.len(),
             &badges,
         )?;
 
-        if tasks.is_empty() {
+        if list.is_empty() {
             self.text(
                 &loc.label(loc.cat.no_tasks),
                 Font::Row,
@@ -1491,15 +1417,10 @@ impl Renderer {
             return Ok(y + m.task_row_h);
         }
 
-        // Only show the list name when more than one task list is involved.
-        let multi_list = tasks
+        let due_labels: Vec<String> = tasks
             .iter()
-            .map(|t| t.tasklist_name.as_str())
-            .collect::<std::collections::HashSet<_>>()
-            .len()
-            > 1;
-
-        let due_labels: Vec<String> = tasks.iter().map(|t| due_label(t, today, loc)).collect();
+            .map(|t| layout::due_label(t, today, loc))
+            .collect();
         let due_w = self.column_width(
             due_labels.iter().map(String::as_str),
             Font::Meta,
@@ -1507,7 +1428,7 @@ impl Renderer {
             m.time_col_w * 2.2,
         );
         // The undo hint and the list name share the right column.
-        let list_names: Vec<&str> = if multi_list {
+        let list_names: Vec<&str> = if list.multi_list {
             tasks.iter().map(|t| t.tasklist_name.as_str()).collect()
         } else {
             Vec::new()
@@ -1519,13 +1440,15 @@ impl Renderer {
             m.rel_col_w * 1.8,
         );
 
-        for (idx, task) in tasks.iter().enumerate() {
-            let row = rect(x0 - 5.0, y, x1 + 5.0, y + m.task_row_h);
-            let is_overdue = task.is_overdue(today);
+        for row_state in &list.rows {
+            let idx = row_state.index;
+            let task = &tasks[idx];
+            let row = layout::row_rect(panel, y, m.task_row_h);
+            let is_overdue = row_state.overdue;
             let undo = frame.undo.filter(|u| u.task_id == task.id);
             // While the tick is pending: fade out at once, so the click feels
             // immediate instead of waiting on the API.
-            let dim: f32 = if task.completing { 0.42 } else { 1.0 };
+            let dim = row_state.dim();
             let check_hovered = frame.hover == Some(Hit::TaskCheck(idx));
             let row_hovered = check_hovered
                 || frame.hover == Some(Hit::Task(idx))
@@ -1535,12 +1458,11 @@ impl Renderer {
                 self.fill_round(row, 5.0, p.hover, p.hover_alpha * frame.anim.hover.value)?;
             }
 
-            let indent = task.depth as f32 * m.indent;
-            let ccx = x0 + indent + m.check_size * 0.5 + 1.0;
-            let ccy = y + m.task_row_h * 0.5;
+            let geo = layout::task_geometry(panel, y, task.depth, &m);
+            let (ccx, ccy) = geo.check_center;
             self.draw_check(ccx, ccy, task, is_overdue, check_hovered, frame)?;
 
-            let due_x = ccx + m.check_size * 0.5 + 9.0;
+            let due_x = geo.due_left;
             self.text(
                 &due_labels[idx],
                 Font::Meta,
@@ -1572,7 +1494,7 @@ impl Renderer {
                     1.5,
                     true,
                 )?;
-            } else if multi_list && !task.tasklist_name.is_empty() {
+            } else if list.multi_list && !task.tasklist_name.is_empty() {
                 title_right = x1 - right_w - 6.0;
                 self.text(
                     &task.tasklist_name,
@@ -1616,7 +1538,7 @@ impl Renderer {
                 hit: Hit::Task(idx),
             });
             hits.push(HitRegion {
-                rect: rect(x0 - 5.0, y, ccx + m.check_size, y + m.task_row_h),
+                rect: geo.check_hit,
                 hit: Hit::TaskCheck(idx),
             });
             if undo.is_some() {
@@ -1710,25 +1632,23 @@ impl Renderer {
     #[allow(clippy::too_many_arguments)]
     fn section_label(
         &self,
-        x0: f32,
-        x1: f32,
+        panel: &Panel,
         y: f32,
         label: &str,
         count: usize,
         badges: &[(String, u32)],
     ) -> Result<f32> {
         let m = self.metrics;
-        let h = m.section_label_h;
 
-        // Place badges right to left so several of them (overdue, conflicts)
-        // cannot overlap.
-        let mut right = x1;
+        // Placed right to left so several of them (overdue, conflicts) cannot
+        // overlap; the heading then takes what is left, down to a floor.
+        let mut right = panel.content_right;
         for (text, color) in badges.iter().rev() {
-            let w = self.text_width(text, Font::Section) + 13.0;
-            let pill = rect(right - w, y + 1.0, right, y + h - 3.0);
+            let (pill, next_right) =
+                layout::badge_pill(right, self.text_width(text, Font::Section), y, &m);
             self.fill_round(
                 pill,
-                (pill.bottom - pill.top) * 0.5,
+                pill.height() * 0.5,
                 *color,
                 if self.pal.dark { 0.16 } else { 0.13 },
             )?;
@@ -1739,22 +1659,22 @@ impl Renderer {
                 *color,
                 1.0,
             )?;
-            right = pill.left - 6.0;
+            right = next_right;
         }
 
         self.text(
             &format!("{label}   {count}"),
             Font::Section,
-            rect(x0, y, (right - 6.0).max(x0 + 20.0), y + h),
+            layout::section_label_rect(panel, y, right, &m),
             self.pal.text_dim,
             0.9,
         )?;
-        Ok(y + h)
+        Ok(y + m.section_label_h)
     }
 
     fn draw_scrollbar(
         &self,
-        panel: D2D_RECT_F,
+        panel: &Panel,
         top: f32,
         bottom: f32,
         content: f32,
@@ -1763,37 +1683,35 @@ impl Renderer {
     ) -> Result<()> {
         let m = self.metrics;
         let alpha = frame.anim.scrollbar.value;
-        if content <= viewport || alpha < 0.01 {
+        if alpha < 0.01 {
             return Ok(());
         }
-
-        let track_h = bottom - top - 8.0;
-        let thumb_h = (track_h * (viewport / content)).max(24.0);
-        let max_scroll = content - viewport;
-        let t = (frame.anim.scroll.value / max_scroll).clamp(0.0, 1.0);
-        let thumb_y = top + 4.0 + (track_h - thumb_h) * t;
-        let x = panel.right - m.pad * 0.45 - m.scrollbar_w;
+        let Some(thumb) = layout::scrollbar_thumb(
+            panel,
+            top,
+            bottom,
+            content,
+            viewport,
+            frame.anim.scroll.value,
+            &m,
+        ) else {
+            return Ok(());
+        };
 
         self.fill_round(
-            rect(x, thumb_y, x + m.scrollbar_w, thumb_y + thumb_h),
+            thumb,
             m.scrollbar_w * 0.5,
             if self.pal.dark { 0xFF_FFFF } else { 0x2A_3140 },
             0.30 * alpha,
         )
     }
 
-    fn draw_footer(
-        &self,
-        panel: D2D_RECT_F,
-        cx0: f32,
-        cx1: f32,
-        frame: &Frame,
-        hits: &mut Vec<HitRegion>,
-    ) -> Result<()> {
+    fn draw_footer(&self, panel: &Panel, frame: &Frame, hits: &mut Vec<HitRegion>) -> Result<()> {
         let m = self.metrics;
         let p = &self.pal;
         let c = frame.loc.cat;
-        let y = panel.bottom - m.footer_h;
+        let (cx0, cx1) = (panel.content_left, panel.content_right);
+        let y = panel.content_bottom(&m);
         self.line(cx0, y, cx1, y, p.rule, p.rule_alpha * 0.8, 1.0, false)?;
 
         // A broken configuration is more urgent than any sync state: without
@@ -1802,7 +1720,7 @@ impl Renderer {
             (Some(_), _) => (frame.loc.label(c.config_broken), p.warn, true),
             (None, Status::NeedsSetup(_)) => (frame.loc.label(c.setup_needed), p.warn, true),
             (None, Status::NeedsLogin(_)) => (frame.loc.label(c.connect_google), p.warn, true),
-            (None, Status::Error(e)) => (short(e, 56), p.overdue, true),
+            (None, Status::Error(e)) => (layout::short(e, 56), p.overdue, true),
             (None, Status::Syncing) => (frame.loc.label(c.syncing), p.text_dim, false),
             // An available update outranks the routine "last synced" line —
             // that one carries no news once it has been read.
@@ -1830,7 +1748,7 @@ impl Renderer {
             },
         };
 
-        let footer = rect(cx0, y + 1.0, cx1, panel.bottom - 2.0);
+        let footer = panel.footer_rect(&m);
         let hovered = actionable && frame.hover == Some(Hit::StatusAction);
         self.text(
             &text,
@@ -1856,16 +1774,18 @@ impl Renderer {
         if self.rtl { self.mirror.get() - x } else { x }
     }
 
-    /// A mirrored rectangle; left and right swap roles in the process.
-    fn mrect(&self, r: D2D_RECT_F) -> D2D_RECT_F {
-        if !self.rtl {
-            return r;
-        }
-        let a = self.mirror.get();
-        rect(a - r.right, r.top, a - r.left, r.bottom)
+    /// The Direct2D rectangle to draw, mirrored first when the locale reads
+    /// right to left. Left and right swap roles in the process, which is why
+    /// this returns one rather than mirroring in place.
+    fn mrect(&self, r: Rect) -> D2D_RECT_F {
+        d2d(if self.rtl {
+            r.mirrored(self.mirror.get())
+        } else {
+            r
+        })
     }
 
-    fn fill_round(&self, r: D2D_RECT_F, radius: f32, color: u32, alpha: f32) -> Result<()> {
+    fn fill_round(&self, r: Rect, radius: f32, color: u32, alpha: f32) -> Result<()> {
         if alpha < 0.004 {
             return Ok(());
         }
@@ -1882,14 +1802,7 @@ impl Renderer {
         Ok(())
     }
 
-    fn stroke_round(
-        &self,
-        r: D2D_RECT_F,
-        radius: f32,
-        color: u32,
-        alpha: f32,
-        width: f32,
-    ) -> Result<()> {
+    fn stroke_round(&self, r: Rect, radius: f32, color: u32, alpha: f32, width: f32) -> Result<()> {
         unsafe {
             self.dc.DrawRoundedRectangle(
                 &D2D1_ROUNDED_RECT {
@@ -1999,12 +1912,12 @@ impl Renderer {
     }
 
     /// Single-line text with an ellipsis on overflow, vertically centred.
-    fn text(&self, s: &str, font: Font, r: D2D_RECT_F, color: u32, alpha: f32) -> Result<()> {
+    fn text(&self, s: &str, font: Font, r: Rect, color: u32, alpha: f32) -> Result<()> {
         if s.is_empty() || r.right <= r.left {
             return Ok(());
         }
-        let w = (r.right - r.left).max(1.0);
-        let h = (r.bottom - r.top).max(1.0);
+        let w = r.width().max(1.0);
+        let h = r.height().max(1.0);
         let layout = self.layout(s, font, w, h)?;
         let brush: ID2D1Brush = self.brush(color, alpha)?.cast()?;
         let r = self.mrect(r);
@@ -2024,7 +1937,7 @@ impl Renderer {
     /// An event title cut off with "…" is simply not readable — and having
     /// to go and look it up in the calendar defeats the point of a
     /// Widgets.
-    fn note_truncation(&self, hovered: bool, s: &str, font: Font, avail: f32, row: D2D_RECT_F) {
+    fn note_truncation(&self, hovered: bool, s: &str, font: Font, avail: f32, row: Rect) {
         if !hovered || avail <= 0.0 || self.text_width(s, font) <= avail {
             return;
         }
@@ -2033,59 +1946,48 @@ impl Renderer {
     }
 
     /// An overlay carrying the full text of the hovered row.
-    fn draw_tooltip(&self, panel: D2D_RECT_F, top_limit: f32, bottom_limit: f32) -> Result<()> {
+    fn draw_tooltip(&self, panel: &Panel, top_limit: f32, bottom_limit: f32) -> Result<()> {
         let Some((text, row_top, row_bottom)) = self.tooltip.borrow().clone() else {
             return Ok(());
         };
         let m = self.metrics;
         let p = &self.pal;
 
-        let pad = 8.0;
-        let width = (panel.right - panel.left) - m.pad * 2.0;
-        let inner_w = width - pad * 2.0;
-        let Ok(layout) = self.layout(&text, Font::Tooltip, inner_w, 400.0) else {
+        // How tall the box has to be is the one part that needs a device: only
+        // the text engine knows how many lines this wraps to. Where the box
+        // then goes is arithmetic, and lives in the core.
+        let Ok(layout) = self.layout(
+            &text,
+            Font::Tooltip,
+            layout::tooltip_text_width(panel, &m),
+            400.0,
+        ) else {
             return Ok(());
         };
         let mut metrics = DWRITE_TEXT_METRICS::default();
         if unsafe { layout.GetMetrics(&mut metrics) }.is_err() {
             return Ok(());
         }
-        let height = metrics.height + pad * 2.0;
 
-        // Below the row by preference, above it otherwise — and inside the
-        // content area either way.
-        let mut top = row_bottom + 3.0;
-        if top + height > bottom_limit {
-            top = row_top - 3.0 - height;
-        }
-        let top = top.clamp(top_limit, (bottom_limit - height).max(top_limit));
-        let box_rect = rect(
-            panel.left + m.pad,
-            top,
-            panel.left + m.pad + width,
-            top + height,
+        let box_rect = layout::tooltip_box(
+            panel,
+            (row_top, row_bottom),
+            metrics.height,
+            (top_limit, bottom_limit),
+            &m,
         );
 
         // Drawn opaque: the overlay has to cover the text underneath
         // completely, or it becomes unreadable itself.
         self.fill_round(box_rect, 5.0, p.panel_top, 1.0)?;
         self.stroke_round(box_rect, 5.0, p.accent, 0.55, 1.0)?;
-        self.text_wrapped(
-            &text,
-            rect(
-                box_rect.left + pad,
-                box_rect.top + pad,
-                box_rect.right - pad,
-                box_rect.bottom - pad,
-            ),
-            p.text_primary,
-        )
+        self.text_wrapped(&text, box_rect.inset(layout::TOOLTIP_PAD), p.text_primary)
     }
 
     /// Multi-line text at the top edge of the rectangle.
-    fn text_wrapped(&self, s: &str, r: D2D_RECT_F, color: u32) -> Result<()> {
-        let w = (r.right - r.left).max(1.0);
-        let h = (r.bottom - r.top).max(1.0);
+    fn text_wrapped(&self, s: &str, r: Rect, color: u32) -> Result<()> {
+        let w = r.width().max(1.0);
+        let h = r.height().max(1.0);
         let layout = self.layout(s, Font::Tooltip, w, h)?;
         let brush: ID2D1Brush = self.brush(color, 1.0)?.cast()?;
         let r = self.mrect(r);
@@ -2118,8 +2020,12 @@ impl Renderer {
         metrics.width
     }
 
-    /// A column's width from its widest entry, capped so a single outlier
-    /// cannot eat half the row.
+    /// A column's width from its widest entry.
+    ///
+    /// Measuring is this side's job and the only part of it that needs a
+    /// device; what to do with the number — the air between columns and the cap
+    /// that stops one outlier eating half the row — is the same everywhere and
+    /// lives in [`layout::column_width`].
     fn column_width<'s>(
         &self,
         items: impl Iterator<Item = &'s str>,
@@ -2128,8 +2034,7 @@ impl Renderer {
         max: f32,
     ) -> f32 {
         let widest = items.fold(0.0_f32, |acc, s| acc.max(self.text_width(s, font)));
-        // A little air, so the text and the neighbouring column do not touch.
-        (widest + 6.0).clamp(min, max)
+        layout::column_width(widest, min, max)
     }
 
     fn layout(&self, s: &str, font: Font, w: f32, h: f32) -> Result<IDWriteTextLayout> {
@@ -2179,64 +2084,6 @@ pub fn is_device_lost(code: HRESULT) -> bool {
             | DXGI_ERROR_DEVICE_RESET
             | DXGI_ERROR_DRIVER_INTERNAL_ERROR
     )
-}
-
-/// End time of an event in minutes since midnight.
-///
-/// With no end time an hour is assumed; if the event runs past midnight the
-/// raw time would point backwards, so it is clamped to the end of the day.
-fn end_minutes(ev: &Event, start_min: f32) -> f32 {
-    match ev.end {
-        Some(e) => {
-            let v = e.hour() as f32 * 60.0 + e.minute() as f32;
-            if v <= start_min { 24.0 * 60.0 } else { v }
-        }
-        None => start_min + 60.0,
-    }
-}
-
-/// The event running now, otherwise the next one still to come.
-///
-/// A time block whose task has just been ticked off is skipped. The card is the
-/// loudest thing on the panel, and announcing something the user has just
-/// declared finished is the one place where the fade of the list row would not
-/// be enough.
-fn pick_hero(agenda: &Agenda, now: DateTime<Local>) -> Option<(usize, &Event, bool)> {
-    let events = &agenda.events;
-    let live = |e: &&Event| !agenda.is_completing(e);
-    if let Some((i, e)) = events
-        .iter()
-        .enumerate()
-        .find(|(_, e)| e.is_now(now) && live(e))
-    {
-        return Some((i, e, true));
-    }
-    events
-        .iter()
-        .enumerate()
-        .filter(|(_, e)| !e.all_day && e.start.map(|s| s > now).unwrap_or(false) && live(e))
-        .min_by_key(|(_, e)| e.start.map(|s| s.timestamp()).unwrap_or(i64::MAX))
-        .map(|(i, e)| (i, e, false))
-}
-
-fn due_label(task: &Task, today: NaiveDate, loc: &Locale) -> String {
-    match task.due {
-        None => "—".into(),
-        Some(d) if d == today => loc.label(loc.cat.today),
-        Some(d) if (today - d).num_days() == 1 => loc.label(loc.cat.yesterday),
-        // Day and month in the order the locale uses.
-        Some(d) => loc.day_month(d),
-    }
-}
-
-fn short(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
-        out.push('…');
-        out
-    }
 }
 
 /// Hardware by preference, WARP as the fallback (RDP sessions, VMs with no GPU).
@@ -2414,17 +2261,10 @@ fn rotation(rad: f32, cx: f32, cy: f32) -> Matrix3x2 {
     }
 }
 
-pub fn rect(left: f32, top: f32, right: f32, bottom: f32) -> D2D_RECT_F {
-    D2D_RECT_F {
-        left,
-        top,
-        right,
-        bottom,
-    }
-}
-
-fn inset(r: D2D_RECT_F, by: f32) -> D2D_RECT_F {
-    rect(r.left + by, r.top + by, r.right - by, r.bottom - by)
+/// Shorthand for the portable rectangle, so the drawing code below reads the
+/// way it did when the type was Direct2D's own.
+fn rect(left: f32, top: f32, right: f32, bottom: f32) -> Rect {
+    Rect::new(left, top, right, bottom)
 }
 
 fn point(x: f32, y: f32) -> Vector2 {
