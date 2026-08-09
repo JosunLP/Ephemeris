@@ -534,7 +534,8 @@ impl App {
         // edge, not on the invisible window edge.
         let s = self.metrics.shadow;
         let (l, t, r, b) = (s, s, w - s, h - s);
-        if x < l - RESIZE_GRIP || x > r + RESIZE_GRIP || y < t - RESIZE_GRIP || y > b + RESIZE_GRIP {
+        if x < l - RESIZE_GRIP || x > r + RESIZE_GRIP || y < t - RESIZE_GRIP || y > b + RESIZE_GRIP
+        {
             return Edges::default();
         }
         Edges {
@@ -1193,8 +1194,5 @@ fn palette_for(cfg: &Config, custom: &Appearance, visuals: SystemVisuals, quiet:
 
 fn config_mtime(theme_file: Option<&Path>) -> Stamps {
     let stamp = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
-    (
-        stamp(&config::config_path()),
-        theme_file.and_then(|p| stamp(p)),
-    )
+    (stamp(&config::config_path()), theme_file.and_then(stamp))
 }

@@ -460,8 +460,10 @@ mod tests {
         let older: Config = serde_json::from_str(r#"{"width":400.0}"#).expect("parse");
         assert!(!older.locked, "an existing installation must not seize up");
 
-        let mut cfg = Config::default();
-        cfg.locked = true;
+        let cfg = Config {
+            locked: true,
+            ..Config::default()
+        };
         let written = serde_json::to_string(&cfg).expect("serialise");
         let back: Config = serde_json::from_str(&written).expect("re-read");
         assert!(back.locked);

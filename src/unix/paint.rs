@@ -269,13 +269,7 @@ impl<C: Canvas> Painter<'_, C> {
             );
         }
         if p.border_outer_alpha > 0.0 {
-            self.stroke_round(
-                panel,
-                m.corner,
-                p.border_outer,
-                p.border_outer_alpha,
-                1.0,
-            );
+            self.stroke_round(panel, m.corner, p.border_outer, p.border_outer_alpha, 1.0);
         }
     }
 
@@ -912,7 +906,16 @@ impl<C: Canvas> Painter<'_, C> {
         let label_w = m.fs_meta * 4.2;
 
         self.circle(x0 + 2.0, cy, 2.5, accent, 0.9, None);
-        self.line(x0 + 6.0, cy, x1 - label_w - 5.0, cy, accent, 0.30, 1.0, false);
+        self.line(
+            x0 + 6.0,
+            cy,
+            x1 - label_w - 5.0,
+            cy,
+            accent,
+            0.30,
+            1.0,
+            false,
+        );
         self.text(
             &frame.loc.time(frame.now),
             Font::Meta,
@@ -1263,10 +1266,11 @@ impl<C: Canvas> Painter<'_, C> {
             // An available update outranks the routine "last synced" line —
             // that one carries no news once it has been read.
             (None, Status::Idle) if frame.update.is_some() => (
-                frame
-                    .loc
-                    .label(c.update_available)
-                    .replacen("{}", frame.update.unwrap_or_default(), 1),
+                frame.loc.label(c.update_available).replacen(
+                    "{}",
+                    frame.update.unwrap_or_default(),
+                    1,
+                ),
                 p.accent,
                 true,
             ),

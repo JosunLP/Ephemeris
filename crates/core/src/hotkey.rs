@@ -153,7 +153,10 @@ mod tests {
 
     #[test]
     fn digits_and_function_keys_are_their_own_kind() {
-        assert_eq!(parse("Ctrl+Shift+F12").map(|c| c.key), Some(Key::Function(12)));
+        assert_eq!(
+            parse("Ctrl+Shift+F12").map(|c| c.key),
+            Some(Key::Function(12))
+        );
         assert_eq!(parse("Win+7").map(|c| c.key), Some(Key::Digit(7)));
         assert!(parse("Ctrl+F13").is_none(), "F13 is not registrable");
         assert!(parse("Ctrl+F0").is_none());

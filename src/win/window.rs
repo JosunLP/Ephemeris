@@ -962,7 +962,6 @@ fn copy_agenda(st: &mut State) {
     }
 }
 
-
 fn register_peek_hotkey(hwnd: HWND, cfg: &Config) {
     unsafe {
         let _ = UnregisterHotKey(Some(hwnd), HOTKEY_PEEK);

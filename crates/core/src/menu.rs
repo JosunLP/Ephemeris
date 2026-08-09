@@ -229,7 +229,10 @@ mod tests {
     use super::*;
     use crate::i18n::{DE, EN};
 
-    fn sources() -> (Vec<(String, String)>, Vec<(String, String)>) {
+    /// `(id, display name)` pairs, as the front ends collect them.
+    type Sources = Vec<(String, String)>;
+
+    fn sources() -> (Sources, Sources) {
         (
             vec![
                 ("work@example.com".into(), "Work".into()),
@@ -327,10 +330,12 @@ mod tests {
     fn an_empty_selection_ticks_every_source() {
         let (cals, lists) = sources();
         let all = context_menu(&inputs(&cals, &lists, &[]));
-        assert!(items(&all).iter().all(|i| !matches!(
-            i.command,
-            Command::Calendar(_) | Command::Tasklist(_)
-        ) || i.checked));
+        assert!(
+            items(&all).iter().all(|i| !matches!(
+                i.command,
+                Command::Calendar(_) | Command::Tasklist(_)
+            ) || i.checked)
+        );
 
         let one = [cals[1].0.clone()];
         let picked = context_menu(&inputs(&cals, &lists, &one));

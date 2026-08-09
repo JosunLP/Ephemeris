@@ -23,7 +23,6 @@
 //! is an entry that points at nothing and fails silently at every login.
 
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
 use tpmplaner_core::log;
 
 /// Reverse-DNS label for the launch agent, and the file name it lives under.
@@ -202,6 +201,8 @@ fn unregister(path: &std::path::Path) {
 
 #[cfg(target_os = "macos")]
 fn launchctl(args: &[&str]) {
+    use std::process::{Command, Stdio};
+
     // Failure is not fatal: the plist is on disk either way and `launchd`
     // reads the directory at the next login. Nothing here goes through a
     // shell, so a path with spaces needs no quoting.
@@ -253,6 +254,7 @@ mod tests {
             // XML needs no quoting for a space, only for its own three
             // characters.
             assert!(text.contains("<string>/home/a b/My Apps/tpmplaner</string>"));
+            #[cfg(target_os = "macos")]
             assert_eq!(xml_escaped("a & b < c"), "a &amp; b &lt; c");
         } else {
             assert!(
