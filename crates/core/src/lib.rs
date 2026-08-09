@@ -23,6 +23,7 @@ pub mod host;
 pub mod i18n;
 pub mod layout;
 pub mod log;
+pub mod menu;
 pub mod model;
 pub mod provider;
 pub mod sync;

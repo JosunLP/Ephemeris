@@ -183,6 +183,15 @@ pub struct Config {
     /// Size in device independent pixels, at 96 dpi.
     pub width: f32,
     pub height: f32,
+    /// Pin the widget where it is: no dragging, no resizing, no reset from the
+    /// menu.
+    ///
+    /// It stays fully usable — scrolling, ticking tasks off and opening events
+    /// all still work. The widget sits below every other window and is dragged
+    /// by its empty space rather than by a title bar, so reaching past it for
+    /// something on the desktop is easy to do and moves it by accident. This
+    /// is the setting that stops that, and the right-click menu toggles it.
+    pub locked: bool,
 
     /// Sync interval in minutes.
     pub sync_minutes: u32,
@@ -251,6 +260,7 @@ impl Default for Config {
             y: None,
             width: 380.0,
             height: 620.0,
+            locked: false,
             sync_minutes: 30,
             accounts: Vec::new(),
             calendar_ids: Vec::new(),
@@ -440,6 +450,23 @@ mod tests {
         // Anything not mentioned stays with the system.
         assert_eq!(custom.density(), crate::theme::Density::System);
         assert_eq!(custom.colors.panel, "system");
+    }
+
+    /// The lock is written back by the menu, so it has to survive the file it
+    /// is written to — and a settings file from before it existed must not
+    /// come back locked.
+    #[test]
+    fn the_lock_defaults_to_free_and_survives_a_save() {
+        let older: Config = serde_json::from_str(r#"{"width":400.0}"#).expect("parse");
+        assert!(!older.locked, "an existing installation must not seize up");
+
+        let mut cfg = Config::default();
+        cfg.locked = true;
+        let written = serde_json::to_string(&cfg).expect("serialise");
+        let back: Config = serde_json::from_str(&written).expect("re-read");
+        assert!(back.locked);
+        // And it is not something `sanitized` can quietly undo.
+        assert!(back.sanitized().locked);
     }
 
     /// A theme file that is not there must not look like a setting that had no

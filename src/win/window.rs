@@ -16,6 +16,11 @@
 //! The window is larger than the visible glass body by [`Metrics::shadow`] on
 //! every side; the renderer draws the drop shadow in that margin.
 //!
+//! Dragging and resizing are the widget's own: `WS_POPUP` without
+//! `WS_THICKFRAME` means the system provides neither, so empty space drags and
+//! the glass edges resize. `"locked": true` in the settings switches both off
+//! while leaving everything else working — see [`is_locked`].
+//!
 //! Three timers, each alive only as long as it is needed: the minute tick
 //! (clock, sync due, configuration check), ~60 Hz during an animation, and
 //! 100 ms while an undo grace period is running.
@@ -31,6 +36,7 @@ use tpmplaner_core::config::{self, Config};
 use tpmplaner_core::i18n::Locale;
 use tpmplaner_core::layout::{Panel, hit_point};
 use tpmplaner_core::log;
+use tpmplaner_core::menu;
 use tpmplaner_core::sync::{self, Command, Shared, Status, SyncHandle};
 use tpmplaner_core::theme::{Appearance, Metrics, Palette, SystemVisuals, ThemePref};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
@@ -69,20 +75,6 @@ const UNDO_INTERVAL_MS: u32 = 100;
 /// DWM reporting a changed accent colour. Not defined in
 /// `WindowsAndMessaging`, but documented.
 const WM_DWMCOLORIZATIONCOLORCHANGED: u32 = 0x0320;
-
-const CMD_SYNC: usize = 1001;
-const CMD_AUTOSTART: usize = 1002;
-const CMD_CONFIG: usize = 1003;
-const CMD_FOLDER: usize = 1004;
-const CMD_LOG: usize = 1005;
-const CMD_RELOGIN: usize = 1006;
-const CMD_RESET_POS: usize = 1007;
-const CMD_COPY: usize = 1009;
-const CMD_UPDATE: usize = 1011;
-const CMD_QUIT: usize = 1010;
-/// Identifier ranges for the dynamically created source entries.
-const CMD_CALENDAR_BASE: usize = 2000;
-const CMD_TASKLIST_BASE: usize = 3000;
 
 /// The edge or edges of the glass body under the mouse pointer.
 ///
@@ -1522,7 +1514,11 @@ fn on_left_down(st: &mut State, lparam: LPARAM) {
             }
         }
 
-        // Empty space: drag the window.
+        // Empty space: drag the window — unless it is pinned, in which case
+        // the click does nothing at all. That is the point of the lock: the
+        // widget sits below everything and is grabbed by its empty space, so
+        // reaching past it for something on the desktop moves it by accident.
+        None if is_locked(st) => {}
         None => unsafe {
             let mut cursor = POINT::default();
             let _ = GetCursorPos(&mut cursor);
@@ -1555,8 +1551,24 @@ fn open_event(st: &State, idx: usize, tomorrow: bool) {
     }
 }
 
+/// Is the widget pinned where it is?
+///
+/// Read from the settings rather than cached on [`State`], so an edit to
+/// `config.json` takes effect at the next reload like every other setting
+/// without a second copy to keep in step.
+fn is_locked(st: &State) -> bool {
+    sync::lock(&st.shared).config.locked
+}
+
 /// Which edge is under the pointer? Coordinates in DIPs.
+///
+/// Nothing at all while the widget is locked, which is what removes the resize
+/// cursor along with the resize: an edge that still shows a double arrow but
+/// refuses to move reads as a bug rather than as a decision.
 fn edge_at(st: &State, x: f32, y: f32) -> Edges {
+    if is_locked(st) {
+        return Edges::NONE;
+    }
     let Some(r) = st.renderer.as_ref() else {
         return Edges::NONE;
     };
@@ -1683,6 +1695,11 @@ fn save_position(st: &mut State) {
 }
 
 /// Brings the window back when its position is no longer on any monitor.
+///
+/// Runs even while the widget is locked, and deliberately so: the lock exists
+/// to stop the *user* moving it by accident, not to let an unplugged monitor
+/// strand it somewhere with no way back. A lock that could hide the widget for
+/// good would be a trap rather than a convenience.
 fn rescue_offscreen(st: &mut State) {
     unsafe {
         let mut wr = RECT::default();
@@ -1817,98 +1834,83 @@ fn current_size_px(hwnd: HWND) -> (u32, u32) {
 
 // --- Context menu -----------------------------------------------------------
 
+/// Puts the shared menu model on screen as a Win32 popup, and runs whatever
+/// was picked.
+///
+/// What the menu *contains* is decided in [`tpmplaner_core::menu`], so this
+/// function only translates: an [`Entry`] becomes an `AppendMenuW` call, and a
+/// command identifier becomes an index into the commands collected on the way
+/// in. That indirection replaces the block of `CMD_*` constants this used to
+/// carry — with three front ends the identifiers would otherwise have to agree
+/// across all of them by hand.
 fn show_menu(st: &mut State) {
+    let autostart = platform::autostart_enabled();
+    let (calendars, tasklists, selected_cal, selected_list, update_available, locked) = {
+        let g = sync::lock(&st.shared);
+        (
+            g.calendars.clone(),
+            g.tasklists.clone(),
+            g.config.calendar_ids.clone(),
+            g.config.tasklist_ids.clone(),
+            g.update.is_some(),
+            g.config.locked,
+        )
+    };
+    let entries = menu::context_menu(&menu::Inputs {
+        cat: st.loc.cat,
+        autostart,
+        // Windows always can: it is a value under the Run key.
+        can_autostart: true,
+        locked,
+        calendars: &calendars,
+        tasklists: &tasklists,
+        selected_calendars: &selected_cal,
+        selected_tasklists: &selected_list,
+        update_available,
+        // No sync thread in demo mode, so nothing would receive the command.
+        can_relogin: st.sync.is_some(),
+    });
+
     unsafe {
-        let Ok(menu) = CreatePopupMenu() else { return };
-        let autostart = platform::autostart_enabled();
-        let c = st.loc.cat;
-
-        // The labels come from the catalogue and therefore have to be
-        // converted to UTF-16 at run time; `w!()` only handles literals.
-        let item = |flags: MENU_ITEM_FLAGS, id: usize, label: &str| {
-            let text = platform::wide(label);
-            let _ = AppendMenuW(menu, flags, id, PCWSTR(text.as_ptr()));
-        };
-
-        item(MF_STRING, CMD_SYNC, c.menu_sync);
-        item(
-            if autostart {
-                MF_STRING | MF_CHECKED
-            } else {
-                MF_STRING
-            },
-            CMD_AUTOSTART,
-            c.menu_autostart,
-        );
-        // Select and deselect sources straight from the menu. The ids are
-        // long, email-like strings, and copying them into the JSON by hand was
-        // the most unpleasant part of the setup.
-        let (calendars, tasklists, selected_cal, selected_list) = {
-            let g = sync::lock(&st.shared);
-            (
-                g.calendars.clone(),
-                g.tasklists.clone(),
-                g.config.calendar_ids.clone(),
-                g.config.tasklist_ids.clone(),
-            )
-        };
-        let mut sources = Vec::new();
-        if !calendars.is_empty() {
-            sources.push((
-                c.menu_calendars,
-                &calendars,
-                &selected_cal,
-                CMD_CALENDAR_BASE,
-            ));
-        }
-        if !tasklists.is_empty() {
-            sources.push((
-                c.menu_tasklists,
-                &tasklists,
-                &selected_list,
-                CMD_TASKLIST_BASE,
-            ));
-        }
-        if !sources.is_empty() {
-            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-        }
+        let Ok(popup) = CreatePopupMenu() else { return };
+        // Identifier zero means "nothing was chosen", so the commands are
+        // numbered from one.
+        let mut commands: Vec<menu::Command> = Vec::with_capacity(entries.len());
         // Submenus have to stay alive until `TrackPopupMenu` returns.
         let mut submenus = Vec::new();
-        for (label, entries, selected, base) in sources {
-            let Ok(sub) = CreatePopupMenu() else { continue };
-            for (i, (id, name)) in entries.iter().enumerate() {
-                // An empty selection means "all" — so everything is ticked.
-                let checked = selected.is_empty() || selected.contains(id);
-                let text = platform::wide(name);
-                let _ = AppendMenuW(
-                    sub,
-                    if checked {
-                        MF_STRING | MF_CHECKED
-                    } else {
-                        MF_STRING
-                    },
-                    base + i,
-                    PCWSTR(text.as_ptr()),
-                );
-            }
-            let text = platform::wide(label);
-            let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, PCWSTR(text.as_ptr()));
-            submenus.push(sub);
-        }
 
-        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-        // Only offered when there is something to install.
-        if sync::lock(&st.shared).update.is_some() {
-            item(MF_STRING, CMD_UPDATE, c.menu_update);
+        let append = |target: HMENU, item: &menu::Item, commands: &mut Vec<menu::Command>| {
+            commands.push(item.command);
+            let mut flags = MF_STRING;
+            if item.checked {
+                flags |= MF_CHECKED;
+            }
+            if !item.enabled {
+                flags |= MF_GRAYED;
+            }
+            // The labels come from the catalogue and therefore have to be
+            // converted to UTF-16 at run time; `w!()` only handles literals.
+            let text = platform::wide(&item.label);
+            let _ = AppendMenuW(target, flags, commands.len(), PCWSTR(text.as_ptr()));
+        };
+
+        for entry in &entries {
+            match entry {
+                menu::Entry::Separator => {
+                    let _ = AppendMenuW(popup, MF_SEPARATOR, 0, PCWSTR::null());
+                }
+                menu::Entry::Item(item) => append(popup, item, &mut commands),
+                menu::Entry::Submenu(label, items) => {
+                    let Ok(sub) = CreatePopupMenu() else { continue };
+                    for item in items {
+                        append(sub, item, &mut commands);
+                    }
+                    let text = platform::wide(label);
+                    let _ = AppendMenuW(popup, MF_POPUP, sub.0 as usize, PCWSTR(text.as_ptr()));
+                    submenus.push(sub);
+                }
+            }
         }
-        item(MF_STRING, CMD_COPY, c.menu_copy);
-        item(MF_STRING, CMD_CONFIG, c.menu_config);
-        item(MF_STRING, CMD_RESET_POS, c.menu_reset_pos);
-        item(MF_STRING, CMD_LOG, c.menu_log);
-        item(MF_STRING, CMD_FOLDER, c.menu_folder);
-        item(MF_STRING, CMD_RELOGIN, c.menu_relogin);
-        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-        item(MF_STRING, CMD_QUIT, c.menu_quit);
 
         let mut pt = POINT::default();
         let _ = GetCursorPos(&mut pt);
@@ -1925,7 +1927,7 @@ fn show_menu(st: &mut State) {
             TPM_LEFTALIGN
         };
         let choice = TrackPopupMenu(
-            menu,
+            popup,
             TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY | align,
             pt.x,
             pt.y,
@@ -1937,66 +1939,110 @@ fn show_menu(st: &mut State) {
         for sub in submenus {
             let _ = DestroyMenu(sub);
         }
-        let _ = DestroyMenu(menu);
+        let _ = DestroyMenu(popup);
 
-        match choice.0 as usize {
-            CMD_SYNC => request_sync(st),
-            CMD_AUTOSTART => {
-                platform::set_autostart(!autostart);
-                log::info(if autostart {
-                    "Autostart disabled"
-                } else {
-                    "Autostart enabled"
-                });
-            }
-            CMD_CONFIG => {
-                // Make sure the file exists before opening it — the editor
-                // should not report "not found".
-                sync::lock(&st.shared).config.save();
-                st.config_mtime = config_mtime(st.theme_file.as_deref());
-                platform::open_path(&config::config_path());
-            }
-            CMD_RESET_POS => {
-                {
-                    let mut guard = sync::lock(&st.shared);
-                    guard.config.x = None;
-                    guard.config.y = None;
-                    guard.config.save();
-                }
-                st.config_mtime = config_mtime(st.theme_file.as_deref());
-                let cfg = sync::lock(&st.shared).config.clone();
-                let (px, py, pw, ph) = target_geometry(&cfg, st.metrics, st.dpi);
-                let _ = SetWindowPos(
-                    st.hwnd,
-                    Some(HWND_BOTTOM),
-                    px,
-                    py,
-                    pw,
-                    ph,
-                    SWP_NOACTIVATE | SWP_NOOWNERZORDER,
-                );
-            }
-            CMD_UPDATE => start_update(st),
-            CMD_COPY => copy_agenda(st),
-            CMD_LOG => platform::open_path(&log::file_path()),
-            id if (CMD_CALENDAR_BASE..CMD_CALENDAR_BASE + calendars.len()).contains(&id) => {
-                toggle_source(st, true, id - CMD_CALENDAR_BASE);
-            }
-            id if (CMD_TASKLIST_BASE..CMD_TASKLIST_BASE + tasklists.len()).contains(&id) => {
-                toggle_source(st, false, id - CMD_TASKLIST_BASE);
-            }
-            CMD_FOLDER => platform::open_path(&config::data_dir()),
-            CMD_RELOGIN => {
-                if let Some(s) = st.sync.as_ref() {
-                    s.send(Command::Relogin);
-                }
-                st.anim.spinning = true;
-                kick(st);
-            }
-            CMD_QUIT => {
-                let _ = DestroyWindow(st.hwnd);
-            }
-            _ => {}
+        let picked = (choice.0 as usize)
+            .checked_sub(1)
+            .and_then(|i| commands.get(i).copied());
+        if let Some(command) = picked {
+            run_command(st, command, autostart);
         }
+    }
+}
+
+/// Carries out a menu choice.
+///
+/// Separate from the presentation above so the `match` is exhaustive over
+/// [`menu::Command`] with nothing else in scope: a command added to the core
+/// stops compiling here until this front end says what it does.
+fn run_command(st: &mut State, command: menu::Command, autostart: bool) {
+    match command {
+        menu::Command::Sync => request_sync(st),
+        menu::Command::Autostart => {
+            platform::set_autostart(!autostart);
+            log::info(if autostart {
+                "Autostart disabled"
+            } else {
+                "Autostart enabled"
+            });
+        }
+        menu::Command::Lock => toggle_lock(st),
+        menu::Command::OpenConfig => {
+            // Make sure the file exists before opening it — the editor should
+            // not report "not found".
+            sync::lock(&st.shared).config.save();
+            st.config_mtime = config_mtime(st.theme_file.as_deref());
+            platform::open_path(&config::config_path());
+        }
+        menu::Command::ResetPosition => reset_position(st),
+        menu::Command::OpenLog => platform::open_path(&log::file_path()),
+        menu::Command::OpenDataFolder => platform::open_path(&config::data_dir()),
+        menu::Command::InstallUpdate => start_update(st),
+        menu::Command::CopyAgenda => copy_agenda(st),
+        menu::Command::Relogin => {
+            if let Some(s) = st.sync.as_ref() {
+                s.send(Command::Relogin);
+            }
+            st.anim.spinning = true;
+            kick(st);
+        }
+        menu::Command::Quit => unsafe {
+            let _ = DestroyWindow(st.hwnd);
+        },
+        menu::Command::Calendar(i) => toggle_source(st, true, i),
+        menu::Command::Tasklist(i) => toggle_source(st, false, i),
+    }
+}
+
+/// Pins the widget where it is, or lets it go again.
+///
+/// Written to `config.json` rather than kept in memory: the point of the lock
+/// is that the widget stays put, and a setting that forgets itself at the next
+/// restart would not do that.
+fn toggle_lock(st: &mut State) {
+    let locked = {
+        let mut guard = sync::lock(&st.shared);
+        guard.config.locked = !guard.config.locked;
+        guard.config.save();
+        guard.config.locked
+    };
+    st.config_mtime = config_mtime(st.theme_file.as_deref());
+    log::info(if locked {
+        "Position and size locked"
+    } else {
+        "Position and size unlocked"
+    });
+
+    // The pointer may be sitting on a resize grip that has just stopped being
+    // one. Without this the double arrow stays until the mouse next moves.
+    st.hover_edge = Edges::NONE;
+    unsafe {
+        if let Ok(cursor) = LoadCursorW(None, IDC_ARROW) {
+            SetCursor(Some(cursor));
+        }
+    }
+}
+
+/// Forgets a hand-placed position and goes back to the default corner.
+fn reset_position(st: &mut State) {
+    {
+        let mut guard = sync::lock(&st.shared);
+        guard.config.x = None;
+        guard.config.y = None;
+        guard.config.save();
+    }
+    st.config_mtime = config_mtime(st.theme_file.as_deref());
+    let cfg = sync::lock(&st.shared).config.clone();
+    let (px, py, pw, ph) = target_geometry(&cfg, st.metrics, st.dpi);
+    unsafe {
+        let _ = SetWindowPos(
+            st.hwnd,
+            Some(HWND_BOTTOM),
+            px,
+            py,
+            pw,
+            ph,
+            SWP_NOACTIVATE | SWP_NOOWNERZORDER,
+        );
     }
 }
