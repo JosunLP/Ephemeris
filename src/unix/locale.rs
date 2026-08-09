@@ -59,20 +59,29 @@ impl LocaleBackend for UnixLocale {
         PortableLocale.is_rtl(tag)
     }
 
+    // Each falls back to the portable formatter rather than to `None`, because
+    // `None` is not "no answer" to the caller — `Locale` turns it into an ISO
+    // date and a bare `HH:MM`. That is the right last resort for a crate with
+    // no host at all, and the wrong one here: a Linux machine that simply has
+    // not generated the user's locale would drop from an English month name to
+    // `2026-08-09`, which is worse and looks like a bug rather than a missing
+    // locale. macOS never takes this path; Core Foundation carries every
+    // locale it knows.
+
     fn format_time(&self, tag: &str, dt: DateTime<Local>) -> Option<String> {
-        platform::format_time(tag, dt)
+        platform::format_time(tag, dt).or_else(|| PortableLocale.format_time(tag, dt))
     }
 
     fn format_weekday(&self, tag: &str, date: NaiveDate) -> Option<String> {
-        platform::format_weekday(tag, date)
+        platform::format_weekday(tag, date).or_else(|| PortableLocale.format_weekday(tag, date))
     }
 
     fn format_date(&self, tag: &str, date: NaiveDate) -> Option<String> {
-        platform::format_date(tag, date)
+        platform::format_date(tag, date).or_else(|| PortableLocale.format_date(tag, date))
     }
 
     fn format_day_month(&self, tag: &str, date: NaiveDate) -> Option<String> {
-        platform::format_day_month(tag, date)
+        platform::format_day_month(tag, date).or_else(|| PortableLocale.format_day_month(tag, date))
     }
 }
 
@@ -238,20 +247,61 @@ mod patterns {
         matches!(spec, 'a' | 'A' | 'u' | 'w')
     }
 
+    fn is_day(spec: char) -> bool {
+        matches!(spec, 'd' | 'e')
+    }
+
+    /// May the numeric month in this pattern become a name?
+    ///
+    /// Only where every separator is ASCII. A locale that writes `%Y年%m月%d日`
+    /// puts the field's *unit* in the separator, and the C library's full month
+    /// name there is `8月` — already carrying the character that follows it. Widening
+    /// would print it twice, so such a pattern keeps its numeric month and gains
+    /// only a four-digit year, which is the locale's own long form anyway.
+    ///
+    /// The test for it is the separators rather than the language, so a locale
+    /// nobody thought of is judged by what it actually writes.
+    fn month_may_be_named(tokens: &[Token]) -> bool {
+        tokens.iter().all(|t| match t {
+            Token::Literal(text) => text.is_ascii(),
+            Token::Conversion(..) => true,
+        })
+    }
+
+    /// The separator between two fields, once the month beside it is a word.
+    ///
+    /// `4.August.2026` is not how any locale writes a date, so punctuation that
+    /// separates *numbers* becomes a space. The exception is punctuation that
+    /// belongs to the day rather than to the gap: German writes `4. August
+    /// 2026`, where the full stop is the ordinal marker, and English writes
+    /// `August 4, 2026`. Which is which is decided by the field it follows —
+    /// after the day it is kept, anywhere else it is a separator and goes.
+    fn spaced(separator: &str, follows: Option<char>) -> String {
+        let after_day = follows.is_some_and(is_day);
+        match separator.trim() {
+            "." if after_day => ". ".into(),
+            "," if after_day => ", ".into(),
+            "" => " ".into(),
+            other if other.chars().all(|c| c.is_ascii_punctuation()) => " ".into(),
+            other => format!("{other} "),
+        }
+    }
+
     /// Widens a locale's short date into a long one.
     ///
-    /// The numeric month becomes the full name and a two-digit year becomes four,
-    /// while the field order and every separator the locale chose stay exactly as
-    /// they were — which is what keeps `%Y年%m月%d日` the right shape instead of a
-    /// European reconstruction of it.
+    /// The numeric month becomes the full name where that is safe, a two-digit
+    /// year becomes four, and the day loses its leading zero — `%e` pads with a
+    /// space, which [`super::platform::tidy`] then takes off. The field order is
+    /// the locale's throughout.
     ///
     /// A weekday in the pattern is dropped: the widget draws the weekday on the
     /// line above, and this is the line under it.
     pub(super) fn long_date_pattern(d_fmt: &str) -> String {
         let tokens = tokenize(d_fmt);
+        let name_the_month = month_may_be_named(&tokens);
         let mut out = String::new();
         let mut pending_literal: Option<String> = None;
-        let mut written_any = false;
+        let mut previous: Option<char> = None;
 
         for token in tokens {
             match token {
@@ -264,22 +314,30 @@ mod patterns {
                         continue;
                     }
                     if let Some(text) = pending_literal.take()
-                        && written_any
+                        && previous.is_some()
                     {
-                        out.push_str(&text);
+                        out.push_str(&if name_the_month {
+                            spaced(&text, previous)
+                        } else {
+                            text
+                        });
                     }
                     match spec {
-                        'm' | 'b' | 'h' => out.push_str("%B"),
+                        'm' | 'b' | 'h' if name_the_month => out.push_str("%B"),
                         'y' | 'C' | 'g' => out.push_str("%Y"),
+                        _ if is_day(spec) && name_the_month => out.push_str("%e"),
                         _ => out.push_str(&raw),
                     }
-                    written_any = true;
+                    previous = Some(spec);
                 }
             }
         }
-        // A trailing literal belongs to the last field — `%Y年%m月%d日` ends in one.
+        // A trailing literal belongs to the last field — `%Y年%m月%d日` ends in
+        // one. It is left alone: there is no following field for it to separate
+        // from, so it is part of the date rather than a gap in it.
         if let Some(text) = pending_literal
-            && written_any
+            && previous.is_some()
+            && !name_the_month
         {
             out.push_str(&text);
         }
@@ -293,12 +351,17 @@ mod patterns {
     /// The same short date with the year taken out, for the task due column.
     ///
     /// The separator that went with the year goes too, so `%d.%m.%Y` becomes
-    /// `%d.%b` rather than `%d.%b.`, and `%Y年%m月%d日` becomes `%m月%d日`. The
-    /// month is abbreviated: the column is narrow and the year is the field that
-    /// carries no information in a list of things due this week.
+    /// `%e. %b` rather than `%d.%b.`, and `%Y年%m月%d日` becomes `%m月%d日` —
+    /// with its month left numeric, for the reason [`month_may_be_named`] gives.
+    /// The month is abbreviated where it is named at all: the column is narrow,
+    /// and the year is the field carrying no information in a list of things due
+    /// this week.
     pub(super) fn day_month_pattern(d_fmt: &str) -> String {
+        let tokens = tokenize(d_fmt);
+        let name_the_month = month_may_be_named(&tokens);
+
         let mut kept: Vec<Token> = Vec::new();
-        for token in tokenize(d_fmt) {
+        for token in tokens {
             match token {
                 Token::Conversion(_, spec) if is_year(spec) || is_weekday(spec) => {
                     // The separator that introduced the field goes with it. When
@@ -313,19 +376,36 @@ mod patterns {
         }
 
         let mut out = String::new();
-        let mut started = false;
+        let mut previous: Option<char> = None;
         for token in &kept {
             match token {
                 // Punctuation before any field has been written is what the
                 // dropped leading field left behind.
-                Token::Literal(_) if !started => {}
-                Token::Literal(text) => out.push_str(text),
+                Token::Literal(_) if previous.is_none() => {}
+                Token::Literal(text) => out.push_str(&if name_the_month {
+                    spaced(text, previous)
+                } else {
+                    text.clone()
+                }),
                 Token::Conversion(raw, spec) => {
-                    out.push_str(if is_month(*spec) { "%b" } else { raw });
-                    started = true;
+                    out.push_str(match spec {
+                        _ if is_month(*spec) && name_the_month => "%b",
+                        _ if is_day(*spec) && name_the_month => "%e",
+                        _ => raw,
+                    });
+                    previous = Some(*spec);
                 }
             }
         }
+        // A named month leaves no trailing punctuation behind: `4. Aug.` gained
+        // its stop from the day, not from the end of the pattern.
+        let out = if name_the_month {
+            out.trim_end()
+                .trim_end_matches(['.', ',', '/', '-'])
+                .to_string()
+        } else {
+            out
+        };
         if out.is_empty() { "%e %b".into() } else { out }
     }
 
@@ -396,32 +476,45 @@ mod patterns {
         }
 
         #[test]
-        fn widening_a_short_date_keeps_the_locales_order_and_separators() {
-            assert_eq!(long_date_pattern("%d.%m.%Y"), "%d.%B.%Y");
-            assert_eq!(long_date_pattern("%m/%d/%y"), "%B/%d/%Y");
-            // The shape a CJK locale writes is preserved rather than rebuilt as a
-            // European one — this is what reconstructing from a field order would
-            // have lost.
-            assert_eq!(long_date_pattern("%Y年%m月%d日"), "%Y年%B月%d日");
+        fn widening_a_short_date_keeps_the_locales_order_and_spaces_the_month() {
+            // German: the full stop stays, because it is the day's ordinal
+            // marker rather than a separator between numbers — `4. August 2026`.
+            assert_eq!(long_date_pattern("%d.%m.%Y"), "%e. %B %Y");
+            // French and British: a slash separates numbers and has no business
+            // between a number and a word.
+            assert_eq!(long_date_pattern("%d/%m/%Y"), "%e %B %Y");
+            // American, and the field order is still the locale's.
+            assert_eq!(long_date_pattern("%m/%d/%y"), "%B %e %Y");
+            assert_eq!(long_date_pattern("%Y-%m-%d"), "%Y %B %e");
+        }
+
+        #[test]
+        fn a_locale_whose_separators_carry_the_unit_keeps_its_numeric_month() {
+            // `%Y年%m月%d日` writes the field's unit as the separator, and the C
+            // library's full month name there is `8月` — already carrying the
+            // character that follows it. Naming the month would print it twice.
+            // So the shape is left alone and only the year is widened.
+            assert_eq!(long_date_pattern("%Y年%m月%d日"), "%Y年%m月%d日");
+            assert_eq!(long_date_pattern("%Y년 %m월 %d일"), "%Y년 %m월 %d일");
+            assert_eq!(day_month_pattern("%Y年%m月%d日"), "%m月%d日");
         }
 
         #[test]
         fn a_weekday_in_the_short_date_is_dropped_with_its_separator() {
             // The widget draws the weekday on the line above this one, and a
             // pattern that kept it would start with a stray comma once it went.
-            assert_eq!(long_date_pattern("%a, %d %b %Y"), "%d %B %Y");
-            assert_eq!(day_month_pattern("%a %d/%m/%Y"), "%d/%b");
+            assert_eq!(long_date_pattern("%a, %d %b %Y"), "%e %B %Y");
+            assert_eq!(day_month_pattern("%a %d/%m/%Y"), "%e %b");
         }
 
         #[test]
         fn the_due_column_loses_the_year_and_the_separator_that_came_with_it() {
-            assert_eq!(day_month_pattern("%d.%m.%Y"), "%d.%b");
-            assert_eq!(day_month_pattern("%d/%m/%Y"), "%d/%b");
+            assert_eq!(day_month_pattern("%d.%m.%Y"), "%e. %b");
+            assert_eq!(day_month_pattern("%d/%m/%Y"), "%e %b");
             // Year first: the separator that follows it goes instead of one that
             // precedes it, so nothing starts with a stray mark.
-            assert_eq!(day_month_pattern("%Y-%m-%d"), "%b-%d");
-            assert_eq!(day_month_pattern("%Y年%m月%d日"), "%b月%d日");
-            assert_eq!(day_month_pattern("%m/%d/%y"), "%b/%d");
+            assert_eq!(day_month_pattern("%Y-%m-%d"), "%b %e");
+            assert_eq!(day_month_pattern("%m/%d/%y"), "%b %e");
         }
 
         #[test]
@@ -431,6 +524,27 @@ mod patterns {
             assert_eq!(long_date_pattern(""), "%e %B %Y");
             assert_eq!(day_month_pattern(""), "%e %b");
             assert_eq!(day_month_pattern("%Y"), "%e %b");
+        }
+
+        #[test]
+        fn punctuation_belonging_to_the_day_survives_and_the_rest_becomes_a_space() {
+            // `4. August` in German, `August 4, 2026` in English: both marks
+            // belong to the day, and both would be wrong anywhere else.
+            assert_eq!(spaced(".", Some('d')), ". ");
+            assert_eq!(spaced(",", Some('d')), ", ");
+            assert_eq!(spaced(".", Some('B')), " ");
+            assert_eq!(spaced(",", Some('B')), " ");
+            // A separator between numbers has nothing to do beside a word.
+            assert_eq!(spaced("/", Some('d')), " ");
+            assert_eq!(spaced("-", Some('Y')), " ");
+            assert_eq!(spaced(" ", Some('d')), " ");
+        }
+
+        #[test]
+        fn the_month_is_named_only_where_the_separators_are_plain() {
+            assert!(month_may_be_named(&tokenize("%d.%m.%Y")));
+            assert!(month_may_be_named(&tokenize("%d %m %Y")));
+            assert!(!month_may_be_named(&tokenize("%Y年%m月%d日")));
         }
     }
 }
@@ -611,6 +725,12 @@ mod platform {
     }
 
     /// `strftime` with a pattern, into a buffer large enough for a date.
+    ///
+    /// The result is tidied before it is returned. `%e` pads a single-digit day
+    /// with a space so the column lines up in a terminal, which is not what a
+    /// widget wants, and a locale with no meridiem marker leaves `%p` empty
+    /// with its space still there. Both come out as runs of whitespace, and
+    /// neither is anything the locale asked for.
     fn strftime(pattern: &str, tm: &libc::tm) -> Option<String> {
         let c_pattern = CString::new(pattern).ok()?;
         // Generous: the longest thing here is a full date with a spelled-out
@@ -630,7 +750,28 @@ mod platform {
             return None;
         }
         buf.truncate(written);
-        String::from_utf8(buf).ok()
+        let rendered = String::from_utf8(buf).ok()?;
+        let tidied = tidy(&rendered);
+        (!tidied.is_empty()).then_some(tidied)
+    }
+
+    /// Collapses runs of spaces and trims the ends.
+    ///
+    /// Only ASCII spaces and tabs: a narrow no-break space between a number and
+    /// its unit is a deliberate choice by the locale, and squeezing it would be
+    /// this code overruling the database it went to the trouble of asking.
+    fn tidy(rendered: &str) -> String {
+        let mut out = String::with_capacity(rendered.len());
+        let mut last_was_space = false;
+        for c in rendered.chars() {
+            let space = c == ' ' || c == '\t';
+            if space && last_was_space {
+                continue;
+            }
+            out.push(if space { ' ' } else { c });
+            last_was_space = space;
+        }
+        out.trim().to_string()
     }
 
     /// A `struct tm` for a date, with the fields `strftime` reads set and the
@@ -694,5 +835,137 @@ mod platform {
             let d_fmt = langinfo(libc::D_FMT)?;
             strftime(&day_month_pattern(&d_fmt), &tm_for(date, 12, 0))
         })
+    }
+}
+
+/// What the platform actually returns, asked of the platform.
+///
+/// The tests above cover the string handling with no system involved. These
+/// cover the other half — that the system was asked the right question and its
+/// answer arrives intact — which is the part no amount of unit testing of
+/// patterns can show.
+///
+/// They call the back end directly rather than through [`UnixLocale`], whose
+/// methods fall back to the portable formatter: a fallback is the right
+/// behaviour and the wrong thing to test through, because it would turn "the
+/// platform gave nothing" into a passing English answer.
+///
+/// **On a machine without the locale generated they skip.** `newlocale` fails
+/// for `de_DE.UTF-8` on a stock container, and a developer's laptop is not
+/// obliged to carry every locale this checks. Continuous integration generates
+/// them and sets `TPMPLANER_REQUIRE_SYSTEM_LOCALE`, which turns the skip back
+/// into a failure — so a green run there means the back end answered, not that
+/// it was excused. macOS needs neither: Core Foundation carries the data
+/// itself.
+#[cfg(test)]
+mod backend {
+    use super::*;
+    use chrono::Datelike;
+
+    /// The date every case below is asked about. Nothing depends on which
+    /// weekday it happens to be — that is looked up — but the month is fixed,
+    /// and August is spelled distinctly in the two languages used here.
+    fn subject() -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, 8, 4).unwrap()
+    }
+
+    /// `None` when this system has no such locale, unless CI said it must.
+    fn answer(what: &str, tag: &str, got: Option<String>) -> Option<String> {
+        if got.is_none() && std::env::var_os("TPMPLANER_REQUIRE_SYSTEM_LOCALE").is_some() {
+            panic!(
+                "{what} returned nothing for {tag}, but this run requires the \
+                 system locale to be present"
+            );
+        }
+        got
+    }
+
+    #[test]
+    fn the_hour_convention_is_the_locales_own() {
+        use chrono::TimeZone;
+        let afternoon = Local.with_ymd_and_hms(2026, 8, 4, 14, 30, 0).unwrap();
+
+        if let Some(german) = answer(
+            "format_time",
+            "de-DE",
+            platform::format_time("de-DE", afternoon),
+        ) {
+            assert_eq!(german.trim(), "14:30", "German counts to twenty-four");
+        }
+        if let Some(american) = answer(
+            "format_time",
+            "en-US",
+            platform::format_time("en-US", afternoon),
+        ) {
+            let upper = american.to_uppercase();
+            assert!(
+                upper.contains("PM"),
+                "American English counts to twelve: {american}"
+            );
+            assert!(american.contains("2:30"), "{american}");
+        }
+        // The pair is the point: the same instant, two conventions, neither
+        // guessed from the language — `en-GB` would agree with the German one.
+    }
+
+    #[test]
+    fn the_weekday_comes_back_in_the_locales_language() {
+        // Looked up rather than hard-coded, so the test says nothing about
+        // which day the fourth of August falls on.
+        const GERMAN: [&str; 7] = [
+            "Montag",
+            "Dienstag",
+            "Mittwoch",
+            "Donnerstag",
+            "Freitag",
+            "Samstag",
+            "Sonntag",
+        ];
+        let date = subject();
+        let expected = GERMAN[date.weekday().num_days_from_monday() as usize];
+
+        if let Some(got) = answer(
+            "format_weekday",
+            "de-DE",
+            platform::format_weekday("de-DE", date),
+        ) {
+            assert_eq!(got, expected);
+        }
+    }
+
+    #[test]
+    fn the_long_date_carries_a_spelled_out_month_in_the_right_language() {
+        let date = subject();
+        for (tag, month) in [("de-DE", "August"), ("fr-FR", "août")] {
+            if let Some(got) = answer("format_date", tag, platform::format_date(tag, date)) {
+                assert!(got.contains(month), "{tag}: {got} should contain {month}");
+                assert!(got.contains("2026"), "{tag}: {got} should carry the year");
+                // The weekday belongs on the line above this one.
+                assert!(
+                    !got.to_lowercase().contains("dienstag")
+                        && !got.to_lowercase().contains("mardi"),
+                    "{tag}: {got} should not repeat the weekday"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_due_column_names_the_month_and_drops_the_year() {
+        let date = subject();
+        for (tag, month) in [("de-DE", "Aug"), ("fr-FR", "ao")] {
+            if let Some(got) = answer(
+                "format_day_month",
+                tag,
+                platform::format_day_month(tag, date),
+            ) {
+                assert!(got.contains(month), "{tag}: {got} should name the month");
+                assert!(got.contains('4'), "{tag}: {got} should carry the day");
+                assert!(
+                    !got.contains("2026") && !got.contains("26"),
+                    "{tag}: {got} should not carry the year"
+                );
+            }
+        }
     }
 }

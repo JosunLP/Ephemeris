@@ -2,11 +2,13 @@
 // Copyright (C) 2026 TPMPlaner contributors
 //! The macOS and Linux front end.
 //!
-//! Half of one. [`host`] is real — the data directory, opening a browser and
-//! cryptographic random bytes all work, and the two credential methods say
-//! plainly that they do not yet. [`text`] prints the agenda instead of drawing
-//! it, because the window this project is built around does not exist on these
-//! platforms yet.
+//! Everything except the window. [`host`] is complete: the data directory
+//! follows each system's convention, a browser opens, random bytes come from
+//! `/dev/urandom`, and credentials go to the Keychain or the Secret Service
+//! through [`secure`]. [`locale`] gives the core the platform's own date and
+//! time database rather than a pattern written by hand. [`text`] prints the
+//! agenda instead of drawing it, because the window this project is built
+//! around does not exist on these platforms yet.
 //!
 //! That is deliberate rather than a placeholder nobody got round to replacing.
 //! The window has to sit below every other window and above the desktop,

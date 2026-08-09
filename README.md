@@ -72,12 +72,14 @@ localisation and the palette, and calls no operating system API at all — CI
 enforces that on Ubuntu, macOS and Windows. What remains platform-specific is
 the renderer and the window.
 
-On macOS and Linux the data directory, opening a browser and cryptographic
-random bytes are implemented, and running the binary prints the agenda the
-widget would have drawn — so the portable half is exercised end to end on both
-rather than merely type checked. Credential storage and the window are not, and
+On macOS and Linux everything except the window is in place: the data
+directory, opening a browser, cryptographic random bytes, dates and times from
+the platform's own locale database, and credentials in the Keychain or the
+Secret Service. Running the binary prints the agenda the widget would have
+drawn, so the portable half is exercised end to end on both rather than merely
+type checked. The window is what is left, and
 [the porting notes](https://josunlp.github.io/TPMPlaner/development/porting)
-say which API each of them needs and which decisions have already been
+say which API it needs on each system and which decisions have already been
 made.
 
 ## Build from source
