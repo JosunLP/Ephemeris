@@ -22,7 +22,11 @@
 //! portable core is exercised end to end on both rather than merely
 //! type checked.
 
+#[cfg(target_os = "macos")]
+mod cf;
 mod host;
+mod locale;
+mod secure;
 mod text;
 
 use std::sync::Arc;
@@ -34,13 +38,12 @@ pub fn install_host() {
     host::prepare_data_dir();
     core_host::set_host(Arc::new(host::UnixHost));
 
-    // The locale backend is left at the portable default on purpose. It
-    // formats a date as `4 August 2026` in every locale, which is wrong
-    // everywhere except by accident — and writing a slightly less wrong one by
-    // hand is the trap `i18n.rs` exists to warn about. The right answer is the
-    // platform's own database (`NSDateFormatter` with `dateFormatFromTemplate:`
-    // on macOS) or `icu4x` on Linux, and both belong with the front end that
-    // needs them. See the porting notes.
+    // The platform's own locale database: Core Foundation's date formatter on
+    // macOS, the C library's on Linux. What it replaced formatted every locale
+    // as `4 August 2026` on a twenty-four-hour clock — right for no one in
+    // particular. See [`locale`] for what each system does and where the Linux
+    // side is still approximate.
+    core_host::set_locale_backend(Arc::new(locale::UnixLocale));
 }
 
 /// Always true for now.
