@@ -10,13 +10,14 @@ use crate::config::{self, Config};
 use crate::host::Waker;
 use crate::log;
 use crate::model::{
-    Agenda, Event, Task, filter_tasks_for_today, local_day_start, sort_events, sort_tasks,
+    Agenda, Event, Task, filter_tasks_for_today, link_task_time_blocks, local_day_start,
+    sort_events, sort_tasks, title_key,
 };
 use crate::provider::{
     self, AccountConfig, CalendarProvider, CalendarRef, Error, FetchRequest, Kind, TaskListRef,
 };
-use chrono::{Duration as ChronoDuration, Local};
-use std::collections::HashMap;
+use chrono::{Duration as ChronoDuration, Local, NaiveDate};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -101,6 +102,70 @@ impl Meta {
             }
         }
         (calendars, lists)
+    }
+}
+
+/// Time blocks whose task has been completed, so a sync cannot bring them back.
+///
+/// Ticking a task off takes its calendar entry with it (see
+/// [`Agenda::complete_task`]), but the next sync asks the provider again, and
+/// whether the entry is still there depends on the service. Google hides a
+/// completed task from the calendar grid, so most likely it is not — but that
+/// could not be confirmed against a live account, and if the entry does come
+/// back the row the user just dismissed reappears a minute later.
+///
+/// So the completed block is remembered and dropped on arrival. Deliberately
+/// narrow, because this is the one part of the fix that can hide something it
+/// should not:
+///
+/// * only a task that actually had a block on screen is remembered — a plain
+///   task cannot suppress anything;
+/// * the entry is matched on account and title, exactly as the pairing is;
+/// * and the set is emptied when the day rolls over and lives only for as long
+///   as the process does.
+///
+/// [`drop_completed`] logs whenever it takes something, so the log answers the
+/// question the issue could not: if that line never appears, the provider
+/// clears the block itself and this can go.
+#[derive(Default)]
+struct CompletedBlocks {
+    day: Option<NaiveDate>,
+    /// `(account id, normalised title)`.
+    keys: HashSet<(String, String)>,
+}
+
+impl CompletedBlocks {
+    fn remember(&mut self, today: NaiveDate, account_id: &str, title: &str) {
+        self.roll_over(today);
+        self.keys.insert((account_id.to_string(), title_key(title)));
+    }
+
+    /// Takes the remembered blocks out of a freshly fetched list.
+    fn drop_completed(&mut self, today: NaiveDate, events: &mut Vec<Event>) {
+        self.roll_over(today);
+        if self.keys.is_empty() {
+            return;
+        }
+        events.retain(|e| {
+            let gone = self
+                .keys
+                .contains(&(e.account_id.clone(), title_key(&e.title)));
+            if gone {
+                log::info(&format!(
+                    "Dropping '{}': its task was completed and the provider still returns the \
+                     time block",
+                    e.title
+                ));
+            }
+            !gone
+        });
+    }
+
+    fn roll_over(&mut self, today: NaiveDate) {
+        if self.day != Some(today) {
+            self.day = Some(today);
+            self.keys.clear();
+        }
     }
 }
 
@@ -227,6 +292,7 @@ fn worker(shared: Arc<Mutex<Shared>>, waker: Arc<dyn Waker>, rx: Receiver<Comman
     let mut meta: Option<Meta> = None;
     // Ride along with the sync run rather than opening a second connection.
     let mut last_update_check: Option<Instant> = None;
+    let mut completed = CompletedBlocks::default();
 
     while let Ok(first) = rx.recv() {
         for cmd in coalesce(first, &rx) {
@@ -244,7 +310,7 @@ fn worker(shared: Arc<Mutex<Shared>>, waker: Arc<dyn Waker>, rx: Receiver<Comman
                         providers = build_providers(&wanted);
                         meta = None;
                     }
-                    let result = run_sync(&mut providers, cfg, &mut meta);
+                    let result = run_sync(&mut providers, cfg, &mut meta, &mut completed);
                     publish_sources(&shared, &meta);
                     apply_sync_result(&shared, &waker, result);
                     check_for_update(&shared, &waker, &mut last_update_check);
@@ -260,7 +326,7 @@ fn worker(shared: Arc<Mutex<Shared>>, waker: Arc<dyn Waker>, rx: Receiver<Comman
                     providers = build_providers(&cfg.effective_accounts());
                     // The directory belonged to the previous sign-in.
                     meta = None;
-                    let result = run_sync(&mut providers, cfg, &mut meta);
+                    let result = run_sync(&mut providers, cfg, &mut meta, &mut completed);
                     publish_sources(&shared, &meta);
                     apply_sync_result(&shared, &waker, result);
                 }
@@ -281,8 +347,18 @@ fn worker(shared: Arc<Mutex<Shared>>, waker: Arc<dyn Waker>, rx: Receiver<Comman
                     let mut guard = lock(&shared);
                     match outcome {
                         Ok(()) => {
-                            // Remove for good; the next regular sync confirms it.
-                            guard.agenda.tasks.retain(|t| t.id != task_id);
+                            // Remove for good; the next regular sync confirms
+                            // it. The task's time block goes with it — to the
+                            // user that was one item, however many APIs it
+                            // came out of.
+                            let blocks = guard.agenda.complete_task(&task_id);
+                            let today = guard
+                                .agenda
+                                .day
+                                .unwrap_or_else(|| Local::now().date_naive());
+                            for block in &blocks {
+                                completed.remember(today, &block.account_id, &block.title);
+                            }
                             guard.status = Status::Idle;
                             write_cache(&guard.agenda);
                         }
@@ -385,6 +461,7 @@ fn run_sync(
     providers: &mut [Box<dyn CalendarProvider>],
     cfg: Config,
     meta: &mut Option<Meta>,
+    completed: &mut CompletedBlocks,
 ) -> std::result::Result<Agenda, Error> {
     let started = Instant::now();
     let today = Local::now().date_naive();
@@ -421,7 +498,13 @@ fn run_sync(
             log::warn(&format!("Account '{}': {e}", account.display_name));
             continue;
         }
-        events.extend(account.events.iter().cloned());
+        for event in &account.events {
+            let mut event = event.clone();
+            // Stamp the origin, as the tasks below get it: a title only
+            // identifies an entry within one account.
+            event.account_id = account.account_id.clone();
+            events.push(event);
+        }
         directory.insert(
             account.account_id.clone(),
             provider::Directory {
@@ -464,6 +547,8 @@ fn run_sync(
     let (mut events, mut next_day): (Vec<Event>, Vec<Event>) = events
         .into_iter()
         .partition(|e| e.start.map(|s| s < midnight).unwrap_or(true));
+    completed.drop_completed(today, &mut events);
+    completed.drop_completed(today, &mut next_day);
     sort_events(&mut events);
     sort_events(&mut next_day);
 
@@ -471,6 +556,11 @@ fn run_sync(
     // drops everything still in the future for every provider alike.
     let mut tasks = filter_tasks_for_today(tasks, today, cfg.show_undated_tasks);
     sort_tasks(&mut tasks);
+
+    // After the filter, so an entry can only ever be tied to a task the user
+    // can actually see and tick off.
+    link_task_time_blocks(&mut events, &tasks);
+    link_task_time_blocks(&mut next_day, &tasks);
 
     log::info(&format!(
         "Sync ok: {} events today (+{} tomorrow), {} tasks, {}/{} accounts, {} ms",
@@ -654,6 +744,65 @@ fn stale_tmp_files(cache: &Path, my_pid: u32) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn event(account: &str, title: &str) -> Event {
+        Event {
+            title: title.into(),
+            start: None,
+            end: None,
+            all_day: true,
+            location: None,
+            html_link: None,
+            join_url: None,
+            color: 0,
+            calendar_name: "K".into(),
+            calendar_id: "k".into(),
+            account_id: account.into(),
+            task_id: None,
+        }
+    }
+
+    #[test]
+    fn a_completed_time_block_does_not_come_back_on_the_next_sync() {
+        let today = NaiveDate::from_ymd_opt(2026, 8, 8).unwrap();
+        let mut completed = CompletedBlocks::default();
+        completed.remember(today, "google", "Write the quarterly report");
+
+        // What the provider hands back a minute later, if it keeps the entry.
+        let mut fetched = vec![
+            event("google", "Write the quarterly report"),
+            event("google", "Dentist"),
+            // The same title, but the other account never had it completed.
+            event("work", "Write the quarterly report"),
+        ];
+        completed.drop_completed(today, &mut fetched);
+
+        let titles: Vec<(&str, &str)> = fetched
+            .iter()
+            .map(|e| (e.account_id.as_str(), e.title.as_str()))
+            .collect();
+        assert_eq!(
+            titles,
+            vec![
+                ("google", "Dentist"),
+                ("work", "Write the quarterly report")
+            ]
+        );
+    }
+
+    #[test]
+    fn the_suppression_ends_with_the_day() {
+        // Tomorrow the same title is an ordinary entry again — the block that
+        // was ticked off belonged to yesterday.
+        let today = NaiveDate::from_ymd_opt(2026, 8, 8).unwrap();
+        let mut completed = CompletedBlocks::default();
+        completed.remember(today, "google", "Water the plants");
+
+        let mut fetched = vec![event("google", "Water the plants")];
+        completed.drop_completed(today + ChronoDuration::days(1), &mut fetched);
+        assert_eq!(fetched.len(), 1);
+        assert!(completed.keys.is_empty());
+    }
 
     #[test]
     fn the_sweep_takes_stale_scratch_files_and_nothing_else() {

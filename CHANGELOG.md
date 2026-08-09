@@ -107,6 +107,20 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- Ticking a task off now clears its time block from *Schedule* as well. A task
+  given a start time in Google Calendar arrives twice — as a calendar entry
+  through one API and as a dated task through another — and neither answer says
+  the two are one item: the entry carries no task id, the task carries no event
+  id, and `eventType` has six values of which none is a task. So the tick
+  reached the row it was on and nothing else, and the block sat there for the
+  rest of the day contradicting it. The two halves are paired on the one thing
+  they share, the title, within a single account and only when exactly one
+  visible task claims it — two tasks of the same name pair with nothing, because
+  hiding the wrong row is worse than leaving both. A paired entry fades with the
+  task during the undo window, is dropped with it once the completion goes out,
+  and is kept off the next sync in case the provider still reports it. That last
+  part could not be confirmed against a live account; the log says whenever it
+  fires, and if that line never appears it can go.
 - The agenda cache is replaced by rename rather than truncated and rewritten in
   place, so nothing can read it half written. Two copies of the program can now
   overlap — the Unix single-instance check is still a stub, and a timer firing

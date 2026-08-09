@@ -440,6 +440,8 @@ mod tests {
                     color: 0,
                     calendar_name: self.id.into(),
                     calendar_id: format!("{}-cal", self.id),
+                    account_id: String::new(),
+                    task_id: None,
                 })
                 .collect())
         }

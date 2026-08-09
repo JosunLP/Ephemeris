@@ -29,6 +29,8 @@ pub fn agenda() -> Agenda {
         color,
         calendar_name: "Beispiel".into(),
         calendar_id: "demo".into(),
+        account_id: "demo".into(),
+        task_id: None,
     };
 
     // Tomorrow at a fixed time, not relative to now: otherwise the entries
@@ -50,6 +52,8 @@ pub fn agenda() -> Agenda {
             color,
             calendar_name: "Beispiel".into(),
             calendar_id: "demo".into(),
+            account_id: "demo".into(),
+            task_id: None,
         };
 
     let task = |title: &str, due_offset: i64, depth: u8| Task {
@@ -60,11 +64,11 @@ pub fn agenda() -> Agenda {
         notes: None,
         depth,
         tasklist_name: "Beispiel".into(),
-        account_id: String::new(),
+        account_id: "demo".into(),
         completing: false,
     };
 
-    Agenda {
+    let mut agenda = Agenda {
         day: Some(today),
         events: vec![
             Event {
@@ -78,6 +82,8 @@ pub fn agenda() -> Agenda {
                 color: 0x9B_8AFB,
                 calendar_name: "Firma".into(),
                 calendar_id: "demo-company".into(),
+                account_id: "demo".into(),
+                task_id: None,
             },
             // Already over, so drawn dimmed.
             event("Daily Standup", -260, -245, 0x4C_8DF6, None),
@@ -94,6 +100,9 @@ pub fn agenda() -> Agenda {
             event("1:1 mit Anna", 88, 118, 0xF6_BF26, None),
             // Overlaps the one-to-one, which shows the conflict detection.
             event("Deployment-Fenster Produktion", 100, 175, 0xE6_7C73, None),
+            // A task with a time block: the same item as the task of the same
+            // name below, so ticking that one off takes this row with it.
+            event("Rechnung 2041 freigeben", 45, 75, 0x33_B679, None),
         ],
         tomorrow: vec![
             next_day(
@@ -115,5 +124,31 @@ pub fn agenda() -> Agenda {
         ],
         fetched_at: Some(now - Duration::minutes(4)),
         last_error: None,
+    };
+
+    // The same pass the sync thread makes, so preview mode shows the pairing
+    // rather than a case that cannot occur.
+    let tasks = agenda.tasks.clone();
+    crate::model::link_task_time_blocks(&mut agenda.events, &tasks);
+    crate::model::link_task_time_blocks(&mut agenda.tomorrow, &tasks);
+    agenda
+}
+
+#[cfg(test)]
+mod tests {
+    /// The preview is where a task with a time block can actually be clicked,
+    /// which is the only way to see the fade and the two rows leaving together
+    /// without connecting an account. A rename of either half would quietly
+    /// take that case away again.
+    #[test]
+    fn the_preview_contains_a_task_with_a_time_block() {
+        let agenda = super::agenda();
+        let paired: Vec<&str> = agenda
+            .events
+            .iter()
+            .filter(|e| e.task_id.is_some())
+            .map(|e| e.title.as_str())
+            .collect();
+        assert_eq!(paired, vec!["Rechnung 2041 freigeben"]);
     }
 }

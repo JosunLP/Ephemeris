@@ -328,6 +328,8 @@ impl CalendarProvider for CalDavProvider {
                     color: calendar.color,
                     calendar_name: calendar.name.clone(),
                     calendar_id: calendar.id.clone(),
+                    account_id: String::new(),
+                    task_id: None,
                 });
             }
         }

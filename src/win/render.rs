@@ -954,7 +954,7 @@ impl Renderer {
         let m = self.metrics;
         let p = &self.pal;
         let loc = frame.loc;
-        let Some((idx, ev, running)) = pick_hero(&frame.agenda.events, frame.now) else {
+        let Some((idx, ev, running)) = pick_hero(frame.agenda, frame.now) else {
             return Ok(top);
         };
 
@@ -1210,10 +1210,22 @@ impl Renderer {
             }
 
             let row = rect(x0 - 5.0, y, x1 + 5.0, y + m.event_row_h);
-            let is_now = ev.is_now(now);
+            // The task this entry is the time block of has just been ticked
+            // off. The row is faded to exactly what the task row does during
+            // the undo window rather than vanishing at once, so taking the
+            // tick back puts everything as it was; once the completion goes
+            // out, both rows leave together.
+            let done = frame.agenda.is_completing(ev);
+            let is_now = ev.is_now(now) && !done;
             let past = ev.is_past(now) && !is_now;
             // Held back, but still comfortable to read.
-            let dim: f32 = if past { 0.55 } else { 1.0 };
+            let dim: f32 = if done {
+                0.42
+            } else if past {
+                0.55
+            } else {
+                1.0
+            };
 
             if frame.hover == Some(Hit::Event(*idx)) {
                 self.fill_round(row, 5.0, p.hover, p.hover_alpha * frame.anim.hover.value)?;
@@ -1260,7 +1272,10 @@ impl Renderer {
             // Right column: time remaining, or for past events the calendar
             // name (time remaining would be noise there).
             let rel_x = x1 - rel_w;
-            if !ev.all_day && !past {
+            if done {
+                // Nothing: "in 2 h" next to an item just ticked off reads as a
+                // contradiction.
+            } else if !ev.all_day && !past {
                 let rel = if is_now {
                     loc.cat.running.to_string()
                 } else {
@@ -1371,6 +1386,13 @@ impl Renderer {
             if frame.hover == Some(Hit::Tomorrow(*idx)) {
                 self.fill_round(row, 5.0, p.hover, p.hover_alpha * frame.anim.hover.value)?;
             }
+            // A block whose task was ticked off a moment ago fades here as it
+            // does in today's list; the preview must not still be promising it.
+            let dim: f32 = if frame.agenda.is_completing(ev) {
+                0.42
+            } else {
+                1.0
+            };
             // The label sits on the first row only; the second is indented
             // underneath it.
             let tx = x0 + label_w + 4.0;
@@ -1381,14 +1403,14 @@ impl Renderer {
                 Font::Meta,
                 rect(tx, y, tx + time_w, y + m.event_row_h),
                 p.text_faint,
-                1.0,
+                dim,
             )?;
             self.text(
                 &ev.title,
                 Font::Row,
                 rect(tx + time_w, y, x1, y + m.event_row_h),
                 p.text_dim,
-                1.0,
+                dim,
             )?;
             hits.push(HitRegion {
                 rect: row,
@@ -2174,14 +2196,25 @@ fn end_minutes(ev: &Event, start_min: f32) -> f32 {
 }
 
 /// The event running now, otherwise the next one still to come.
-fn pick_hero(events: &[Event], now: DateTime<Local>) -> Option<(usize, &Event, bool)> {
-    if let Some((i, e)) = events.iter().enumerate().find(|(_, e)| e.is_now(now)) {
+///
+/// A time block whose task has just been ticked off is skipped. The card is the
+/// loudest thing on the panel, and announcing something the user has just
+/// declared finished is the one place where the fade of the list row would not
+/// be enough.
+fn pick_hero(agenda: &Agenda, now: DateTime<Local>) -> Option<(usize, &Event, bool)> {
+    let events = &agenda.events;
+    let live = |e: &&Event| !agenda.is_completing(e);
+    if let Some((i, e)) = events
+        .iter()
+        .enumerate()
+        .find(|(_, e)| e.is_now(now) && live(e))
+    {
         return Some((i, e, true));
     }
     events
         .iter()
         .enumerate()
-        .filter(|(_, e)| !e.all_day && e.start.map(|s| s > now).unwrap_or(false))
+        .filter(|(_, e)| !e.all_day && e.start.map(|s| s > now).unwrap_or(false) && live(e))
         .min_by_key(|(_, e)| e.start.map(|s| s.timestamp()).unwrap_or(i64::MAX))
         .map(|(i, e)| (i, e, false))
 }

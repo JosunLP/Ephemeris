@@ -36,6 +36,17 @@ pub struct Event {
     /// existed still loads.
     #[serde(default)]
     pub calendar_id: String,
+    /// Which account this came from, the same stamp [`Task::account_id`]
+    /// carries. A title identifies an entry within one account and nowhere
+    /// else, so [`link_task_time_blocks`] needs it.
+    #[serde(default)]
+    pub account_id: String,
+    /// The task this entry is the time block of, if one could be identified.
+    ///
+    /// Derived locally; see [`link_task_time_blocks`] for why no provider
+    /// hands it over.
+    #[serde(default)]
+    pub task_id: Option<String>,
 }
 
 impl Event {
@@ -114,6 +125,112 @@ pub struct Agenda {
     /// Not cached — at start-up the state is simply "unknown".
     #[serde(skip)]
     pub last_error: Option<String>,
+}
+
+impl Agenda {
+    /// Is this calendar entry the time block of a task that has just been
+    /// ticked off?
+    ///
+    /// The tick is acknowledged on the task row at once and only sent when the
+    /// undo window closes, so for those few seconds the entry under *Schedule*
+    /// has to say the same thing the entry under *Tasks* does. Afterwards
+    /// [`Agenda::complete_task`] takes both rows away together.
+    pub fn is_completing(&self, event: &Event) -> bool {
+        let Some(id) = event.task_id.as_deref() else {
+            return false;
+        };
+        self.tasks.iter().any(|t| t.completing && t.id == id)
+    }
+
+    /// Takes a completed task off the display, together with the calendar
+    /// entries that were its time block.
+    ///
+    /// Returns those entries, which is what the sync thread needs to keep the
+    /// provider from putting them straight back on the next run. They carry the
+    /// account they came from; the completion command's own account id is empty
+    /// in a single-account setup, and matching an entry against that would
+    /// never fire.
+    pub fn complete_task(&mut self, task_id: &str) -> Vec<Event> {
+        self.tasks.retain(|t| t.id != task_id);
+        let is_block = |e: &Event| e.task_id.as_deref() == Some(task_id);
+        let removed: Vec<Event> = self
+            .events
+            .iter()
+            .chain(self.tomorrow.iter())
+            .filter(|e| is_block(e))
+            .cloned()
+            .collect();
+        self.events.retain(|e| !is_block(e));
+        self.tomorrow.retain(|e| !is_block(e));
+        removed
+    }
+}
+
+/// Marks the calendar entries that are a task's time block.
+///
+/// A task with a time block leads a double life. Creating a task from the
+/// Google Calendar interface offers two dates: a *start date and duration*,
+/// which is a genuine block on the calendar, and a *deadline*, which is the due
+/// date the task list works from. Both are fetched, through two different APIs,
+/// and nothing in either answer says they belong together — the calendar side
+/// has no task id, and the task side has no event id. So the widget drew two
+/// unrelated rows, and ticking one of them left the other exactly where it was.
+///
+/// Nothing can be done about the missing identifier: as of the 2026 revision of
+/// the Calendar API, `eventType` has six values and none of them is a task, so
+/// there is no field to read. What is left is the title, which both halves
+/// carry unchanged because they *are* one item to the service that made them.
+/// Matching on it is a guess, so the guess is made as narrow as it can be:
+///
+/// * within one account only — two accounts sharing a title mean nothing;
+/// * on the whole normalised title, never a prefix;
+/// * and never when two visible tasks carry the same title, because then there
+///   is no telling which of them the block belongs to, and hiding a row for the
+///   wrong reason is worse than leaving it.
+///
+/// Any link a previous pass left behind is dropped first, so a task that was
+/// completed or renamed does not keep an entry tied to it.
+pub fn link_task_time_blocks(events: &mut [Event], tasks: &[Task]) {
+    use std::collections::HashMap;
+
+    // `None` marks a title that more than one task claims.
+    let mut by_title: HashMap<(&str, String), Option<&str>> = HashMap::new();
+    for task in tasks {
+        let key = title_key(&task.title);
+        if key.is_empty() {
+            continue;
+        }
+        by_title
+            .entry((task.account_id.as_str(), key))
+            .and_modify(|slot| *slot = None)
+            .or_insert(Some(task.id.as_str()));
+    }
+
+    for event in events {
+        let key = title_key(&event.title);
+        event.task_id = match by_title.get(&(event.account_id.as_str(), key)) {
+            Some(Some(id)) => Some((*id).to_string()),
+            _ => None,
+        };
+    }
+}
+
+/// The normalised form two titles are compared in.
+///
+/// Case and runs of whitespace differ between the calendar and the task copy of
+/// the same item often enough — a wrapped title, a trailing space someone typed
+/// — that comparing the raw strings would miss pairs that are obviously the
+/// same. Nothing beyond that is folded away: punctuation and accents carry
+/// meaning in a title.
+pub fn title_key(title: &str) -> String {
+    let mut key = String::with_capacity(title.len());
+    for word in title.split_whitespace() {
+        if !key.is_empty() {
+            key.push(' ');
+        }
+        key.extend(word.chars().flat_map(char::to_lowercase));
+    }
+    key
 }
 
 /// Google Tasks and Microsoft To Do both return `due` as an RFC 3339
@@ -341,6 +458,8 @@ mod tests {
             color: 0,
             calendar_name: "K".into(),
             calendar_id: "k".into(),
+            account_id: String::new(),
+            task_id: None,
         }
     }
 
@@ -390,5 +509,134 @@ mod tests {
         sort_tasks(&mut t);
         let titles: Vec<_> = t.iter().map(|x| x.title.as_str()).collect();
         assert_eq!(titles, vec!["old", "a today", "b today"]);
+    }
+
+    /// The reported case: one item, two rows, and a tick that only reached one
+    /// of them.
+    fn on_account(id: &str, mut event: Event) -> Event {
+        event.account_id = id.into();
+        event
+    }
+
+    fn task_on(account: &str, title: &str) -> Task {
+        let mut t = task(title, Some("2026-08-04"));
+        t.account_id = account.into();
+        t
+    }
+
+    #[test]
+    fn a_time_block_is_tied_to_the_task_of_the_same_name() {
+        let mut events = vec![
+            on_account(
+                "google",
+                timed("Write the quarterly report", (9, 0), (11, 0)),
+            ),
+            on_account("google", timed("Dentist", (14, 0), (15, 0))),
+        ];
+        let tasks = vec![
+            task_on("google", "Write the quarterly report"),
+            task_on("google", "Order printer paper"),
+        ];
+        link_task_time_blocks(&mut events, &tasks);
+
+        assert_eq!(
+            events[0].task_id.as_deref(),
+            Some("Write the quarterly report"),
+            "the block and its task were not paired up"
+        );
+        assert_eq!(events[1].task_id, None, "the dentist is not a task");
+    }
+
+    #[test]
+    fn case_and_spacing_do_not_break_the_pairing() {
+        let mut events = vec![on_account(
+            "google",
+            timed("  Write   the Quarterly Report ", (9, 0), (11, 0)),
+        )];
+        let tasks = vec![task_on("google", "Write the quarterly report")];
+        link_task_time_blocks(&mut events, &tasks);
+        assert!(events[0].task_id.is_some());
+    }
+
+    #[test]
+    fn a_title_shared_by_two_tasks_pairs_with_neither() {
+        // Two "Follow up" tasks, one block. There is no telling which of them
+        // it belongs to, and taking the row away for the wrong one is worse
+        // than leaving it.
+        let mut events = vec![on_account("google", timed("Follow up", (9, 0), (10, 0)))];
+        let mut second = task_on("google", "Follow up");
+        second.id = "other-id".into();
+        let tasks = vec![task_on("google", "Follow up"), second];
+        link_task_time_blocks(&mut events, &tasks);
+        assert_eq!(events[0].task_id, None);
+    }
+
+    #[test]
+    fn a_title_shared_across_accounts_is_not_a_pair() {
+        // The work calendar's "Standup" has nothing to do with the private
+        // account's task of the same name.
+        let mut events = vec![on_account("work", timed("Standup", (9, 0), (9, 15)))];
+        let tasks = vec![task_on("private", "Standup")];
+        link_task_time_blocks(&mut events, &tasks);
+        assert_eq!(events[0].task_id, None);
+    }
+
+    #[test]
+    fn a_stale_link_is_dropped_rather_than_kept() {
+        let mut events = vec![on_account(
+            "google",
+            timed("Renamed since", (9, 0), (10, 0)),
+        )];
+        events[0].task_id = Some("gone".into());
+        link_task_time_blocks(&mut events, &[]);
+        assert_eq!(events[0].task_id, None);
+    }
+
+    #[test]
+    fn ticking_the_task_off_marks_the_time_block_too() {
+        let mut agenda = Agenda {
+            events: vec![on_account("google", timed("Tax return", (9, 0), (11, 0)))],
+            tomorrow: vec![on_account("google", timed("Tax return", (9, 0), (11, 0)))],
+            tasks: vec![task_on("google", "Tax return")],
+            ..Default::default()
+        };
+        link_task_time_blocks(&mut agenda.events, &agenda.tasks.clone());
+        link_task_time_blocks(&mut agenda.tomorrow, &agenda.tasks.clone());
+
+        assert!(
+            !agenda.is_completing(&agenda.events[0]),
+            "nothing has been ticked yet"
+        );
+
+        // The optimistic hide, before the call goes out.
+        agenda.tasks[0].completing = true;
+        assert!(agenda.is_completing(&agenda.events[0]));
+
+        // And once the server confirms, both rows go.
+        let removed = agenda.complete_task("Tax return");
+        let taken: Vec<(&str, &str)> = removed
+            .iter()
+            .map(|e| (e.account_id.as_str(), e.title.as_str()))
+            .collect();
+        assert_eq!(
+            taken,
+            vec![("google", "Tax return"), ("google", "Tax return")],
+            "the caller needs the account, not only the title"
+        );
+        assert!(agenda.tasks.is_empty());
+        assert!(agenda.events.is_empty(), "the schedule row stayed behind");
+        assert!(agenda.tomorrow.is_empty());
+    }
+
+    #[test]
+    fn completing_a_task_without_a_block_leaves_the_schedule_alone() {
+        let mut agenda = Agenda {
+            events: vec![on_account("google", timed("Dentist", (14, 0), (15, 0)))],
+            tasks: vec![task_on("google", "Order printer paper")],
+            ..Default::default()
+        };
+        link_task_time_blocks(&mut agenda.events, &agenda.tasks.clone());
+        assert!(agenda.complete_task("Order printer paper").is_empty());
+        assert_eq!(agenda.events.len(), 1);
     }
 }
