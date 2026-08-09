@@ -944,104 +944,25 @@ fn start_update(st: &mut State) {
 }
 
 /// Puts the day's plan on the clipboard as text.
+///
+/// The text itself is built in the core, so the three front ends copy the
+/// same agenda rather than three near-identical ones.
 fn copy_agenda(st: &mut State) {
-    let guard = sync::lock(&st.shared);
-    let loc = &st.loc;
-    let today = guard
-        .agenda
-        .day
-        .unwrap_or_else(|| Local::now().date_naive());
-    let mut out = format!(
-        "{} — {}
-",
-        loc.weekday(today),
-        loc.date_line(today)
-    );
-
-    out.push_str(&format!(
-        "
-{}
-",
-        loc.cat.section_events
-    ));
-    if guard.agenda.events.is_empty() {
-        out.push_str(&format!(
-            "  {}
-",
-            loc.cat.no_events
-        ));
-    }
-    for ev in &guard.agenda.events {
-        let when = if ev.all_day {
-            loc.cat.all_day.to_string()
-        } else {
-            match (ev.start, ev.end) {
-                (Some(s), Some(e)) => format!("{}-{}", loc.time(s), loc.time(e)),
-                (Some(s), None) => loc.time(s),
-                _ => String::new(),
-            }
-        };
-        match &ev.location {
-            Some(place) => out.push_str(&format!(
-                "  {when}  {}  ({place})
-",
-                ev.title
-            )),
-            None => out.push_str(&format!(
-                "  {when}  {}
-",
-                ev.title
-            )),
-        }
-    }
-
-    out.push_str(&format!(
-        "
-{}
-",
-        loc.cat.section_tasks
-    ));
-    if guard.agenda.tasks.is_empty() {
-        out.push_str(&format!(
-            "  {}
-",
-            loc.cat.no_tasks
-        ));
-    }
-    for task in &guard.agenda.tasks {
-        let due = match task.due {
-            Some(d) if d == today => loc.cat.today.to_string(),
-            Some(d) => loc.day_month(d),
-            None => "-".into(),
-        };
-        // Subtasks indented, as they are on screen.
-        let indent = "  ".repeat(task.depth as usize + 1);
-        out.push_str(&format!(
-            "{indent}[ ] {due}  {}
-",
-            task.title
-        ));
-    }
-    drop(guard);
+    let text = {
+        let guard = sync::lock(&st.shared);
+        tpmplaner_core::model::agenda_as_text(&guard.agenda, &st.loc)
+    };
 
     // The widget's own window owns the clipboard: with a null handle
     // `EmptyClipboard` leaves no owner and `SetClipboardData` is documented to
     // fail. `set_clipboard_text` has already logged which step failed and what
     // Windows called it.
-    if platform::set_clipboard_text(st.hwnd, &out) {
+    if platform::set_clipboard_text(st.hwnd, &text) {
         log::info("Agenda copied to the clipboard");
     }
 }
 
-/// Combinations tried when the configured one is already taken.
-///
-/// Measured on a normal Windows 11 desktop: `Ctrl+Alt+K` and `Win+Alt+K` are
-/// both refused with `ERROR_HOTKEY_ALREADY_REGISTERED`. Silently doing
-/// nothing would leave a documented feature dead, so the widget falls back and
-/// records which combination it ended up with.
-const PEEK_FALLBACKS: &[&str] = &["Ctrl+Alt+Shift+K", "Ctrl+Shift+F12", "Ctrl+Alt+Y"];
 
-/// Registers the global "peek" hotkey.
 fn register_peek_hotkey(hwnd: HWND, cfg: &Config) {
     unsafe {
         let _ = UnregisterHotKey(Some(hwnd), HOTKEY_PEEK);
@@ -1050,21 +971,14 @@ fn register_peek_hotkey(hwnd: HWND, cfg: &Config) {
         return;
     }
 
-    let mut candidates: Vec<&str> = vec![cfg.peek_hotkey.as_str()];
-    candidates.extend(
-        PEEK_FALLBACKS
-            .iter()
-            .copied()
-            .filter(|f| !f.eq_ignore_ascii_case(cfg.peek_hotkey.trim())),
-    );
-
-    for spec in &candidates {
-        let Some((modifiers, key)) = platform::parse_hotkey(spec) else {
+    for spec in tpmplaner_core::hotkey::candidates(&cfg.peek_hotkey) {
+        let Some(combo) = tpmplaner_core::hotkey::parse(spec) else {
             log::warn(&format!("peek_hotkey '{spec}' is not a usable combination"));
             continue;
         };
+        let (modifiers, key) = platform::hotkey_codes(combo);
         if try_register(hwnd, modifiers, key) {
-            if *spec == cfg.peek_hotkey {
+            if spec == cfg.peek_hotkey.trim() {
                 log::info(&format!("Peek hotkey: {spec}"));
             } else {
                 log::warn(&format!(

@@ -22,19 +22,18 @@
 //! stops completely.
 
 use crate::win::platform;
-use tpmplaner_core::anim::Animations;
-use tpmplaner_core::i18n::Locale;
 use tpmplaner_core::layout::{self, EventList, Panel, Rect, TaskList};
 use tpmplaner_core::log;
-use tpmplaner_core::model::{Agenda, Event, Task};
+use tpmplaner_core::model::{Event, Task};
 use tpmplaner_core::sync::Status;
 use tpmplaner_core::theme::{self, Appearance, Metrics, Palette, mix};
 
-/// What a click means, and the rectangle it landed in. Both live in the core
-/// now — the window translates a click into one of these without drawing
-/// anything, and every front end needs the identical set. Re-exported so the
-/// window still reaches them through the renderer it already imports.
-pub use tpmplaner_core::layout::{Hit, HitRegion};
+/// What a click means, the rectangle it landed in, and what one frame is drawn
+/// from. All of it lives in the core now — the window translates a click into a
+/// [`Hit`] without drawing anything, and every front end needs the identical
+/// set. Re-exported so the window still reaches them through the renderer it
+/// already imports.
+pub use tpmplaner_core::layout::{Frame, FrameResult, Hit, HitRegion, UndoView};
 
 /// Converts the portable rectangle into the Direct2D one.
 ///
@@ -65,7 +64,6 @@ fn rgba(hex: u32, a: f32) -> D2D1_COLOR_F {
         a: c.a,
     }
 }
-use chrono::{DateTime, Local};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::mem::ManuallyDrop;
@@ -110,38 +108,6 @@ use windows::Win32::Graphics::Dxgi::{
 };
 use windows::core::{HRESULT, Interface, PCWSTR, Result, w};
 use windows_numerics::{Matrix3x2, Vector2};
-
-/// A task that has been ticked off but not yet sent, and can still be undone.
-#[derive(Debug, Clone, Copy)]
-pub struct UndoView<'a> {
-    pub task_id: &'a str,
-    /// 1.0 right after the click, 0.0 when it is sent.
-    pub remaining: f32,
-}
-
-/// The drawing state the window passes in.
-pub struct Frame<'a> {
-    pub agenda: &'a Agenda,
-    pub loc: &'a Locale,
-    pub status: &'a Status,
-    pub anim: &'a Animations,
-    pub now: DateTime<Local>,
-    pub hover: Option<Hit>,
-    pub sync_minutes: u32,
-    pub opacity: f32,
-    pub show_past_events: bool,
-    pub undo: Option<UndoView<'a>>,
-    /// A syntax error in `config.json`; outranks the sync status line.
-    pub config_error: Option<&'a str>,
-    /// Version of a newer release, if the daily check found one.
-    pub update: Option<&'a str>,
-}
-
-pub struct FrameResult {
-    /// Total height of the content — the basis for limiting the scroll.
-    pub content_height: f32,
-    pub viewport_height: f32,
-}
 
 /// Type roles; the index addresses `Renderer::formats`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

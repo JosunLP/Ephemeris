@@ -20,6 +20,7 @@ pub mod config;
 pub mod demo;
 pub mod google;
 pub mod host;
+pub mod hotkey;
 pub mod i18n;
 pub mod layout;
 pub mod log;
