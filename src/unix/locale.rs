@@ -871,13 +871,26 @@ mod platform {
             // has no use for. What is taken from it is the hour convention;
             // minutes and the meridiem marker are then placed the way every
             // short time format places them.
-            let pattern = if is_twelve_hour(&t_fmt) {
-                "%I:%M %p"
-            } else {
-                "%H:%M"
-            };
+            let twelve = is_twelve_hour(&t_fmt);
+            let pattern = if twelve { "%I:%M %p" } else { "%H:%M" };
             let tm = tm_for(dt.date_naive(), dt.hour(), dt.minute());
-            strftime(pattern, &tm)
+            let rendered = strftime(pattern, &tm)?;
+
+            if !twelve {
+                // `07:13` is right on a twenty-four-hour clock, where the
+                // leading zero is what keeps the column the same width all day.
+                return Some(rendered);
+            }
+            // On a twelve-hour clock it is not: no clock anywhere writes
+            // `07:13 AM`. `%I` pads to two digits and `%l`, which pads with a
+            // space instead, is not in POSIX — so the zero comes off here.
+            // Only a leading one, so `10:07 AM` keeps its own.
+            Some(
+                rendered
+                    .strip_prefix('0')
+                    .map(str::to_owned)
+                    .unwrap_or(rendered),
+            )
         })
     }
 
@@ -998,6 +1011,31 @@ mod backend {
                 "American English counts to twelve: {american}"
             );
             assert!(american.contains("2:30"), "{american}");
+        }
+        // A morning hour, to pin the padding: no clock writes `07:13 AM`, and
+        // `%I` pads to two digits where `%l` — which does not exist everywhere
+        // — would not.
+        let morning = Local.with_ymd_and_hms(2026, 8, 4, 7, 13, 0).unwrap();
+        if let Some(american) = answer(
+            "format_time",
+            "en-US",
+            platform::format_time("en-US", morning),
+        ) {
+            assert!(
+                american.starts_with("7:13"),
+                "a twelve-hour clock drops the leading zero: {american}"
+            );
+        }
+        if let Some(german) = answer(
+            "format_time",
+            "de-DE",
+            platform::format_time("de-DE", morning),
+        ) {
+            assert_eq!(
+                german.trim(),
+                "07:13",
+                "a twenty-four-hour clock keeps it, so the column stays put"
+            );
         }
         // The pair is the point: the same instant, two conventions, neither
         // guessed from the language — `en-GB` would agree with the German one.
