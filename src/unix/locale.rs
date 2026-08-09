@@ -48,8 +48,23 @@ use tpmplaner_core::host::{LocaleBackend, PortableLocale};
 pub struct UnixLocale;
 
 impl LocaleBackend for UnixLocale {
+    /// The environment first, then the platform.
+    ///
+    /// Order matters, and getting it wrong is not a small thing: asking Core
+    /// Foundation first makes `LC_ALL=fr_FR.UTF-8 tpmplaner` print English on a
+    /// machine set to English, because `CFLocaleCopyCurrent` reports what
+    /// System Settings says and knows nothing about the environment. Somebody
+    /// who sets the variable has said which language they want, explicitly, for
+    /// this run — that outranks a system-wide preference by definition.
+    ///
+    /// With nothing set — which is the normal case for anything started from
+    /// the Dock or a login item — Core Foundation is the better answer on
+    /// macOS and there is no answer at all on Linux, where the environment is
+    /// the mechanism.
     fn user_default_tag(&self) -> String {
-        platform::user_default_tag().unwrap_or_else(|| PortableLocale.user_default_tag())
+        environment_tag()
+            .or_else(platform::user_default_tag)
+            .unwrap_or_else(|| PortableLocale.user_default_tag())
     }
 
     /// Delegated on purpose. Which languages are written right to left is a
@@ -83,6 +98,40 @@ impl LocaleBackend for UnixLocale {
     fn format_day_month(&self, tag: &str, date: NaiveDate) -> Option<String> {
         platform::format_day_month(tag, date).or_else(|| PortableLocale.format_day_month(tag, date))
     }
+}
+
+/// The language the POSIX environment asks for, if it asks for one.
+///
+/// `LC_ALL`, then `LC_TIME`, then `LANG` — the order the C library resolves
+/// them in, so the widget agrees with everything else on the machine about
+/// which one wins. `C` and `POSIX` name no language and are skipped rather
+/// than treated as one.
+///
+/// [`PortableLocale::user_default_tag`] reads the same three and is not reused,
+/// because it answers `en-US` when they say nothing: useful as a last resort
+/// and useless here, where "the environment said nothing" has to be
+/// distinguishable so the platform can be asked instead.
+fn environment_tag() -> Option<String> {
+    ["LC_ALL", "LC_TIME", "LANG"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .find_map(|value| tag_from_posix_name(&value.to_string_lossy()))
+}
+
+/// A POSIX locale name as a BCP-47 tag, or `None` if it names no language.
+///
+/// `de_DE.UTF-8@euro` is `de-DE`: the codeset and the modifier are the C
+/// library's business and no part of the language. `C` and `POSIX` are the
+/// absence of a locale rather than a choice of one, and an empty variable is a
+/// variable that was never really set.
+fn tag_from_posix_name(raw: &str) -> Option<String> {
+    let tag = raw
+        .split(['.', '@'])
+        .next()
+        .unwrap_or(raw)
+        .trim()
+        .replace('_', "-");
+    (!tag.is_empty() && tag != "C" && tag != "POSIX").then_some(tag)
 }
 
 /// Midday on a date, as Unix seconds.
@@ -158,8 +207,14 @@ mod patterns {
     /// `%I` and `%l` are the twelve-hour hour, `%H` and `%k` the twenty-four-hour
     /// one. Guessing from the language is exactly the mistake `i18n.rs` warns
     /// about — `en-GB` is a twenty-four-hour locale and `en-US` is not.
+    ///
+    /// `%r` counts too, and missing it is what this originally got wrong: glibc
+    /// does not spell `en_US`'s time format out as `%I:%M:%S %p` but writes the
+    /// whole thing as `%r`, which *is* the twelve-hour format by definition.
+    /// Scanning for the hour field alone found nothing there and called the
+    /// most twelve-hour locale in the world a twenty-four-hour one.
     pub(super) fn is_twelve_hour(t_fmt: &str) -> bool {
-        specifiers(t_fmt).any(|c| c == 'I' || c == 'l')
+        specifiers(t_fmt).any(|c| c == 'I' || c == 'l' || c == 'r')
     }
 
     /// The conversion specifiers in a `strftime` pattern, in order.
@@ -446,8 +501,15 @@ mod patterns {
             // why it may not be guessed.
             assert!(is_twelve_hour("%I:%M:%S %p"));
             assert!(is_twelve_hour("%l:%M:%S %P"));
+            // What glibc actually reports for `en_US`: the whole twelve-hour
+            // format under one specifier, with no hour field to find. Reading
+            // only `%I` and `%l` here called `en_US` a twenty-four-hour locale.
+            assert!(is_twelve_hour("%r"));
             assert!(!is_twelve_hour("%H:%M:%S"));
             assert!(!is_twelve_hour("%k:%M"));
+            // `%T` and `%R` are the twenty-four-hour equivalents of `%r`.
+            assert!(!is_twelve_hour("%T"));
+            assert!(!is_twelve_hour("%R"));
             // A literal per cent is not a conversion.
             assert!(!is_twelve_hour("%H%%I"));
         }
@@ -878,6 +940,39 @@ mod backend {
             );
         }
         got
+    }
+
+    /// The environment outranks the system preference, and `C` is not a
+    /// language.
+    ///
+    /// This is what a smoke test caught on macOS: asking Core Foundation first
+    /// made `LC_ALL=fr_FR.UTF-8 tpmplaner` print an English agenda, because
+    /// `CFLocaleCopyCurrent` reports System Settings and never looks at the
+    /// environment. Every variable is read here rather than set — the
+    /// environment is process-wide and tests share it — so this checks the
+    /// conversion and the precedence the lookup applies to whatever it finds.
+    #[test]
+    fn the_environment_is_read_before_the_system_preference() {
+        assert_eq!(tag_from_posix_name("fr_FR.UTF-8").as_deref(), Some("fr-FR"));
+        assert_eq!(
+            tag_from_posix_name("de_DE.UTF-8@euro").as_deref(),
+            Some("de-DE")
+        );
+        assert_eq!(tag_from_posix_name("pt_BR").as_deref(), Some("pt-BR"));
+
+        // The whole reason this exists rather than a reuse of the portable
+        // lookup, which answers `en-US` here: saying "nothing" is what lets the
+        // platform be asked next instead of being overruled by a default.
+        assert_eq!(tag_from_posix_name("C"), None);
+        assert_eq!(tag_from_posix_name("POSIX"), None);
+        assert_eq!(tag_from_posix_name(""), None);
+        assert_eq!(tag_from_posix_name("  "), None);
+
+        // And whatever this machine happens to say, the result is a tag rather
+        // than a raw POSIX name.
+        if let Some(tag) = environment_tag() {
+            assert!(!tag.contains('_') && !tag.contains('.'), "{tag}");
+        }
     }
 
     #[test]
