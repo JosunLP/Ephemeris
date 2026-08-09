@@ -2,12 +2,13 @@
 // Copyright (C) 2026 TPMPlaner contributors
 //! [`Host`] for macOS and Linux.
 //!
-//! Three of the five methods are genuinely implemented here. The other two —
-//! `protect` and `unprotect` — are honest placeholders, and the comment on
-//! them says so rather than dressing it up: the Keychain and the Secret
-//! Service both need work that has not been done, and pretending to encrypt is
-//! worse than not encrypting.
+//! All five methods are implemented: the data directory follows each system's
+//! convention and is created readable by its owner alone, a browser opens
+//! through `open` or `xdg-open`, random bytes come from `/dev/urandom`, and
+//! credentials go to the platform's keyring — see [`crate::unix::secure`],
+//! which also explains what happens on a machine that has none.
 
+use crate::unix::secure;
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -86,21 +87,22 @@ impl Host for UnixHost {
         }
     }
 
-    /// **Not encrypted yet.** The bytes are returned unchanged, which means a
-    /// refresh token is stored in a file readable by the account that owns it.
+    /// The platform's keyring: the Keychain on macOS, the Secret Service on
+    /// Linux.
     ///
-    /// The real implementations are the Keychain (`SecItemAdd` /
-    /// `SecItemCopyMatching`) on macOS and the Secret Service over D-Bus on
-    /// Linux, with a documented fallback for headless setups that have no
-    /// keyring daemon. Until then [`prepare_data_dir`] at least keeps the
-    /// directory owner-only, and this says plainly what it does rather than
-    /// looking like protection that is not there.
+    /// Unlike DPAPI these store rather than encrypt, so what goes in the file
+    /// is a reference and the secret itself never lands there. Where there is
+    /// no keyring — a container, a headless session — the bytes go into the
+    /// file as they are and a warning says so, because a widget that cannot
+    /// sign in at all would be a poor trade. See [`crate::unix::secure`].
+    ///
+    /// [`prepare_data_dir`] keeps the directory owner-only either way.
     fn protect(&self, plain: &[u8], tag: &[u8]) -> Option<Vec<u8>> {
-        PortableHost.protect(plain, tag)
+        secure::protect(plain, tag)
     }
 
     fn unprotect(&self, cipher: &[u8], tag: &[u8]) -> Option<Vec<u8>> {
-        PortableHost.unprotect(cipher, tag)
+        secure::unprotect(cipher, tag)
     }
 
     /// Cryptographically secure random bytes from `/dev/urandom`.

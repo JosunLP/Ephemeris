@@ -738,6 +738,7 @@ version = "1.0.2"
 dependencies = [
  "base64 0.23.1",
  "chrono",
+ "libc",
  "quick-xml",
  "serde",
  "serde_json",

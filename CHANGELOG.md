@@ -16,9 +16,39 @@ All notable changes to this project are documented here. The format follows
 - A `Host` for macOS and Linux. The data directory follows each platform's
   convention and is created readable by its owner alone, a browser is opened
   through `open` or `xdg-open`, and random bytes come from `/dev/urandom`.
-  Credential storage is not implemented and says so plainly: the Keychain and
-  the Secret Service are still to be written, and pretending to encrypt is
-  worse than not encrypting.
+- Credentials go to the platform's keyring on macOS and Linux: the Keychain
+  through `SecItemAdd`, the Secret Service through `secret-tool`. Neither
+  encrypts a blob the way DPAPI does — they store a secret under a name — so
+  the token goes into the keyring and what lands in `token.bin` is a reference
+  to it. That is a better shape than the Windows one rather than a compromise:
+  the token never reaches the file at all. Where there is no keyring, on a
+  headless machine or in a container, the bytes go into the file as they were
+  before and a warning says so once; pretending to encrypt would be worse than
+  not encrypting, and so would refusing to start. A keyring that is there and
+  says no is a different answer and gets a different one back: a locked
+  keychain, a dismissed passphrase prompt, a daemon a login item started faster
+  than are all true now and false in a minute, and the plain copy the fallback
+  writes would not be. Nothing is written at all there, which costs one
+  sign-in. A file written either way reads back either way.
+- Dates and times on macOS and Linux come from the platform's own locale
+  database. They used to read `4 August 2026` on a twenty-four-hour clock in
+  every locale, which is right for nobody in particular and exactly the trap
+  the design note in `i18n.rs` warns about. macOS asks Core Foundation, whose
+  `CFDateFormatterCreateDateFormatFromTemplate` is `dateFormatFromTemplate:`
+  under its C name; Linux asks the C library through `newlocale`/`uselocale`,
+  so the locale belongs to the formatting thread rather than to the whole
+  process. Whether a locale counts in twelve or twenty-four hours is read from
+  its own pattern rather than guessed from the language — `en-GB` and `en-US`
+  disagree about it. The long date on Linux is the honest gap: POSIX has no
+  long-date pattern, so the short one is widened, keeping the locale's field
+  order and separators.
+- `tpmplaner_core::layout`: the arithmetic behind the drawing, moved out of the
+  Windows renderer before a second one is written. Where a row starts, how wide
+  the time column has to be, which rows are visible, what fades and by how
+  much, where the now line goes, which rectangle a click landed in — the same
+  answers on Direct2D, Core Graphics and Cairo, and written once so they cannot
+  drift apart. Measuring text stays with the front end, since only it knows how
+  wide a word is in its font.
 - `Host::random_bytes` returns `Option`. It is the one method whose portable
   fallback was actively unsafe — it returned zeros, and a PKCE verifier of
   zeros is no verifier at all. There is no shorter buffer that fails closed
@@ -230,6 +260,17 @@ All notable changes to this project are documented here. The format follows
   level it creates, so on a fresh account `~/.config` — or a Mac somehow
   missing `~/Library/Application Support` — would have been made owner-only
   too, and those belong to the platform rather than to us.
+- A click in a right-to-left layout lands on what was drawn under it. The
+  rectangles a click is tested against are unmirrored, like all the layout
+  arithmetic, while the drawing is folded across the panel's axis at the
+  drawing primitives — and the two were never brought into the same
+  coordinates. Rows span the full width and hid it; the two regions that do not
+  showed it plainly. In Arabic or Hebrew the refresh button was drawn in the
+  top left and did nothing, while clicking the empty top right corner
+  refreshed, and a task's tick circle opened the task in the browser while the
+  far end of its row ticked it off. The fold now happens where the click enters
+  the hit test, in the core, so the second front end inherits the rule rather
+  than the bug.
 
 ### Internal
 

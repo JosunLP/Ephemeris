@@ -70,9 +70,32 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+
+      # The locale back end asks the C library for the user's own date and time
+      # patterns, and a stock Ubuntu image has generated almost none of them:
+      # `newlocale` fails, the back end reports it has no answer, and the tests
+      # that check what the platform returns would skip rather than run. So the
+      # locales they use are generated first, and the environment variable in
+      # the test step turns "no such locale" from a skip back into a failure.
+      #
+      # macOS needs nothing here. Core Foundation carries the CLDR data itself
+      # and does not care what the system has installed.
+      - name: Generate the locales the date tests need
+        if: runner.os == 'Linux'
+        run: |
+          sudo locale-gen de_DE.UTF-8 fr_FR.UTF-8 en_US.UTF-8
+          locale -a | sort
+
       - name: Clippy
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+      # `TPMPLANER_REQUIRE_SYSTEM_LOCALE` makes the date and time cases in
+      # `src/unix/locale.rs` insist on a real answer from the platform. Without
+      # it they pass on a machine that has no `de_DE.UTF-8`, which is right for
+      # a laptop and useless as a signal here.
       - name: Tests
+        env:
+          TPMPLANER_REQUIRE_SYSTEM_LOCALE: "1"
         run: cargo test --locked --workspace --all-targets
 
       # Demo mode needs no account and reaches no network, which is what makes
@@ -99,17 +122,20 @@ jobs:
           grep -q "SCHEDULE" agenda.txt
           grep -q "TASKS" agenda.txt
 
-      # Which catalogue the locale selects, and nothing more. The date format
-      # does *not* come from the platform on this front end: `install_host`
-      # deliberately leaves `PortableLocale` in force, and its four formatters
-      # ignore the tag they are handed — English names and a hard 24-hour clock
-      # in every locale. So this step proves one mechanism, not two.
+      # Two mechanisms now, where this used to prove one. Which catalogue the
+      # interface text comes from is the first. The second is the date, which
+      # since `install_host` gained a real `LocaleBackend` comes from Core
+      # Foundation on macOS and the C library on Linux: the first line of the
+      # output is the weekday, and in French it is one of exactly seven words.
+      # `PortableLocale` would have written `Tuesday` there.
       #
-      # TODO: once a real `LocaleBackend` lands for macOS and Linux
-      # (`NSDateFormatter` / `icu4x`, see docs/development/porting.md), assert a
-      # formatted date here as well. That is the regression test this step is
-      # shaped to become, and until then the aspiration is a comment rather than
-      # a check that would pass for the wrong reason.
+      # The weekday rather than the month, because this runs every day of the
+      # year: the month name in the output is whatever month it is today, and
+      # asserting one would make the build fail on the first of a month. The
+      # unit cases in `src/unix/locale.rs` pin a fixed date and check the month
+      # names there. What this step adds is that the whole program, started the
+      # way a user starts it, picks the locale up from the environment and
+      # carries it to the printed line.
       #
       # `TÂCHES` rather than only `AGENDA`: `AGENDA` is `section_events` in
       # French, Spanish, Italian, both Portuguese catalogues and Dutch, so on
@@ -134,6 +160,7 @@ jobs:
           cat agenda-fr.txt
           grep -q "AGENDA" agenda-fr.txt
           grep -q "TÂCHES" agenda-fr.txt
+          grep -Eq '^(lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche),' agenda-fr.txt
 
   check:
     name: Lint and test
