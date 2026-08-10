@@ -102,6 +102,12 @@ All notable changes to this project are documented here. The format follows
   also carries a `TPMPlaner.app`; it is **not** notarised, which needs a paid
   developer account, so Gatekeeper refuses it on first launch until the user
   right-clicks and chooses Open.
+- `icu4x` was measured against the C library's long-date gap on Linux, which
+  the porting notes had left open with a threshold rather than an answer. It
+  costs 1.01 MB — sixty per cent onto the binary — and buys a better long date
+  on one platform of three, because Windows has NLS and macOS has Core
+  Foundation and both are already exact. Not taken, and now recorded as a
+  measurement rather than a suspicion.
 - A Flatpak manifest, a desktop entry and AppStream metadata, in `packaging/`.
   The runtime already carries Xlib, Cairo, Pango and libwayland, so the build
   is one binary and nothing else. A Flatpak build has no network, so every

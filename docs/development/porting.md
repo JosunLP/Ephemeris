@@ -58,15 +58,38 @@ is stored on the next refresh instead.
 is `dateFormatFromTemplate:` under its C name — the same CLDR data through a
 plain C API, so no message-send machinery and no extra crate.
 
-*Linux uses the C library, and `icu4x` is still open.* `newlocale` and
-`uselocale` give the thread its own locale, `nl_langinfo` the locale's own
-patterns and `strftime` the rendering. The hour convention, the names, the field
-order and the separators are all correct. The long date is the honest gap: POSIX
-has no long-date pattern, so the short one is widened — the locale's own order
-and punctuation are kept, so `%Y年%m月%d日` stays that shape, but a locale whose
-long form differs by more than the month's width will be close rather than
-exact. **The measurement stands**: if `icu4x` with only the datetime component
-costs under a megabyte it is worth the swap, and if it costs five it is not.
+*Linux uses the C library.* `newlocale` and `uselocale` give the thread its own
+locale, `nl_langinfo` the locale's own patterns and `strftime` the rendering.
+The hour convention, the names, the field order and the separators are all
+correct. The long date is the honest gap: POSIX has no long-date pattern, so
+the short one is widened — the locale's own order and punctuation are kept, so
+`%Y年%m月%d日` stays that shape, but a locale whose long form differs by more
+than the month's width will be close rather than exact.
+
+**`icu4x` was measured, and the answer is "not for this".** The test the
+earlier version of this page asked for: two programs built with this project's
+own release profile, one that does nothing and one that formats a long date
+with `icu` 2 and `DateTimeFormatter` at `YMD::long()`, with the locale chosen
+at run time so the data cannot be sliced down to one language.
+
+| | |
+|---|---|
+| Baseline | 289,856 bytes |
+| With `icu4x` | 1,344,648 bytes |
+| **Cost** | **1,054,792 bytes — 1.01 MB** |
+
+It works, and correctly: `11. August 2026` under `de-DE`, `11 August 2026`
+under `en-GB`, ordinal dot and all. But a megabyte is right on the line this
+page drew, and it buys a better long date on *one* of the three platforms —
+Windows has NLS and macOS has Core Foundation, and both are already exact. Sixty
+per cent onto a ~1.7 MB binary, for one platform's month names, is not a trade
+worth making.
+
+What would change it: needing correct CLDR data for something the platforms
+*cannot* do — a non-Gregorian calendar the C library has no locale for, say —
+at which point the megabyte buys three platforms rather than one. The
+measurement is cheap to repeat, and the numbers above say what to compare
+against.
 
 ## How much is shared
 
@@ -236,7 +259,6 @@ non-variadic type never sets it.
   until the user right-clicks and chooses Open.
 - **Publishing the Flatpak.** The manifest is in `packaging/linux`; what
   remains is `cargo-sources.json` and a Flathub submission.
-- **`icu4x` measured** against the C library's long-date gap.
 - **The Windows renderer on `Canvas`**, so there is one description of the
   interface rather than two.
 
