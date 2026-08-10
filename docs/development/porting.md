@@ -1,14 +1,14 @@
 # Porting to macOS and Linux
 
-The port is done, with one piece named at the end of this page still open.
+The port is done.
 
 `tpmplaner-core` holds the model, the calendar back ends, synchronisation,
 localisation and the palette, and calls no operating system API. On top of it
-sit three front ends: a Direct2D renderer in a Win32 window, a Core Graphics
-renderer in an `NSWindow`, and a Cairo renderer in an X11 window. All three
-draw the same widget — below every normal window but above the desktop, no
-taskbar entry, no window-switcher entry, never takes focus, with a global
-shortcut that brings it forward for a few seconds.
+sit four front ends: a Direct2D renderer in a Win32 window, a Core Graphics
+renderer in an `NSWindow`, and a Cairo renderer in either a Wayland surface or
+an X11 window. All four draw the same widget — below every normal window but
+above the desktop, no taskbar entry, no window-switcher entry, never takes
+focus, with a shortcut that brings it forward for a few seconds.
 
 This page is the decision record. It says what was chosen, why, and what would
 reopen each choice.
@@ -157,15 +157,24 @@ desktop".** `wlr-layer-shell` gives exactly the right semantics and covers the
 wlroots compositors — Sway, Hyprland, river, Wayfire — and the KDE Plasma
 compositor. GNOME's Mutter does not implement it and has said it will not.
 
-**The decision stands: X11 and `wlr-layer-shell`, and where neither is
-available the widget says what it cannot do rather than pretending.** The X11
-half is written. Under a Wayland session it runs through XWayland, and whether
-`_NET_WM_STATE_BELOW` reaches the compositor is then the compositor's business
-— several ignore it for X11 clients. `src/unix/linux/mod.rs::report_session`
-writes what was detected and what follows from it into the log at every start,
-so "the widget is not staying behind my windows" has an answer in the file bug
-reports ask for. **The layer-shell back end is the one piece of the port still
-outstanding**; see *What is left*, below.
+**The decision stands, and both halves are written: X11 and
+`wlr-layer-shell`, and where neither is available the widget says what it
+cannot do rather than pretending.**
+
+A Wayland session takes the native back end, not XWayland — under XWayland the
+compositor treats the widget as a foreign client and the one request that
+matters is the one it is least likely to honour. On a wlroots or KDE
+compositor the surface goes on the bottom layer and behaves exactly as the
+Win32 and AppKit windows do. On Mutter, which has no layer shell, it falls back
+to an `xdg_toplevel`, and `src/unix/linux/wayland/mod.rs::report_shape` writes
+into the log what was found and what follows — so "the widget is not staying
+behind my windows" has an answer in the file bug reports ask for.
+
+Two things really are different under the toplevel fallback, and both are
+Wayland's design rather than an omission. The widget cannot place itself, so
+dragging is handed to the compositor with `xdg_toplevel.move`. And it cannot
+raise itself, so a peek is the fade without the rise — which costs nothing,
+because a toplevel was never behind anything to begin with.
 
 The alternatives were weighed and remain rejected:
 
@@ -182,30 +191,51 @@ The alternatives were weighed and remain rejected:
 
 | | Choice | Why |
 |---|---|---|
-| Rendering | Cairo on an Xlib surface | No intermediate image and no copy per frame; the X server composites. A 32-bit `TrueColor` visual gives per-pixel alpha, and a display with none falls back to the default visual and draws opaque rather than refusing to start |
+| Rendering | Cairo, on an Xlib surface or a Wayland shared-memory buffer | One renderer, two surfaces. X11 draws into the window and the server composites; Wayland draws into memory the compositor reads, two buffers deep so a frame can be drawn while it still holds the last one. `CAIRO_FORMAT_ARGB32` and `WL_SHM_FORMAT_ARGB8888` are the same bytes, so there is no conversion. A display with no 32-bit visual falls back to the default one and draws opaque rather than refusing to start |
 | Text | **Pango**, not `cairo_show_text` | Cairo's own text API is documented as a "toy" interface: one font, no shaping, no bidirectional reordering, no fallback for a script the font does not cover. Twenty catalogues with Arabic and Hebrew among them make that disqualifying. Pango is on every desktop that has Cairo, because GTK needs both |
 | Linking | `dlopen` at run time, not a build dependency | The same binary has to work on a desktop and over SSH. Linking Xlib would make it refuse to *start* in a container, on a continuous-integration runner and on a headless server, where what it should do is print the agenda. It also means the tarball is one file that runs on any distribution, and CI builds it with no `-dev` package installed |
 | Locale | **The C library**; `icu4x` still to be measured | `nl_langinfo` gives the locale's own `T_FMT`, which settles 12- against 24-hour properly rather than guessing from the language. What it cannot give is a long date, because POSIX has no pattern for one |
 | Credentials | `secret-tool` | The Secret Service is a D-Bus interface, and every client is either a C library to link or a dozen crates to carry. `secret-tool` is the reference client and ships wherever the service does. The headless fallback is in place and says it is not encrypting |
 | Appearance | `org.freedesktop.appearance` through `gdbus` | One portal interface that covers GNOME and KDE alike, and answers inside a Flatpak too. Driven with `gdbus` for the `secret-tool` reason; `gdbus monitor` watches for changes rather than the widget polling. The portal carries no key for "reduce motion" or "high contrast", so those come from `gsettings` where it answers and default to the values that change nothing where it does not |
-| Menu | Drawn by the widget | X11 has no menus. With no toolkit there is nothing to ask, so it is an override-redirect window drawn with the same Cairo and Pango — one row per entry from the same `tpmplaner_core::menu` list the other two use. Submenus open in place with a "back" row, which avoids a hierarchy of grabs and behaves correctly on every window manager |
-| Hotkey | `XGrabKey` on the root window | Repeated for the lock and numeric-lock modifier combinations, or the shortcut stops working the moment Caps Lock is on |
+| Menu | Drawn by the widget | Neither X11 nor Wayland has menus, and with no toolkit there is nothing to ask. The rows, the measurements and the painting are shared (`drawn_menu.rs`); what differs is the surface and the dismissal. X11 uses an override-redirect window with a pointer grab; Wayland uses an `xdg_popup`, the only object in that protocol that comes with a grab and a "the user clicked elsewhere" event. Submenus open in place with a row back to the top, which avoids a hierarchy of grabs |
+| Hotkey | `XGrabKey` on X11; the compositor's own binding on Wayland | Wayland gives no client the power to grab a key — deliberately, and it is an improvement. So `tpmplaner --peek` tells the running copy to come forward through the socket that already makes it single-instance, and one line in the compositor's configuration is the shortcut. It works on X11 too |
 | Autostart | A `.desktop` file in `$XDG_CONFIG_HOME/autostart` | Old, small, and honoured by GNOME, KDE, XFCE, LXQt and the tiling compositors' session managers alike |
 | Single instance | An abstract socket | No path, so nothing is left in `/tmp` for the next start to trip over, and the kernel releases it however the process ends. Named after the display, so two sessions on one host are two desktops |
 | Shipping | Tarball; distributions package from source | There is no equivalent of the `install.ps1` one-liner, and inventing one that writes outside the package manager's view would be a worse citizen than having none. A Flatpak is the obvious next packaging step |
 
+## Wayland without a code generator
+
+Every Wayland binding in existence is produced by `wayland-scanner` from the
+protocol XML. This one is not, for the reason the project carries no toolkit: a
+build step is a thing that breaks on somebody else's machine.
+
+Most of the protocol did not have to be written out. `libwayland-client.so.0`
+*exports* the interface description of every core object — `wl_surface`,
+`wl_shm`, `wl_pointer` and the rest — so those are `dlsym`ed like any other
+symbol and cannot be got wrong. What is written by hand in
+`wayland/ffi.rs` is only what libwayland does not ship: `zwlr_layer_shell_v1`,
+`zwlr_layer_surface_v1`, and the four `xdg_shell` objects a popup menu needs.
+
+Two rules make that safe to read. A request's opcode is its *position* in its
+interface, so every table lists every request up to the last one used, in
+order, including the ones the widget never sends — a gap silently renumbers the
+rest. And a listener is an array of function pointers indexed by event opcode,
+so `wl_pointer`'s has eleven entries although the widget binds version one: an
+array shorter than the interface is a call past its end if a compositor ever
+sends a later event.
+
+`wl_proxy_marshal_flags` is variadic and is called through a variadic function
+pointer rather than a convenient fixed one. On x86-64 a variadic callee reads
+`al` for the number of vector registers used, and a call made through a
+non-variadic type never sets it.
+
 ## What is left
 
-- **A native Wayland back end via `wlr-layer-shell`.** This is the outstanding
-  item. It needs the protocol spoken directly — `wl_registry`, `wl_compositor`,
-  `wl_shm`, `zwlr_layer_shell_v1` — against a `libwayland-client` opened the
-  same way Xlib is, and a Cairo image surface behind a shared-memory buffer
-  instead of the Xlib surface. Everything above `Canvas` and `Shell` already
-  works and would not change. Until then the log says what XWayland cannot
-  promise.
-- **A notarised macOS `.app`**, which needs a paid developer account.
-- **A Flatpak**, so GNOME and KDE users have something to install rather than a
-  tarball to unpack.
+- **A notarised macOS `.app`**, which needs a paid developer account. The
+  release builds an unsigned bundle, which Gatekeeper refuses on first launch
+  until the user right-clicks and chooses Open.
+- **Publishing the Flatpak.** The manifest is in `packaging/linux`; what
+  remains is `cargo-sources.json` and a Flathub submission.
 - **`icu4x` measured** against the C library's long-date gap.
 - **The Windows renderer on `Canvas`**, so there is one description of the
   interface rather than two.
@@ -213,12 +243,19 @@ The alternatives were weighed and remain rejected:
 ## What testing can and cannot reach
 
 Continuous integration builds the binary on all three systems, runs clippy with
-warnings denied, runs the full test suite, and smoke-tests two front ends: the
-printed agenda in two languages, and — on Linux, under `xvfb` — the real window,
-which is stopped after a few seconds and judged by its log. That last one is
-what stops the Linux front end rotting: a `dlopen` failure, a wrong Xlib
-signature, a missing Pango symbol and a panic in the first frame are all
-invisible to a compiler.
+warnings denied, runs the full test suite, and smoke-tests three front ends:
+the printed agenda in two languages, the X11 window under `xvfb`, and the
+Wayland surface under a headless Sway — which is the only way to exercise the
+layer shell, since that is the half no compiler can check and no other
+compositor available to a runner implements. Each is stopped after a few
+seconds and judged by its log.
+
+That is what stops the Linux front ends rotting. A `dlopen` failure, a wrong
+Xlib signature, a missing Pango symbol, a mis-numbered Wayland opcode and a
+panic in the first frame are all invisible to a compiler and all fatal there.
+The X11 run deliberately uses a virtual server with no 32-bit visual and no
+compositing manager — the *harder* of the two cases, where the widget has to
+fall back to the default visual and draw opaque.
 
 There is no equivalent for macOS. A window opened on a runner cannot be
 observed, and the same was already true of Direct2D: a broken drawing call is a

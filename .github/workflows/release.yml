@@ -135,6 +135,24 @@ jobs:
       - name: Build
         run: cargo build --locked --release --target ${{ matrix.target }}
 
+      # macOS also gets an application bundle. It is *not* signed or notarised
+      # — that needs a paid developer account this repository does not have —
+      # so Gatekeeper will refuse it on first launch until the user right-
+      # clicks and chooses Open. The bundle is still worth shipping: it is
+      # what puts the widget in Applications, gives it an identifier, and
+      # makes `LSUIElement` true from the very first frame rather than from
+      # whenever the program's own code runs.
+      - name: Build the application bundle
+        if: runner.os == 'macOS'
+        run: |
+          version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          app="dist/TPMPlaner.app"
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          cp "target/${{ matrix.target }}/release/tpmplaner" "$app/Contents/MacOS/"
+          sed "s/@VERSION@/$version/g" packaging/macos/Info.plist \
+            > "$app/Contents/Info.plist"
+          cp LICENSE README.md "$app/Contents/Resources/"
+
       # The archive carries the licence and the readme beside the binary,
       # because a tarball is all a distribution packager or a curious user
       # gets — there is no installer to point them anywhere else.
@@ -144,6 +162,13 @@ jobs:
           mkdir -p "dist/$name"
           cp "target/${{ matrix.target }}/release/tpmplaner" "dist/$name/"
           cp LICENSE README.md "dist/$name/"
+          if [ -d dist/TPMPlaner.app ]; then
+            cp -R dist/TPMPlaner.app "dist/$name/"
+            rm -rf dist/TPMPlaner.app
+          fi
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            cp packaging/linux/io.github.josunlp.tpmplaner.desktop "dist/$name/"
+          fi
           tar -czf "dist/$name.tar.gz" -C dist "$name"
           rm -rf "dist/$name"
           cd dist

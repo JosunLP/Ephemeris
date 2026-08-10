@@ -80,14 +80,20 @@ There is no render loop: the widget draws when something changes and then stops.
 
 | | Status |
 |---|---|
-| **Windows 10/11** | Supported. Direct2D in a Win32 window |
-| **macOS 11+** | Supported. Core Graphics in an `NSWindow`, credentials in the Keychain |
-| **Linux, X11** | Supported. Cairo and Pango in an X11 window, credentials in the Secret Service |
-| **Linux, Wayland** | Runs through XWayland. Whether it stays *below* other windows is then up to the compositor, and the widget says so in its log — a native `wlr-layer-shell` back end is still to be written |
+| **Windows 10/11** | Direct2D in a Win32 window |
+| **macOS 11+** | Core Graphics in an `NSWindow`, credentials in the Keychain |
+| **Linux, Wayland** | `wlr-layer-shell` on Sway, Hyprland, river, Wayfire and KDE Plasma. On GNOME, which has no layer shell, an ordinary window — and the widget says so in its log rather than pretending |
+| **Linux, X11** | The EWMH hints that give the widget its behaviour, on any window manager |
 
-Anywhere with no desktop — a container, a server over SSH, a CI runner — it
-prints the agenda instead of drawing it rather than refusing to start.
+Cairo and Pango draw both Linux back ends; only the surface differs. Anywhere
+with no desktop — a container, a server over SSH, a CI runner — the agenda is
+printed instead of drawn rather than the widget refusing to start, and
 `TPMPLANER_TEXT=1` asks for that on a machine that does have one.
+
+On Wayland the compositor owns every keyboard shortcut, so bind one to
+`tpmplaner --peek` — `bindsym $mod+k exec tpmplaner --peek` in Sway — and it
+brings the running widget forward exactly as the built-in shortcut does
+elsewhere.
 
 `tpmplaner-core` contains the model, the calendar back ends, synchronisation,
 localisation and the palette, and calls no operating system API at all — CI

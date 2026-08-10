@@ -132,6 +132,27 @@ fn windowed() -> bool {
     }
 }
 
+/// Tells a copy that is already running to come forward for a moment.
+///
+/// False when nothing was listening, which is the ordinary answer when the
+/// widget is not running at all.
+///
+/// Only Linux can do this, and only Linux needs to: it is how the peek
+/// shortcut works under Wayland, where the compositor owns every keybinding
+/// and a client may not grab one. macOS registers its own shortcut through
+/// Carbon and has nothing to ask.
+pub fn peek_running_instance() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        linux::send_peek()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        log::warn("--peek is only available on Linux");
+        false
+    }
+}
+
 /// There is a console here, which is exactly why the Windows front end needs a
 /// message box and this does not.
 ///

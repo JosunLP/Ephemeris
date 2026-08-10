@@ -69,11 +69,15 @@ rest of the day, then what is due.
 
 ## Honest limitations
 
-The widget runs on Windows, macOS and Linux. Under a **Wayland** session it
-runs through XWayland, and whether it stays below your other windows is then up
-to the compositor — several ignore the request for X11 clients. The widget says
-so in its log rather than pretending; a native `wlr-layer-shell` back end is
-the piece of the port still outstanding.
+The widget runs on Windows, macOS and Linux, on Wayland and on X11. The one
+place it cannot do what it is for is **GNOME**: Mutter does not implement
+`wlr-layer-shell` and has said it will not, so there the widget is an ordinary
+window that sits among yours rather than behind them. It says so in its log
+rather than pretending. Everything else works there.
+
+The macOS application bundle is **not notarised** — that needs a paid developer
+account — so Gatekeeper refuses it on first launch until you right-click and
+choose Open.
 
 The Microsoft and CalDAV back ends were built against the documented APIs and
 their response formats are covered by tests, but they have not yet been run

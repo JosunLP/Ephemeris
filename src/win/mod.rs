@@ -42,6 +42,16 @@ pub fn run() -> Result<(), String> {
     window::run().map_err(|e| e.to_string())
 }
 
+/// Windows has no need of this: the widget registers its own global shortcut
+/// with `RegisterHotKey`, so there is nobody to ask.
+///
+/// It is part of the front end contract because Linux does need it — a Wayland
+/// compositor owns every keybinding — and a contract with a hole in it for one
+/// platform is not one `main` can call without knowing which platform it is on.
+pub fn peek_running_instance() -> bool {
+    false
+}
+
 /// The widget has no console, so a message box is the only way to say
 /// anything at all before exiting.
 pub fn fatal(message: &str) {

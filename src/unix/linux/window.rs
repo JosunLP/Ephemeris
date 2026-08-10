@@ -35,7 +35,7 @@
 #![allow(non_upper_case_globals)]
 
 use crate::unix::app::{self, App, Cursor as AppCursor, Shell, WindowRect};
-use crate::unix::linux::canvas::Cairo;
+use crate::unix::linux::canvas::{Cairo, Look};
 use crate::unix::linux::ffi::*;
 use crate::unix::linux::{menu, visuals};
 use crate::unix::{autostart, paint};
@@ -44,7 +44,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tpmplaner_core::host::Waker;
 use tpmplaner_core::log;
-use tpmplaner_core::theme::{Appearance, Metrics, Palette, SystemVisuals};
+use tpmplaner_core::theme::SystemVisuals;
 
 /// The atoms the widget needs, interned once.
 ///
@@ -116,20 +116,6 @@ impl Waker for PipeWaker {
             libc::write(self.0, &byte as *const u8 as *const c_void, 1);
         }
     }
-}
-
-/// The look the drawn menu has to match.
-///
-/// The menu is this front end's own — X11 has none — so it needs the palette,
-/// the metrics and the typography the panel is drawn with. Kept in step at
-/// every frame rather than read from the widget, because `Shell` is the
-/// boundary between the two and pushing the widget's state through it would
-/// make the trait about drawing.
-pub struct Look {
-    pub palette: Palette,
-    pub metrics: Metrics,
-    pub appearance: Appearance,
-    pub rtl: bool,
 }
 
 pub struct X11Shell {
@@ -322,15 +308,13 @@ pub fn run() -> Result<(), String> {
     super::report_session();
     visuals::watch(wake_write);
 
-    let mut canvas = Cairo::new(
+    let mut canvas = Cairo::for_window(
         libs.clone(),
         display,
         window,
         visual,
         (rect.width, rect.height),
-        widget.metrics,
-        &widget.appearance,
-        widget.loc.rtl,
+        &shell.look,
     )
     .ok_or("the Cairo surface could not be created")?;
 
@@ -348,6 +332,9 @@ pub fn run() -> Result<(), String> {
 /// The loop. Everything else in this file is what it calls.
 fn event_loop(app: &mut App, shell: &mut X11Shell, canvas: &mut Cairo, wake: c_int) {
     let x_fd = unsafe { (shell.libs.XConnectionNumber)(shell.display) };
+    // The socket another copy writes `--peek` to. It is the single-instance
+    // lock as well, so there is always one unless the name was unusable.
+    let control_fd = super::control_fd().unwrap_or(-1);
     let mut dirty = true;
 
     loop {
@@ -368,7 +355,12 @@ fn event_loop(app: &mut App, shell: &mut X11Shell, canvas: &mut Cairo, wake: c_i
         // Only sleep when the server has nothing queued: Xlib buffers events
         // internally, and `poll` on the socket cannot see those.
         if unsafe { (shell.libs.XPending)(shell.display) } == 0 {
-            wait(x_fd, wake, timeout);
+            wait(&[x_fd, wake, control_fd], timeout);
+        }
+
+        if super::take_control_requests() {
+            app.begin_peek(shell);
+            dirty = true;
         }
 
         // Anything written to the pipe, drained in one go: several finished
@@ -503,15 +495,13 @@ fn draw(app: &mut App, shell: &mut X11Shell, canvas: &mut Cairo) {
     };
     if std::mem::take(&mut shell.rebuild) || std::mem::take(&mut app.needs_rebuild) {
         let rect = shell.window_rect();
-        if let Some(fresh) = Cairo::new(
+        if let Some(fresh) = Cairo::for_window(
             shell.libs.clone(),
             shell.display,
             shell.window,
             shell.visual,
             (rect.width, rect.height),
-            app.metrics,
-            &app.appearance,
-            app.loc.rtl,
+            &shell.look,
         ) {
             *canvas = fresh;
         }
@@ -984,26 +974,7 @@ impl Shell for X11Shell {
     }
 
     fn open_path(&self, path: &std::path::Path) {
-        // `xdg-open` picks whatever the desktop has registered for a folder, a
-        // file or a URL. Nothing goes through a shell.
-        let run = std::process::Command::new("xdg-open")
-            .arg(path)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn();
-        match run {
-            Ok(mut child) => {
-                // Reaped so the widget does not collect zombies over days of
-                // uptime, for the reason set out in `unix::host::open_url`.
-                let _ = std::thread::Builder::new()
-                    .name("tpmplaner-open".into())
-                    .spawn(move || {
-                        let _ = child.wait();
-                    });
-            }
-            Err(e) => log::warn(&format!("Could not run xdg-open: {e}")),
-        }
+        crate::unix::linux::open_path(path);
     }
 
     fn set_clipboard(&mut self, text: &str) {
@@ -1060,22 +1031,21 @@ fn pipe() -> Option<(c_int, c_int)> {
     (ok == 0).then_some((fds[0], fds[1]))
 }
 
-/// Sleeps until either file descriptor has something, or the timeout runs out.
-fn wait(x_fd: c_int, wake: c_int, timeout: Duration) {
-    let mut fds = [
-        libc::pollfd {
-            fd: x_fd,
+/// Sleeps until one of the descriptors has something, or the timeout runs out.
+///
+/// A negative descriptor is ignored by `poll`, which is what makes the control
+/// socket optional without a second code path.
+fn wait(fds: &[c_int], timeout: Duration) {
+    let mut poll: Vec<libc::pollfd> = fds
+        .iter()
+        .map(|&fd| libc::pollfd {
+            fd,
             events: libc::POLLIN,
             revents: 0,
-        },
-        libc::pollfd {
-            fd: wake,
-            events: libc::POLLIN,
-            revents: 0,
-        },
-    ];
+        })
+        .collect();
     let ms = timeout.as_millis().min(60_000) as c_int;
-    unsafe { libc::poll(fds.as_mut_ptr(), 2, ms) };
+    unsafe { libc::poll(poll.as_mut_ptr(), poll.len() as libc::nfds_t, ms) };
 }
 
 /// Empties the wake pipe; true if there was anything in it.

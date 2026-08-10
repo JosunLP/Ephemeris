@@ -33,12 +33,29 @@ All notable changes to this project are documented here. The format follows
   refusing to start. The right-click menu is drawn by the widget, because X11
   has none and the widget carries no toolkit.
 
-  **Under Wayland** it runs through XWayland, and whether the compositor
-  honours "below every window" for an X11 client is then the compositor's
-  business — several do not. The log says exactly that at every start rather
-  than the widget quietly behaving like an ordinary window. A native
-  `wlr-layer-shell` back end is the piece of the port still outstanding, and
-  `docs/development/porting.md` says what it needs.
+  **Wayland is native**, not XWayland. `wlr-layer-shell` is the only protocol
+  that lets a client ask to sit above the wallpaper and below every ordinary
+  window, and on the compositors that have it — Sway, Hyprland, river, Wayfire,
+  KDE Plasma — the surface goes on the bottom layer and behaves exactly as the
+  Win32 and AppKit windows do. Cairo draws into shared memory the compositor
+  reads directly, two buffers deep, with no conversion step: Cairo's `ARGB32`
+  and Wayland's `ARGB8888` are the same bytes.
+
+  There is no code generator. `libwayland-client` exports the description of
+  every core protocol object, so those are looked up like any other symbol;
+  what is written by hand is only the layer shell and the four `xdg_shell`
+  objects a popup menu needs. The two rules that makes safe — every request
+  listed up to the last one used, because an opcode is a position, and a
+  listener as long as its interface, because it is indexed by one — are written
+  down where the tables are.
+
+  **On GNOME the widget says what it cannot do.** Mutter has no layer shell and
+  has said it will not, so there the surface is an ordinary `xdg_toplevel`: it
+  sits among your windows rather than behind them, the compositor places it,
+  and dragging is handed to the compositor with `xdg_toplevel.move` because
+  Wayland gives no client the power to place its own window. All of that goes
+  in the log at start-up. Quietly degrading was rejected in the porting notes
+  and is still rejected.
 - **The right-click menu can lock the widget's position and size.** It sits
   below everything and is dragged by its empty space, so reaching past it for a
   file on the desktop moves it by accident. *Lock position and size* pins it:
@@ -50,6 +67,13 @@ All notable changes to this project are documented here. The format follows
   the lock forbids. One thing it deliberately does not prevent: a widget left
   off every monitor still comes back, because a lock that could strand it
   invisibly would be a trap rather than a convenience.
+- `tpmplaner --peek` brings the running widget forward, through the same socket
+  that already makes it single-instance. This is how the peek shortcut works on
+  Wayland at all: the compositor owns every keybinding and will not let a
+  client grab one — deliberately, and an improvement on X11 — so a line like
+  `bindsym $mod+k exec tpmplaner --peek` in the compositor's configuration is
+  the shortcut. It works on X11 too, for anyone who would rather their desktop
+  owned it.
 - Where there is no desktop — a container, a server over SSH, a
   continuous-integration runner — the agenda is printed rather than drawn, and
   the same binary does both. `TPMPLANER_TEXT=1` asks for the printed form on a
@@ -74,14 +98,24 @@ All notable changes to this project are documented here. The format follows
 - Release artefacts for macOS and Linux: a tarball per target with the binary,
   the licence and the readme, and a SHA-256 beside it. No installer one-liner
   on either — inventing one that writes outside the package manager's view
-  would make the widget a worse citizen than having none.
+  would make the widget a worse citizen than having none. The macOS archive
+  also carries a `TPMPlaner.app`; it is **not** notarised, which needs a paid
+  developer account, so Gatekeeper refuses it on first launch until the user
+  right-clicks and chooses Open.
+- A Flatpak manifest, a desktop entry and AppStream metadata, in `packaging/`.
+  The runtime already carries Xlib, Cairo, Pango and libwayland, so the build
+  is one binary and nothing else; what is left before Flathub is the generated
+  crate sources.
 - Continuous integration builds the release binary on all three systems and
-  smoke-tests the real Linux window under `xvfb`, stopping it after a few
-  seconds and failing on an error in its log. A `dlopen` failure, a wrong Xlib
-  signature, a missing Pango symbol and a panic in the first frame are all
-  invisible to a compiler and all fatal there. The virtual server has no
-  32-bit visual and no compositing manager, which is deliberately the harder of
-  the two cases: the widget falls back to the default visual and draws opaque.
+  smoke-tests both Linux windows for real: the X11 one under `xvfb`, and the
+  Wayland one under a headless Sway, which is the only way to exercise the
+  layer shell and is the half no compiler can check. Each is stopped after a
+  few seconds and judged by its log. A `dlopen` failure, a wrong Xlib
+  signature, a missing Pango symbol, a mis-numbered Wayland opcode and a panic
+  in the first frame are all invisible to a compiler and all fatal there. The
+  X11 run deliberately gets a server with no 32-bit visual and no compositing
+  manager — the harder of the two cases, where the widget has to fall back to
+  the default visual and draw opaque.
 - The widget's behaviour and its drawing are each written once for the two new
   front ends, behind two traits: `Shell` is everything the widget needs from a
   window system — geometry, a cursor, three timers, a menu, the clipboard, the
@@ -202,6 +236,12 @@ All notable changes to this project are documented here. The format follows
   beside the hit regions: every front end draws from exactly those and nothing
   else, and a field added for one of them would otherwise be a field the others
   silently do not draw.
+- The right-click menu's rows, measurements and painting are shared by the two
+  Linux back ends. Neither X11 nor Wayland has menus and the widget carries no
+  toolkit, so it draws its own; what differs between them is the surface and
+  the dismissal — an override-redirect window with a pointer grab, or an
+  `xdg_popup`, which is the only object in Wayland that comes with a grab and
+  a "the user clicked elsewhere" event.
 - The front end is behind a platform boundary. `src/main.rs` calls four
   functions — `install_host`, `acquire_single_instance`, `run`, `fatal` — and a
   `#[cfg]` decides which module supplies them, so the Windows code moved to

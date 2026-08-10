@@ -275,6 +275,12 @@ pub const PANGO_DIRECTION_RTL: c_int = 1;
 /// `CAIRO_OPERATOR_SOURCE`, which replaces rather than blends — how the
 /// surface is cleared to nothing at the start of a frame.
 pub const CAIRO_OPERATOR_SOURCE: c_int = 1;
+/// `CAIRO_FORMAT_ARGB32`, which is byte for byte `WL_SHM_FORMAT_ARGB8888` on
+/// a little-endian machine: premultiplied alpha, thirty-two bits, blue in the
+/// low byte. That equivalence is what lets Cairo draw straight into a Wayland
+/// buffer with no conversion step in between.
+pub const CAIRO_FORMAT_ARGB32: c_int = 0;
+
 pub const CAIRO_LINE_CAP_BUTT: c_int = 0;
 pub const CAIRO_LINE_CAP_ROUND: c_int = 1;
 pub const CAIRO_LINE_JOIN_ROUND: c_int = 1;
@@ -389,6 +395,11 @@ pub struct Libs {
     pub cairo_xlib_surface_create:
         unsafe extern "C" fn(*mut Display, Window, VisualPtr, c_int, c_int) -> *mut cairo_surface_t,
     pub cairo_xlib_surface_set_size: unsafe extern "C" fn(*mut cairo_surface_t, c_int, c_int),
+    /// Wraps memory this program owns — a Wayland shared-memory buffer — so
+    /// Cairo draws straight into what the compositor will read.
+    pub cairo_image_surface_create_for_data:
+        unsafe extern "C" fn(*mut u8, c_int, c_int, c_int, c_int) -> *mut cairo_surface_t,
+    pub cairo_surface_mark_dirty: unsafe extern "C" fn(*mut cairo_surface_t),
     pub cairo_surface_destroy: unsafe extern "C" fn(*mut cairo_surface_t),
     pub cairo_surface_flush: unsafe extern "C" fn(*mut cairo_surface_t),
     pub cairo_create: unsafe extern "C" fn(*mut cairo_surface_t) -> *mut cairo_t,
@@ -411,6 +422,7 @@ pub struct Libs {
     pub cairo_set_line_width: unsafe extern "C" fn(*mut cairo_t, f64),
     pub cairo_set_line_cap: unsafe extern "C" fn(*mut cairo_t, c_int),
     pub cairo_set_line_join: unsafe extern "C" fn(*mut cairo_t, c_int),
+    pub cairo_scale: unsafe extern "C" fn(*mut cairo_t, f64, f64),
     pub cairo_pattern_create_linear:
         unsafe extern "C" fn(f64, f64, f64, f64) -> *mut cairo_pattern_t,
     pub cairo_pattern_add_color_stop_rgba:
@@ -497,6 +509,9 @@ impl Libs {
 
                 cairo_xlib_surface_create: cairo.symbol(c"cairo_xlib_surface_create")?,
                 cairo_xlib_surface_set_size: cairo.symbol(c"cairo_xlib_surface_set_size")?,
+                cairo_image_surface_create_for_data: cairo
+                    .symbol(c"cairo_image_surface_create_for_data")?,
+                cairo_surface_mark_dirty: cairo.symbol(c"cairo_surface_mark_dirty")?,
                 cairo_surface_destroy: cairo.symbol(c"cairo_surface_destroy")?,
                 cairo_surface_flush: cairo.symbol(c"cairo_surface_flush")?,
                 cairo_create: cairo.symbol(c"cairo_create")?,
@@ -519,6 +534,7 @@ impl Libs {
                 cairo_set_line_width: cairo.symbol(c"cairo_set_line_width")?,
                 cairo_set_line_cap: cairo.symbol(c"cairo_set_line_cap")?,
                 cairo_set_line_join: cairo.symbol(c"cairo_set_line_join")?,
+                cairo_scale: cairo.symbol(c"cairo_scale")?,
                 cairo_pattern_create_linear: cairo.symbol(c"cairo_pattern_create_linear")?,
                 cairo_pattern_add_color_stop_rgba: cairo
                     .symbol(c"cairo_pattern_add_color_stop_rgba")?,

@@ -51,6 +51,18 @@ If that combination is taken by something else, the widget falls back to another
 and records which one in the log. Set your own with `peek_hotkey`; write the
 Command key as `Cmd`, `Win` or `Super`, whichever your keyboard says.
 
+**On Wayland the compositor owns every keyboard shortcut** and will not let a
+program claim one — deliberately, and it is an improvement on X11. So bind a
+key to `tpmplaner --peek` instead, which tells the widget already running to
+come forward:
+
+```
+# Sway, in ~/.config/sway/config
+bindsym $mod+k exec tpmplaner --peek
+```
+
+It works on X11 too, if you would rather your desktop owned the shortcut.
+
 ## Conflicts
 
 Overlapping meetings are counted in the section header and their times are

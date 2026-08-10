@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<component type="desktop-application">
+  <id>io.github.josunlp.tpmplaner</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+
+  <name>TPMPlaner</name>
+  <summary>Today's calendar events and due tasks on your desktop</summary>
+
+  <description>
+    <p>
+      A small window that stays out of the way: below every normal window but
+      above the desktop, with no taskbar entry, no window-switcher entry, and
+      no way for it to steal focus. One shortcut brings it forward for a few
+      seconds.
+    </p>
+    <p>
+      Google Calendar and Tasks, Microsoft Graph (Outlook, Teams and To Do) and
+      any CalDAV server — iCloud, Nextcloud, Fastmail, Synology, mailbox.org —
+      side by side. Several accounts are queried in parallel, and one failing
+      never blanks the others.
+    </p>
+    <p>
+      It shows what a list hides: a day rail with one coloured segment per
+      event, a marker for right now, overlapping meetings flagged, and
+      tomorrow's first entries once today is done. Tasks due today or earlier,
+      oldest first, with a few seconds to change your mind after ticking one
+      off.
+    </p>
+    <p>
+      Interface text in twenty languages, Arabic and Hebrew among them — and
+      dates, times and reading direction come from the operating system, so a
+      12-hour clock or a right-to-left layout are simply correct.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">io.github.josunlp.tpmplaner.desktop</launchable>
+  <url type="homepage">https://josunlp.github.io/TPMPlaner/</url>
+  <url type="bugtracker">https://github.com/JosunLP/TPMPlaner/issues</url>
+  <url type="help">https://josunlp.github.io/TPMPlaner/guide/getting-started</url>
+  <url type="vcs-browser">https://github.com/JosunLP/TPMPlaner</url>
+
+  <developer id="io.github.josunlp">
+    <name>TPMPlaner contributors</name>
+  </developer>
+
+  <content_rating type="oars-1.1"/>
+
+  <recommends>
+    <control>pointing</control>
+  </recommends>
+
+  <releases>
+    <release version="1.0.2" date="2026-08-11"/>
+  </releases>
+</component>

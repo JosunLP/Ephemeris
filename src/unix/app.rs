@@ -127,6 +127,18 @@ pub trait Shell {
     /// duration it would have nothing to set it to.
     fn set_peek(&mut self, for_at_most: Option<Duration>);
 
+    /// Hand a drag from here to the window system, if it insists on owning
+    /// window placement.
+    ///
+    /// `true` means it took over and the widget must not move the window
+    /// itself. Only a Wayland `xdg_toplevel` says so: Wayland gives no client
+    /// the power to place its own window, and `xdg_toplevel.move` is the only
+    /// way one is dragged. Everywhere else the widget moves its own window and
+    /// the default answer stands.
+    fn begin_system_drag(&mut self) -> bool {
+        false
+    }
+
     /// Show the context menu at the pointer and block until it closes.
     fn show_menu(&mut self, entries: &[menu::Entry]) -> Option<menu::Command>;
     /// Open a file or folder in whatever the desktop has registered.
@@ -501,8 +513,10 @@ impl App {
             // moves it by accident.
             None if self.locked() => {}
             None => {
-                let r = shell.window_rect();
-                self.drag = Some((pointer, (r.x, r.y)));
+                if !shell.begin_system_drag() {
+                    let r = shell.window_rect();
+                    self.drag = Some((pointer, (r.x, r.y)));
+                }
             }
         }
     }

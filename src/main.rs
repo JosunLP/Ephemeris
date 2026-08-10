@@ -16,10 +16,12 @@
 //! | `acquire_single_instance() -> bool` | `false` if another copy already owns the desktop. |
 //! | `run() -> Result<(), String>` | The event loop. Returns only when the widget is finished, or with the reason it could not start. |
 //! | `fatal(&str)` | Say why, to a user who may have no console. |
+//! | `peek_running_instance() -> bool` | Tell a copy that is already running to come forward. |
 //!
-//! Windows has a complete implementation. macOS and Linux have the host and a
-//! text front end, which is the portable half working and the interface layer
-//! still to be written — see `docs/development/porting.md`.
+//! All three are complete: Direct2D in a Win32 window, Core Graphics in an
+//! `NSWindow`, and Cairo in a Wayland or X11 surface. Where there is no
+//! desktop at all the agenda is printed instead of drawn. See
+//! `docs/development/porting.md`.
 //!
 //! [`Host`]: tpmplaner_core::host::Host
 //! [`LocaleBackend`]: tpmplaner_core::host::LocaleBackend
@@ -56,6 +58,20 @@ fn main() -> std::process::ExitCode {
 
     // Before anything touches a path, a secret or a date format.
     frontend::install_host();
+
+    // `tpmplaner --peek` is not a second widget: it is one message to the one
+    // already running, and then it exits. A Wayland compositor owns every
+    // keyboard shortcut and will not let a client grab one, so a keybinding
+    // running this is the only way the peek shortcut can work there — and it
+    // works on X11 and on the other two systems for the same asking.
+    if std::env::args().skip(1).any(|a| a == "--peek") {
+        return match frontend::peek_running_instance() {
+            true => std::process::ExitCode::SUCCESS,
+            // A shell script binding a key wants to know, and a service
+            // manager reads it: no widget was listening.
+            false => std::process::ExitCode::FAILURE,
+        };
+    }
 
     if !frontend::acquire_single_instance() {
         return std::process::ExitCode::SUCCESS;

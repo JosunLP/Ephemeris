@@ -38,10 +38,17 @@ src/                  tpmplaner       — the front ends
       objc.rs         the slice of the Objective-C runtime that is used
       menu.rs         NSMenu · visuals.rs appearance · hotkey.rs Carbon
     linux/            #[cfg(target_os = "linux")]
-      window.rs       X11 window, the poll loop, the shell
-      canvas.rs       Cairo and Pango
+      canvas.rs       Cairo and Pango, on a window or on raw memory
       ffi.rs          Xlib, Cairo and Pango, opened with dlopen
-      menu.rs         the menu, drawn · visuals.rs the XDG portal
+      drawn_menu.rs   the menu's rows and painting — Linux has no menus
+      window.rs       X11 window, the poll loop, the shell
+      menu.rs         the X11 menu: a grabbed override-redirect window
+      visuals.rs      appearance through the XDG settings portal
+      wayland/
+        ffi.rs        libwayland, and the protocols it does not ship
+        window.rs     layer surface or toplevel, shm buffers, the loop
+        menu.rs       the Wayland menu: an xdg_popup with a grab
+        cursor.rs     the pointer, which a Wayland client draws itself
 ```
 
 The core has **no dependency on the `windows` crate** and calls no platform

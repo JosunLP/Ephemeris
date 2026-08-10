@@ -24,11 +24,24 @@ use std::f64::consts::PI;
 use std::ffi::{CString, c_int};
 use std::sync::Arc;
 use tpmplaner_core::layout::Rect;
-use tpmplaner_core::theme::{self, Appearance, Metrics};
+use tpmplaner_core::theme::{self, Appearance, Metrics, Palette};
+
+/// What the surface draws into, which decides what `resize` and `present`
+/// can do.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Backing {
+    /// An X11 window: the server composites, and the surface follows the
+    /// window's size.
+    Xlib,
+    /// Memory this program owns: a fixed size, and the pixels have to be
+    /// marked dirty so Cairo's cache does not hold a stale copy of them.
+    Image,
+}
 
 pub struct Cairo {
     libs: Arc<Libs>,
     surface: *mut cairo_surface_t,
+    backing: Backing,
     /// Rebuilt for every frame: a `cairo_t` carries the whole graphics state,
     /// and a fresh one is the cheapest way to be sure nothing has leaked from
     /// the last frame.
@@ -39,51 +52,100 @@ pub struct Cairo {
     rtl: bool,
     clips: u32,
     size: (i32, i32),
+    /// Device pixels per logical pixel — one everywhere except a Wayland
+    /// buffer on a high-density display.
+    scale: f64,
+}
+
+/// Everything a canvas needs to know about how the widget should look.
+///
+/// Passed as one value because three of the four always travel together and
+/// the fourth — the reading direction — decides how the others are used. It is
+/// also what the drawn menu needs, and what a shell keeps in step with the
+/// widget at every frame.
+#[derive(Clone)]
+pub struct Look {
+    pub metrics: Metrics,
+    pub palette: Palette,
+    pub appearance: Appearance,
+    pub rtl: bool,
 }
 
 impl Cairo {
-    /// Wraps a window in a Cairo surface and builds the font for each role.
-    ///
-    /// The families come from Pango's own description syntax — `"Sans 12"` —
-    /// which is what makes `"Sans"` mean whatever the user's fontconfig
-    /// settings say it means. Naming a specific face would work on the machine
-    /// it was written on and nowhere else.
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    /// Wraps an X11 window: the server composites, so there is no intermediate
+    /// image and no copy per frame.
+    pub fn for_window(
         libs: Arc<Libs>,
         display: *mut Display,
         window: Window,
         visual: VisualPtr,
         size: (i32, i32),
-        metrics: Metrics,
-        custom: &Appearance,
-        rtl: bool,
+        look: &Look,
     ) -> Option<Self> {
         let surface = unsafe {
             (libs.cairo_xlib_surface_create)(display, window, visual, size.0.max(1), size.1.max(1))
         };
+        Self::wrap(libs, surface, size, look, Backing::Xlib)
+    }
+
+    /// Wraps memory this program owns — a Wayland shared-memory buffer.
+    ///
+    /// # Safety
+    ///
+    /// `pixels` must point at `stride * height` writable bytes that outlive
+    /// this canvas, and nothing else may read or write them while it does. On
+    /// Wayland that means the compositor has released the buffer.
+    pub unsafe fn for_pixels(
+        libs: Arc<Libs>,
+        pixels: *mut u8,
+        size: (i32, i32),
+        stride: i32,
+        look: &Look,
+    ) -> Option<Self> {
+        let surface = unsafe {
+            (libs.cairo_image_surface_create_for_data)(
+                pixels,
+                CAIRO_FORMAT_ARGB32,
+                size.0.max(1),
+                size.1.max(1),
+                stride,
+            )
+        };
+        Self::wrap(libs, surface, size, look, Backing::Image)
+    }
+
+    /// Builds the font for each role and takes ownership of the surface.
+    ///
+    /// The families come from Pango's own description syntax — `"Sans 12"` —
+    /// which is what makes `"Sans"` mean whatever the user's fontconfig
+    /// settings say it means. Naming a specific face would work on the machine
+    /// it was written on and nowhere else.
+    fn wrap(
+        libs: Arc<Libs>,
+        surface: *mut cairo_surface_t,
+        size: (i32, i32),
+        look: &Look,
+        backing: Backing,
+    ) -> Option<Self> {
         if surface.is_null() {
             return None;
         }
-
-        // Pango's own description syntax, so `"Sans"` means whatever the
-        // user's fontconfig settings say it means. Naming a specific face
-        // would work on the machine it was written on and nowhere else.
-        let family = custom.font_family().unwrap_or("Sans");
-        let bold = custom.header_weight().0 >= 600;
+        let family = look.appearance.font_family().unwrap_or("Sans");
+        let bold = look.appearance.header_weight().0 >= 600;
+        let m = look.metrics;
 
         let mut fonts = Vec::with_capacity(FONTS.len());
         for role in FONTS {
             let (size, heavy) = match role {
-                Font::Title => (metrics.fs_title, true),
-                Font::Clock => (metrics.fs_clock, false),
-                Font::Subtitle => (metrics.fs_subtitle, false),
-                Font::Section => (metrics.fs_section, bold),
-                Font::Row => (metrics.fs_row, false),
-                Font::RowStrong => (metrics.fs_row, true),
-                Font::Meta => (metrics.fs_meta, false),
-                Font::Footer => (metrics.fs_footer, false),
-                Font::Tooltip => (metrics.fs_row, false),
+                Font::Title => (m.fs_title, true),
+                Font::Clock => (m.fs_clock, false),
+                Font::Subtitle => (m.fs_subtitle, false),
+                Font::Section => (m.fs_section, bold),
+                Font::Row => (m.fs_row, false),
+                Font::RowStrong => (m.fs_row, true),
+                Font::Meta => (m.fs_meta, false),
+                Font::Footer => (m.fs_footer, false),
+                Font::Tooltip => (m.fs_row, false),
             };
             // Pango takes the size in points, and the metrics are in the same
             // 1/96-inch units the Windows front end uses, so the conversion is
@@ -98,23 +160,40 @@ impl Cairo {
         Some(Self {
             libs,
             surface,
+            backing,
             cr: std::ptr::null_mut(),
             fonts,
             widths: HashMap::new(),
-            rtl,
+            rtl: look.rtl,
             clips: 0,
             size,
+            scale: 1.0,
         })
     }
 
+    /// Follows the window's new size.
+    ///
+    /// Only an Xlib surface can: an image surface is bound to the memory it
+    /// was handed, so the Wayland side builds a new canvas around a new buffer
+    /// instead.
     pub fn resize(&mut self, width: i32, height: i32) {
-        if (width, height) == self.size {
+        if (width, height) == self.size || self.backing != Backing::Xlib {
             return;
         }
         self.size = (width, height);
         unsafe {
             (self.libs.cairo_xlib_surface_set_size)(self.surface, width.max(1), height.max(1));
         }
+    }
+
+    /// Draws everything this much larger than it is asked for.
+    ///
+    /// The widget's coordinates are logical pixels; a Wayland buffer on a
+    /// high-density display holds `scale` times as many. Applying it here
+    /// rather than at every call site is what keeps the drawing code unaware
+    /// that such displays exist.
+    pub fn set_scale(&mut self, scale: f64) {
+        self.scale = scale.max(0.1);
     }
 
     /// Opens a drawing context for one frame.
@@ -124,7 +203,13 @@ impl Cairo {
         }
         self.cr = unsafe { (self.libs.cairo_create)(self.surface) };
         self.clips = 0;
-        !self.cr.is_null()
+        if self.cr.is_null() {
+            return false;
+        }
+        if self.scale != 1.0 {
+            unsafe { (self.libs.cairo_scale)(self.cr, self.scale, self.scale) };
+        }
+        true
     }
 
     /// A layout for one line, ready to draw or measure.
@@ -480,6 +565,12 @@ impl Canvas for Cairo {
             (l.cairo_destroy)(self.cr);
             self.cr = std::ptr::null_mut();
             (l.cairo_surface_flush)(self.surface);
+            // Cairo keeps its own idea of what an image surface holds. The
+            // Wayland side hands the same memory to the compositor, so the
+            // cache has to be told the pixels are the authority.
+            if self.backing == Backing::Image {
+                (l.cairo_surface_mark_dirty)(self.surface);
+            }
         }
         if self.widths.len() > 512 {
             // The relative times ("in 25 min") produce a new key every minute.

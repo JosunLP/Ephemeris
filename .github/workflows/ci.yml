@@ -207,6 +207,73 @@ jobs:
             exit 1
           fi
 
+      # And the Wayland back end, against a compositor that really implements
+      # `wlr-layer-shell` — which is the whole reason that back end exists and
+      # the half no compiler can check. Sway is wlroots, and its headless
+      # backend needs no seat, no graphics card and no session.
+      #
+      # The two are separate steps rather than one parameterised job because
+      # they fail differently: an X11 failure is Xlib or the EWMH hints, a
+      # Wayland one is a protocol table or a buffer, and a run that says which
+      # is worth more than one that says "the widget did not start".
+      - name: Smoke test the Wayland window
+        if: runner.os == 'Linux'
+        env:
+          TPMPLANER_DEMO: "1"
+          LC_ALL: en_US.UTF-8
+          LANG: en_US.UTF-8
+        run: |
+          sudo apt-get install -y --no-install-recommends sway
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/wayland"
+          mkdir -p "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+
+          # A compositor with no session, no input devices and no graphics
+          # card: `headless` invents an output, `pixman` renders on the CPU —
+          # a runner has no `/dev/dri` for the GLES renderer to open — and an
+          # empty configuration keeps sway from looking for one.
+          export WLR_BACKENDS=headless
+          export WLR_HEADLESS_OUTPUTS=1
+          export WLR_RENDERER=pixman
+          export WLR_LIBINPUT_NO_DEVICES=1
+          sway --config /dev/null > "$RUNNER_TEMP/sway.log" 2>&1 &
+
+          # The socket's name is sway's to choose, so it is discovered rather
+          # than assumed.
+          socket=
+          for _ in $(seq 1 40); do
+            socket=$(ls "$XDG_RUNTIME_DIR" 2>/dev/null | grep -m1 '^wayland-[0-9]*$' || true)
+            [ -n "$socket" ] && break
+            sleep 0.5
+          done
+          if [ -z "$socket" ]; then
+            echo 'Sway did not come up; the Wayland back end cannot be tested.'
+            cat "$RUNNER_TEMP/sway.log"
+            exit 1
+          fi
+          echo "compositor socket: $socket"
+
+          log="$HOME/.config/tpmplaner/tpmplaner.log"
+          rm -f "$log"
+          # `DISPLAY` cleared as well, so a failure to speak Wayland cannot be
+          # hidden by the X11 back end quietly taking over.
+          env -u DISPLAY WAYLAND_DISPLAY="$socket" \
+            timeout --signal=TERM 15 ./target/debug/tpmplaner || true
+          pkill -x sway || true
+
+          echo '--- log ---'
+          cat "$log"
+          # The line that proves the layer shell was found *and used*. Without
+          # it the widget fell back to an ordinary window, and on a wlroots
+          # compositor that means a wrong protocol table rather than a missing
+          # protocol.
+          grep -q "wlr-layer-shell" "$log"
+          grep -q "bottom layer" "$log"
+          if grep -qE '^[0-9-]+ [0-9:]+ ERROR ' "$log"; then
+            echo 'The widget logged an error while starting.'
+            exit 1
+          fi
+
   check:
     name: Lint and test
     runs-on: windows-latest
