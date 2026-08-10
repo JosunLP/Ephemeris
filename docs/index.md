@@ -69,8 +69,11 @@ rest of the day, then what is due.
 
 ## Honest limitations
 
-Version 1.0 runs on **Windows only**. The portable core already builds and
-tests on macOS and Linux — the interface layer is what still has to follow.
+The widget runs on Windows, macOS and Linux. Under a **Wayland** session it
+runs through XWayland, and whether it stays below your other windows is then up
+to the compositor — several ignore the request for X11 clients. The widget says
+so in its log rather than pretending; a native `wlr-layer-shell` back end is
+the piece of the port still outstanding.
 
 The Microsoft and CalDAV back ends were built against the documented APIs and
 their response formats are covered by tests, but they have not yet been run

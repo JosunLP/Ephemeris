@@ -135,6 +135,9 @@ pub struct X11Shell {
     pub display: *mut Display,
     pub window: Window,
     pub visual: VisualPtr,
+    /// The visual's depth, so the menu's own windows match it. Mixing depths
+    /// between a window and its colourmap is a `BadMatch`.
+    pub depth: c_int,
     pub colormap: Colormap,
     pub atoms: Atoms,
     pub look: Look,
@@ -203,16 +206,31 @@ pub fn run() -> Result<(), String> {
     let atoms = Atoms::new(&libs, display);
 
     // A 32-bit TrueColor visual is what gives the panel its per-pixel alpha.
-    // Without a compositing manager running it comes out opaque, which the
-    // widget already copes with — the palette has a `force_opaque` path for
-    // exactly this.
+    // Not every display has one — a bare X server with no compositing, a
+    // virtual framebuffer — and the widget works there too: the panel comes
+    // out opaque, which is the same result the "reduce transparency"
+    // accessibility setting already produces and which the palette has a
+    // `force_opaque` path for. Refusing to start would be far worse than
+    // being opaque.
     let mut vi = XVisualInfo::default();
-    let matched = unsafe { (libs.XMatchVisualInfo)(display, screen, 32, TrueColor, &mut vi) };
-    if matched == 0 {
-        return Err("this display has no 32-bit visual — the widget needs one".into());
-    }
+    let (visual, depth) = if unsafe {
+        (libs.XMatchVisualInfo)(display, screen, 32, TrueColor, &mut vi)
+    } != 0
+    {
+        (vi.visual, 32)
+    } else {
+        log::warn(
+            "No 32-bit visual on this display — the panel will be opaque rather than translucent.",
+        );
+        unsafe {
+            (
+                (libs.XDefaultVisual)(display, screen),
+                (libs.XDefaultDepth)(display, screen),
+            )
+        }
+    };
 
-    let colormap = unsafe { (libs.XCreateColormap)(display, root, vi.visual, AllocNone) };
+    let colormap = unsafe { (libs.XCreateColormap)(display, root, visual, AllocNone) };
     let mut attributes = XSetWindowAttributes {
         background_pixel: 0,
         border_pixel: 0,
@@ -240,9 +258,9 @@ pub fn run() -> Result<(), String> {
             400,
             640,
             0,
-            32,
+            depth,
             InputOutput,
-            vi.visual,
+            visual,
             CWBackPixel | CWBorderPixel | CWColormap | CWEventMask,
             &mut attributes,
         )
@@ -266,7 +284,8 @@ pub fn run() -> Result<(), String> {
         libs: libs.clone(),
         display,
         window,
-        visual: vi.visual,
+        visual,
+        depth,
         colormap,
         atoms,
         look: Look {
@@ -305,7 +324,7 @@ pub fn run() -> Result<(), String> {
         libs.clone(),
         display,
         window,
-        vi.visual,
+        visual,
         (rect.width, rect.height),
         widget.metrics,
         &widget.appearance,

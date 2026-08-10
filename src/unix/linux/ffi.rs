@@ -295,6 +295,8 @@ pub struct Libs {
     pub XDisplayHeight: unsafe extern "C" fn(*mut Display, c_int) -> c_int,
     pub XMatchVisualInfo:
         unsafe extern "C" fn(*mut Display, c_int, c_int, c_int, *mut XVisualInfo) -> c_int,
+    pub XDefaultVisual: unsafe extern "C" fn(*mut Display, c_int) -> VisualPtr,
+    pub XDefaultDepth: unsafe extern "C" fn(*mut Display, c_int) -> c_int,
     pub XCreateColormap: unsafe extern "C" fn(*mut Display, Window, VisualPtr, c_int) -> Colormap,
     #[allow(clippy::type_complexity)]
     pub XCreateWindow: unsafe extern "C" fn(
@@ -461,6 +463,8 @@ impl Libs {
                 XDisplayWidth: x11.symbol(c"XDisplayWidth")?,
                 XDisplayHeight: x11.symbol(c"XDisplayHeight")?,
                 XMatchVisualInfo: x11.symbol(c"XMatchVisualInfo")?,
+                XDefaultVisual: x11.symbol(c"XDefaultVisual")?,
+                XDefaultDepth: x11.symbol(c"XDefaultDepth")?,
                 XCreateColormap: x11.symbol(c"XCreateColormap")?,
                 XCreateWindow: x11.symbol(c"XCreateWindow")?,
                 XDestroyWindow: x11.symbol(c"XDestroyWindow")?,

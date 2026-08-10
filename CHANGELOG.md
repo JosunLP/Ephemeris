@@ -8,11 +8,89 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
-- The binary builds and runs on macOS and Linux. Not the widget — the window
-  that sits below every other window and above the desktop has not been written
-  for those platforms yet — but the whole portable half: settings, locale,
-  accounts, the same sync thread the Windows front end drives, and the agenda
-  printed instead of drawn. `TPMPLANER_DEMO=1` works there too.
+- **The widget runs on macOS and Linux.** A real window on both, with the
+  behaviour the widget is defined by: below every normal window but above the
+  desktop, no taskbar or window-switcher entry, never takes focus, and a global
+  shortcut that brings it forward for a few seconds.
+
+  On macOS that is an `NSWindow` at `kCGDesktopIconWindowLevel + 1` that
+  refuses to become key, joins every Space, is skipped by the window switcher
+  and has no Dock tile; Core Graphics draws it, Core Text sets it, and both go
+  through the Objective-C runtime directly rather than a binding crate. The
+  peek shortcut is `RegisterEventHotKey` and not an `NSEvent` global monitor —
+  a monitor needs the accessibility permission, which means a system dialogue
+  and a documented feature that does nothing until somebody grants it.
+
+  On Linux it is an X11 window carrying `_NET_WM_STATE_BELOW`, `SKIP_TASKBAR`,
+  `SKIP_PAGER` and `STICKY`, Motif hints for the missing frame, and
+  `WM_HINTS.input = False` so a click on it never pulls focus out of what you
+  are typing in. Cairo draws it and Pango sets it: Cairo's own text API is a
+  documented "toy" interface with no shaping and no bidirectional reordering,
+  and twenty catalogues with Arabic and Hebrew among them make that
+  disqualifying. Xlib, Cairo and Pango are opened with `dlopen` rather than
+  linked, so the tarball is one file with no development package to install and
+  a machine with no display falls back to printing the agenda instead of
+  refusing to start. The right-click menu is drawn by the widget, because X11
+  has none and the widget carries no toolkit.
+
+  **Under Wayland** it runs through XWayland, and whether the compositor
+  honours "below every window" for an X11 client is then the compositor's
+  business — several do not. The log says exactly that at every start rather
+  than the widget quietly behaving like an ordinary window. A native
+  `wlr-layer-shell` back end is the piece of the port still outstanding, and
+  `docs/development/porting.md` says what it needs.
+- **The right-click menu can lock the widget's position and size.** It sits
+  below everything and is dragged by its empty space, so reaching past it for a
+  file on the desktop moves it by accident. *Lock position and size* pins it:
+  the drag and the resize grips stop responding and the resize cursor stops
+  appearing, while scrolling, ticking tasks off, opening events and the rest of
+  the menu go on working. *Unlock position and size* lets it go again. Stored
+  as `"locked"` in `config.json`, so it survives a restart, and *Reset
+  position* greys out while it is on because moving the widget is exactly what
+  the lock forbids. One thing it deliberately does not prevent: a widget left
+  off every monitor still comes back, because a lock that could strand it
+  invisibly would be a trap rather than a convenience.
+- Where there is no desktop — a container, a server over SSH, a
+  continuous-integration runner — the agenda is printed rather than drawn, and
+  the same binary does both. `TPMPLANER_TEXT=1` asks for the printed form on a
+  machine that does have a display, which makes it a usable command in its own
+  right.
+- Starting with the session on macOS and Linux: a launch agent in
+  `~/Library/LaunchAgents`, or a `.desktop` file in
+  `$XDG_CONFIG_HOME/autostart`. Both are plain files in the user's own home, so
+  nothing is written outside the profile and removing the file is all it takes
+  to undo — the promise the Windows installer already makes.
+- `tpmplaner_core::menu` decides what the right-click menu contains — which
+  entries appear, which are ticked, which are greyed out — for all three front
+  ends, with its own tests. A `HMENU`, an `NSMenu` and a panel drawn with Cairo
+  differ in how a menu is *shown*, not in what it says, and a command added to
+  the core now fails to compile in every front end until each says what it
+  does.
+- `tpmplaner_core::hotkey` reads `peek_hotkey`. The spelling is the same
+  everywhere and only the key *number* is not, so the parsing is shared and
+  each platform maps a parsed combination to its own table. `Cmd`, `Win` and
+  `Super` are all accepted for the same key, so one settings file works on
+  every machine.
+- Release artefacts for macOS and Linux: a tarball per target with the binary,
+  the licence and the readme, and a SHA-256 beside it. No installer one-liner
+  on either — inventing one that writes outside the package manager's view
+  would make the widget a worse citizen than having none.
+- Continuous integration builds the release binary on all three systems and
+  smoke-tests the real Linux window under `xvfb`, stopping it after a few
+  seconds and failing on an error in its log. A `dlopen` failure, a wrong Xlib
+  signature, a missing Pango symbol and a panic in the first frame are all
+  invisible to a compiler and all fatal there. The virtual server has no
+  32-bit visual and no compositing manager, which is deliberately the harder of
+  the two cases: the widget falls back to the default visual and draws opaque.
+- The widget's behaviour and its drawing are each written once for the two new
+  front ends, behind two traits: `Shell` is everything the widget needs from a
+  window system — geometry, a cursor, three timers, a menu, the clipboard, the
+  appearance settings — and `Canvas` is everything a renderer has to be able to
+  draw. Core Graphics and Cairo are a few hundred lines each behind them. The
+  Direct2D renderer predates both and still draws the same picture from its own
+  code; that is one description of the interface too many, and
+  `docs/development/porting.md` records it as such rather than leaving it to be
+  discovered.
 - A `Host` for macOS and Linux. The data directory follows each platform's
   convention and is created readable by its owner alone, a browser is opened
   through `open` or `xdg-open`, and random bytes come from `/dev/urandom`.
@@ -114,6 +192,16 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- The autostart entry in the context menu is *Start at login* rather than
+  *Start with Windows*, in all twenty languages. The same entry is a registry
+  value on Windows, a login item on macOS and an XDG autostart file on Linux,
+  and naming one of them was wrong on the other two.
+- Today's agenda as text — the *Copy agenda* entry — is built in the core, so
+  the three front ends copy the same day rather than three near-identical ones.
+- `Frame`, `UndoView` and `FrameResult` moved to `tpmplaner_core::layout`
+  beside the hit regions: every front end draws from exactly those and nothing
+  else, and a field added for one of them would otherwise be a field the others
+  silently do not draw.
 - The front end is behind a platform boundary. `src/main.rs` calls four
   functions — `install_host`, `acquire_single_instance`, `run`, `fatal` — and a
   `#[cfg]` decides which module supplies them, so the Windows code moved to

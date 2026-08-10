@@ -110,9 +110,13 @@ jobs:
       # wrong in the product. All three variables, because
       # `PortableLocale::user_default_tag` reads them in turn and moves on from
       # any that is unset or "C".
-      - name: Smoke test the Unix front end
+      - name: Smoke test the printed agenda
         env:
           TPMPLANER_DEMO: "1"
+          # The macOS runner has a window server, so the front end would open
+          # the widget and never return. This step is about the portable half,
+          # and the variable is what asks for that half by name.
+          TPMPLANER_TEXT: "1"
           LC_ALL: en_US.UTF-8
           LC_TIME: en_US.UTF-8
           LANG: en_US.UTF-8
@@ -152,6 +156,7 @@ jobs:
       - name: Smoke test a second language
         env:
           TPMPLANER_DEMO: "1"
+          TPMPLANER_TEXT: "1"
           LC_ALL: fr_FR.UTF-8
           LC_TIME: fr_FR.UTF-8
           LANG: fr_FR.UTF-8
@@ -161,6 +166,42 @@ jobs:
           grep -q "AGENDA" agenda-fr.txt
           grep -q "TÂCHES" agenda-fr.txt
           grep -Eq '^(lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche),' agenda-fr.txt
+
+      # The window itself, on a virtual X server. This is what stops the Linux
+      # front end from rotting: `dlopen` failures, a wrong Xlib signature, a
+      # missing Pango symbol and a panic in the first frame are all invisible
+      # to a compiler and all fatal here.
+      #
+      # `xvfb-run` gives a 24-bit screen with no compositing manager, which is
+      # deliberately the *worse* of the two cases: the widget has to fall back
+      # to the default visual and draw opaque. A run that needed a 32-bit
+      # visual would pass on a desktop and fail here, which is the wrong way
+      # round for a smoke test.
+      #
+      # The widget never exits by itself, so it is stopped after a few seconds
+      # and judged by its log — the same file a bug report is asked for. An
+      # `ERROR` line anywhere in it fails the step.
+      - name: Smoke test the window
+        if: runner.os == 'Linux'
+        env:
+          TPMPLANER_DEMO: "1"
+          LC_ALL: en_US.UTF-8
+          LANG: en_US.UTF-8
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends             xvfb libcairo2 libpango-1.0-0 libpangocairo-1.0-0 libx11-6
+          cargo build --locked
+          log="$HOME/.config/tpmplaner/tpmplaner.log"
+          rm -f "$log"
+          xvfb-run -a --server-args='-screen 0 1280x1024x24'             timeout --signal=TERM 15 ./target/debug/tpmplaner || true
+          echo '--- log ---'
+          cat "$log"
+          grep -q "Start — locale" "$log"
+          grep -q "X11 session" "$log"
+          if grep -q "ERROR" "$log"; then
+            echo 'The widget logged an error while starting.'
+            exit 1
+          fi
 
   check:
     name: Lint and test
@@ -215,6 +256,41 @@ jobs:
         with:
           name: tpmplaner-windows-x86_64
           path: target/release/tpmplaner.exe
+          if-no-files-found: error
+
+  # The same release profile on the two platforms the port added, and for the
+  # same reason it exists on Windows: `lto = "fat"` and `codegen-units = 1`
+  # share nothing with the debug profile, and a release-only compile error is
+  # a real thing. The size is printed because "~1.7 MB, single file" is a
+  # claim this project makes in its README.
+  build-unix:
+    name: Release build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artefact: tpmplaner-linux-x86_64
+          - os: macos-latest
+            artefact: tpmplaner-macos-arm64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+
+      - name: Build
+        run: cargo build --locked --release
+
+      - name: Report the size
+        run: ls -l target/release/tpmplaner
+
+      - name: Upload binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ matrix.artefact }}
+          path: target/release/tpmplaner
           if-no-files-found: error
 
   # The installer is the first thing a user runs and the only part of the

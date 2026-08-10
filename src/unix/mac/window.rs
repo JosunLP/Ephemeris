@@ -36,7 +36,6 @@
 //! rather than panicking on a double borrow.
 
 use crate::unix::app::{App, Cursor, Shell, WindowRect};
-use crate::unix::canvas::Canvas;
 use crate::unix::mac::canvas::Cg;
 use crate::unix::mac::objc::*;
 use crate::unix::mac::{hotkey, menu, visuals};

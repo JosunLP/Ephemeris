@@ -428,7 +428,7 @@ fn create_popup(shell: &X11Shell, x: i32, y: i32, width: c_uint, height: c_uint)
             width.max(1),
             height.max(1),
             0,
-            32,
+            shell.depth,
             InputOutput,
             shell.visual,
             CWBackPixel | CWBorderPixel | CWColormap | CWEventMask | CWOverrideRedirect,

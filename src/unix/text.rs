@@ -22,7 +22,8 @@
 //! cover: `終日` is two `char`s and four columns wide, and `Locale::label`
 //! prefixes a right-to-left string with a directional mark that costs a `char`
 //! and no width at all. The data is right; the ragged edge is this module's,
-//! not the renderer's, and it is not worth a width table in a stopgap.
+//! not the renderer's, and it is not worth a width table for output that has
+//! no columns to keep.
 
 use std::io::{self, Write};
 use std::sync::mpsc::{RecvTimeoutError, SyncSender, sync_channel};
@@ -66,8 +67,8 @@ fn print_everything(out: &mut impl Write) -> io::Result<()> {
     writeln!(out, "TPMPlaner {}", env!("CARGO_PKG_VERSION"))?;
     writeln!(
         out,
-        "The graphical widget is not ported to this platform yet. This is the \
-         portable core: same settings, same calendars, same agenda, printed."
+        "No desktop session here, so the agenda is printed rather than drawn. \
+         Same settings, same calendars, same agenda."
     )?;
     writeln!(out, "Settings: {}", config::config_path().display())?;
     if let Some(e) = &config_error {

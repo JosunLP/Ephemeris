@@ -245,6 +245,12 @@ impl Drop for Obj {
 /// creates would live until the process exits.
 pub struct Pool(Id);
 
+impl Default for Pool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Pool {
     pub fn new() -> Self {
         unsafe {
