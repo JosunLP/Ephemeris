@@ -17,7 +17,7 @@
 //! measurement is cached, because that is what the column widths ask for many
 //! times per frame and what costs.
 
-use crate::unix::canvas::{Align, Canvas, FONTS, Font, Stop};
+use crate::paint::canvas::{Align, Canvas, FONTS, Font, Stop};
 use crate::unix::linux::ffi::*;
 use std::collections::HashMap;
 use std::f64::consts::PI;

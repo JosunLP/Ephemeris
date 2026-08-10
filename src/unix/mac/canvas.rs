@@ -24,7 +24,7 @@
 //! lands beside the 13-point system font, and `fs_title` at 17 beside the
 //! 17-point title. Anyone who disagrees has `"scale"` in the settings.
 
-use crate::unix::canvas::{Align, Canvas, FONTS, Font, Stop};
+use crate::paint::canvas::{Align, Canvas, FONTS, Font, Stop};
 use crate::unix::cf;
 use crate::unix::mac::objc::*;
 use std::collections::HashMap;

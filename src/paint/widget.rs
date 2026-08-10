@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 TPMPlaner contributors
-//! The widget, drawn — once, for both macOS and Linux.
+//! The widget, drawn — once, for every front end.
 //!
 //! Everything here is arithmetic over [`tpmplaner_core::layout`] and calls into
 //! [`Canvas`]. It never touches an operating system API, which is why the same
-//! file serves Core Graphics and Cairo: a rounded rectangle, a line, a circle
-//! and a line of text are the four things a panel is made of, and both engines
-//! draw all four.
+//! file serves Direct2D, Core Graphics and Cairo alike: a rounded rectangle, a
+//! line, a circle and a line of text are the four things a panel is made of,
+//! and all three engines draw all four.
 //!
 //! The order is the order things are stacked in:
 //!
@@ -17,19 +17,18 @@
 //!
 //! Two things are folded in on the way past [`Painter`] rather than by the back
 //! ends. **Mirroring**: a right-to-left layout folds every x across the panel's
-//! centre, so the layout module goes on computing left to right and neither
-//! renderer knows the difference. **The reveal fade**: one factor multiplied
-//! into every alpha while the panel fades in, which is cheaper and far harder
-//! to forget than fading each call site.
+//! centre, so the layout module goes on computing left to right and no renderer
+//! knows the difference. **The reveal fade**: one factor multiplied into every
+//! alpha while the panel fades in, which is cheaper and far harder to forget
+//! than fading each call site.
 //!
-//! The Windows front end draws the same picture from its own Direct2D code.
-//! That is one description of the interface too many and is known to be so —
-//! see `docs/development/porting.md`. What keeps the two honest in the
-//! meantime is that everything *decided* rather than drawn already lives in
+//! What is *decided* rather than drawn is a layer further down again, in
 //! `tpmplaner_core::layout`: which rows are visible, where the now line goes,
-//! how wide a column has to be, which rectangle a click landed in.
+//! how wide a column has to be, which rectangle a click landed in. That half
+//! can be tested without a device; this half cannot, which is the line between
+//! the two.
 
-use crate::unix::canvas::{Align, Canvas, Font, Stop};
+use crate::paint::canvas::{Align, Canvas, Font, Stop};
 use std::f32::consts::PI;
 use tpmplaner_core::layout::{
     self, EventList, Frame, FrameResult, Hit, HitRegion, Panel, Rect, TaskList,

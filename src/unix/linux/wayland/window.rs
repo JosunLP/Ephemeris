@@ -35,12 +35,13 @@
 use super::cursor::{CursorLib, Cursors};
 use super::ffi::*;
 use super::menu;
+use crate::paint::canvas::Canvas as _;
+use crate::paint::widget as paint;
 use crate::unix::app::{self, App, Cursor as AppCursor, Shell, WindowRect};
-use crate::unix::canvas::Canvas as _;
+use crate::unix::autostart;
 use crate::unix::linux::canvas::{Cairo, Look};
 use crate::unix::linux::ffi::Libs;
 use crate::unix::linux::visuals;
-use crate::unix::{autostart, paint};
 use std::cell::RefCell;
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::rc::Rc;

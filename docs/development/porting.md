@@ -100,23 +100,28 @@ them is platform-specific than it looks. Four layers, from the portable end:
 |---|---|
 | `tpmplaner_core::layout` | Where everything goes. Row and hit rectangles, the day rail's span, the tick circle, the scroll thumb, tooltip placement, which rows are visible, what fades, where the now line goes. Arithmetic over the metrics and the model, with its own tests. |
 | `tpmplaner_core::menu` | What the right-click menu contains — which entries, which ticked, which greyed. Also tested. |
-| `src/unix/paint.rs` | The widget's *drawing*, written once against the `Canvas` trait. |
-| `src/unix/app.rs` | The widget's *behaviour* — input, timers, commands — written once against the `Shell` trait. |
+| `src/paint/widget.rs` | The widget's *drawing*, written once against the `Canvas` trait. **Every** front end. |
+| `src/unix/app.rs` | The widget's *behaviour* — input, timers, commands — written once against the `Shell` trait, by the two front ends that were written together. |
 
-`Canvas` and `Shell` are the two boundaries the macOS and Linux front ends meet
-the shared code at. `Canvas` is a rounded rectangle, a line, a circle, an arc, a
-gradient, a clip and two kinds of text; `Shell` is the window's geometry, a
-cursor, three timers, a menu, the clipboard and the system's appearance. Each
-back end is a few hundred lines behind those.
+`Canvas` is a rounded rectangle, a line, a circle, an arc, a gradient, a clip
+and two kinds of text. Four implementations sit behind it — Direct2D, Core
+Graphics, Cairo on an X11 window and Cairo on a Wayland buffer — and each is a
+few hundred lines. There is one description of what the widget looks like, and
+changing it changes all four.
 
-**The Windows renderer is not built this way, and that is one description of
-the interface too many.** `src/win/render.rs` draws the same picture from its
-own Direct2D code. It predates the split, it works, and rewriting a working
-renderer against a trait designed after it is a change with real risk and no
-user-visible result. What keeps the two from drifting is that everything
-*decided* rather than drawn already lives in `layout` and `menu`, where a change
-reaches all three at once. Migrating Direct2D onto `Canvas` is the natural next
-piece of work; it is not this one.
+`Shell` is the window's geometry, a cursor, three timers, a menu, the clipboard
+and the system's appearance. Only macOS and Linux meet the shared code there:
+`src/win/window.rs` predates the trait and owns its own Win32 message pump.
+That is a smaller duplication than the drawing was — a message pump and a
+`poll` loop have genuinely little in common, which is why `Waker` is a trait
+and the loop is not — and the *decisions* a loop makes are already shared
+through `layout` and `menu`.
+
+`src/paint` sits beside the front ends rather than in `tpmplaner-core`, and the
+line is worth naming. The core answers *what to show* and *where it goes*, and
+can be tested without a device. `paint` answers *what it looks like*, which
+cannot be, and would drag a notion of drawing into a crate whose whole point is
+not having one.
 
 ## Decided: no cross-platform toolkit
 
@@ -144,7 +149,7 @@ lines with the two ABI rules that matter written down at the top.
 | | |
 |---|---|
 | Window | `NSWindow` at `kCGDesktopIconWindowLevel + 1`, `canBecomeKeyWindow` returning NO, collection behaviour `.canJoinAllSpaces` + `.stationary` + `.ignoresCycle`, activation policy `.accessory` so there is no Dock tile |
-| Rendering | Core Graphics into a flipped `NSView`, Core Text for the type. No `NSVisualEffectView`: the renderer draws its own glass, and a system backdrop behind a rounded panel is a square box around it — the same trap `"backdrop": "acrylic"` documents on Windows |
+| Rendering | Core Graphics into a flipped `NSView`, Core Text for the type, behind the shared `Canvas`. No `NSVisualEffectView`: the renderer draws its own glass, and a system backdrop behind a rounded panel is a square box around it — the same trap `"backdrop": "acrylic"` documents on Windows |
 | Locale | `CFDateFormatter` with `CFDateFormatterCreateDateFormatFromTemplate` |
 | Credentials | Keychain: `SecItemAdd`, `SecItemCopyMatching`, `SecItemUpdate`, accessible after first unlock so a widget that starts at login can still sync |
 | Appearance | `NSApp.effectiveAppearance`, `NSColor.controlAccentColor`, and `NSWorkspace`'s three `accessibilityDisplay…` switches |
@@ -259,8 +264,10 @@ non-variadic type never sets it.
   until the user right-clicks and chooses Open.
 - **Publishing the Flatpak.** The manifest is in `packaging/linux`; what
   remains is `cargo-sources.json` and a Flathub submission.
-- **The Windows renderer on `Canvas`**, so there is one description of the
-  interface rather than two.
+- **The Windows window on `Shell`**, so all four front ends share the
+  behaviour as well as the drawing. Less pressing than the renderer was: a
+  Win32 message pump and a `poll` loop really are different things, and what a
+  loop *decides* is already shared.
 
 ## What testing can and cannot reach
 

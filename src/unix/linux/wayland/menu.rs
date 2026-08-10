@@ -22,7 +22,7 @@
 
 use super::ffi::*;
 use super::window::{PointerEvent, Shape, WaylandShell};
-use crate::unix::canvas::Canvas as _;
+use crate::paint::canvas::Canvas as _;
 use crate::unix::linux::canvas::Cairo;
 use crate::unix::linux::drawn_menu::{self, Picked, Row};
 use std::ffi::c_void;

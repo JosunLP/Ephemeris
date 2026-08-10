@@ -35,11 +35,12 @@
 //! anything that arrives during it finds the slot empty and does nothing,
 //! rather than panicking on a double borrow.
 
+use crate::paint::widget as paint;
 use crate::unix::app::{App, Cursor, Shell, WindowRect};
+use crate::unix::autostart;
 use crate::unix::mac::canvas::Cg;
 use crate::unix::mac::objc::*;
 use crate::unix::mac::{hotkey, menu, visuals};
-use crate::unix::{autostart, paint};
 use std::cell::RefCell;
 use std::ffi::c_void;
 use std::sync::{Arc, OnceLock};

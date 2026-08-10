@@ -2,17 +2,16 @@
 // Copyright (C) 2026 TPMPlaner contributors
 //! The drawing surface the widget is painted onto.
 //!
-//! Core Graphics and Cairo are the same *kind* of interface — an immediate mode
-//! 2D vector API with paths, fills, strokes and a clip stack — in a way that
-//! Direct2D is too, but macOS and Linux are the two front ends being written
-//! together, so their common shape is worth naming and Windows' is not worth
-//! disturbing. Everything above this trait ([`crate::unix::paint`]) is written
-//! once; everything below it is a few hundred lines per platform.
+//! Direct2D, Core Graphics and Cairo are the same *kind* of interface — an
+//! immediate-mode 2D vector API with paths, fills, strokes and a clip stack —
+//! and this is the shape they have in common. Everything above the trait
+//! ([`crate::paint::widget`]) is written once; everything below it is a few
+//! hundred lines per platform.
 //!
 //! Three things are deliberately *not* in the trait:
 //!
 //! * **Mirroring.** Right-to-left folds x across the panel's centre, which is
-//!   arithmetic. [`crate::unix::paint::Painter`] does it before the call, so
+//!   arithmetic. [`crate::paint::widget::Painter`] does it before the call, so
 //!   neither back end has to know the layout can be mirrored at all.
 //! * **The reveal fade.** A single factor multiplied into every alpha, applied
 //!   in the same place and for the same reason.
@@ -32,9 +31,10 @@ use tpmplaner_core::layout::Rect;
 /// [`tpmplaner_core::theme::Metrics`] and the user's customisation, and are
 /// resolved once when the back end is built.
 ///
-/// The Windows renderer has an extra `Icon` role for the refresh glyph in
-/// Segoe Fluent Icons. There is no such font on macOS or Linux, so the icon is
-/// a path here — see [`crate::unix::paint::Painter::refresh_icon`].
+/// There is no role for the refresh symbol. It used to be a glyph from Segoe
+/// Fluent Icons on Windows and is a drawn path everywhere now: no font on macOS
+/// or Linux can be relied on to carry it, and one widget with two different
+/// refresh symbols would be two widgets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(usize)]
 pub enum Font {
@@ -66,7 +66,7 @@ pub const FONTS: [Font; 9] = [
 
 /// Where a line sits inside the box it is drawn into.
 ///
-/// In *physical* terms: [`crate::unix::paint::Painter`] has already swapped
+/// In *physical* terms: [`crate::paint::widget::Painter`] has already swapped
 /// leading for trailing where the layout is mirrored, so a back end never has
 /// to reason about reading direction for placement. It still has to for
 /// *shaping* — an Arabic run inside the line is the text engine's business,

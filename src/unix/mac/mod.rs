@@ -5,14 +5,14 @@
 //!
 //! What is here is only what AppKit, Core Graphics, Core Text and Carbon are
 //! needed for. The widget's behaviour is in [`crate::unix::app`] and its
-//! drawing in [`crate::unix::paint`], both shared with the Linux front end;
+//! drawing in [`crate::paint::widget`], both shared with the Linux front end;
 //! everything portable is in `tpmplaner-core`.
 //!
 //! | | |
 //! |---|---|
 //! | [`objc`] | The slice of the Objective-C runtime and the frameworks |
 //! | [`window`] | The window, the classes, the event loop and the shell |
-//! | [`canvas`] | Core Graphics and Core Text behind [`crate::unix::canvas::Canvas`] |
+//! | [`canvas`] | Core Graphics and Core Text behind [`crate::paint::canvas::Canvas`] |
 //! | [`menu`] | The right-click menu as an `NSMenu` |
 //! | [`visuals`] | Appearance and accessibility settings |
 //! | [`hotkey`] | The global peek shortcut, through Carbon |

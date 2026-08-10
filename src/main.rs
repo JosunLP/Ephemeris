@@ -8,6 +8,11 @@
 //! one front end module, selected below, and reaches the rest of the binary
 //! only through the four functions this file calls.
 //!
+//! The one thing that is *not* platform-specific and not portable enough for
+//! the core is in [`paint`]: the widget's appearance, written once against a
+//! small drawing trait that each front end implements over Direct2D, Core
+//! Graphics or Cairo.
+//!
 //! **The front end contract.** A platform module provides exactly these:
 //!
 //! | | |
@@ -30,6 +35,10 @@
 //! application. The text front end on the other platforms needs one, so the
 //! attribute is conditional rather than unconditional.
 #![cfg_attr(windows, windows_subsystem = "windows")]
+
+/// What the widget looks like, and how it is drawn. Shared by every front end
+/// — see [`paint`].
+mod paint;
 
 #[cfg(windows)]
 mod win;

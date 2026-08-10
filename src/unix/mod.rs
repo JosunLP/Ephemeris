@@ -9,8 +9,8 @@
 //!
 //! | | |
 //! |---|---|
-//! | [`app`] | What the widget does — input, timers, commands. Shared. |
-//! | [`paint`] | What the widget looks like, against [`canvas::Canvas`]. Shared. |
+//! | [`app`] | What the widget does — input, timers, commands. Shared by both. |
+//! | [`crate::paint`] | What the widget looks like and how it is drawn. Shared with Windows. |
 //! | [`mac`] / [`linux`] | The window, the renderer behind that trait, and the event loop. |
 //!
 //! [`text`] is what runs when there is no display to open a window on: a
@@ -25,7 +25,6 @@
 
 mod app;
 mod autostart;
-mod canvas;
 #[cfg(target_os = "macos")]
 mod cf;
 mod host;
@@ -34,7 +33,6 @@ mod linux;
 mod locale;
 #[cfg(target_os = "macos")]
 mod mac;
-mod paint;
 mod secure;
 mod text;
 

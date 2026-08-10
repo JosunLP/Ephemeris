@@ -19,7 +19,7 @@
 //! Choosing a submenu replaces the list with its contents and puts a row back
 //! to the top level, which is one state variable and behaves the same on both.
 
-use crate::unix::canvas::{Align, Canvas, Font};
+use crate::paint::canvas::{Align, Canvas, Font};
 use tpmplaner_core::layout::Rect;
 use tpmplaner_core::menu::{Command, Entry, Item};
 use tpmplaner_core::theme::Palette;

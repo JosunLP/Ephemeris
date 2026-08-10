@@ -10,7 +10,7 @@
 
 #![allow(non_upper_case_globals)]
 
-use crate::unix::canvas::Canvas as _;
+use crate::paint::canvas::Canvas as _;
 use crate::unix::linux::canvas::Cairo;
 use crate::unix::linux::drawn_menu::{self, Picked, Row};
 use crate::unix::linux::ffi::*;

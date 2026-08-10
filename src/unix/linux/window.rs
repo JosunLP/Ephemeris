@@ -34,11 +34,12 @@
 // reader with `X.h` open has to be able to find them.
 #![allow(non_upper_case_globals)]
 
+use crate::paint::widget as paint;
 use crate::unix::app::{self, App, Cursor as AppCursor, Shell, WindowRect};
+use crate::unix::autostart;
 use crate::unix::linux::canvas::{Cairo, Look};
 use crate::unix::linux::ffi::*;
 use crate::unix::linux::{menu, visuals};
-use crate::unix::{autostart, paint};
 use std::ffi::{CString, c_int, c_long, c_uint, c_ulong, c_void};
 use std::sync::Arc;
 use std::time::{Duration, Instant};

@@ -6,7 +6,7 @@
 //! |---|---|
 //! | [`wayland`] | `wlr-layer-shell` where there is one, an ordinary window where there is not |
 //! | [`window`] | X11, with the EWMH hints that give the widget its behaviour |
-//! | [`canvas`] | Cairo and Pango behind [`crate::unix::canvas::Canvas`], shared by both |
+//! | [`canvas`] | Cairo and Pango behind [`crate::paint::canvas::Canvas`], shared by both |
 //! | [`drawn_menu`] | The right-click menu, which Linux has none of and the widget draws |
 //! | [`ffi`] / [`dl`] | Xlib, Cairo and Pango, opened at run time rather than linked |
 //! | [`visuals`] | Appearance through the XDG settings portal |

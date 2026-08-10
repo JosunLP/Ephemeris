@@ -245,6 +245,19 @@ All notable changes to this project are documented here. The format follows
   beside the hit regions: every front end draws from exactly those and nothing
   else, and a field added for one of them would otherwise be a field the others
   silently do not draw.
+- **There is one description of what the widget looks like.** The Direct2D
+  renderer drew the same picture from its own code — two thousand lines that
+  had to be kept in step with the shared drawing by hand, and which the porting
+  notes recorded as one description of the interface too many. It now
+  implements the same `Canvas` trait the other three do, and `src/paint` moved
+  out from under the Unix front end to sit beside all four. `render.rs` went
+  from 2083 lines to 550: the device chain, the fonts, and the three lines that
+  begin a frame, hand it over and present it.
+
+  The one visible change is the refresh symbol. It was `\u{E72C}` from Segoe
+  Fluent Icons and is now the same drawn arc and arrowhead the other platforms
+  use — which is what makes it the same widget rather than three that resemble
+  each other.
 - The right-click menu's rows, measurements and painting are shared by the two
   Linux back ends. Neither X11 nor Wayland has menus and the widget carries no
   toolkit, so it draws its own; what differs between them is the surface and

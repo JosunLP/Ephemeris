@@ -17,8 +17,12 @@ crates/core/          tpmplaner-core   — portable, no operating system calls
 
 src/                  tpmplaner       — the front ends
   main.rs             platform-neutral: picks a front end, and nothing else
+  paint/              what the widget looks like — every front end
+    canvas.rs         what a renderer has to be able to draw
+    widget.rs         the panel, drawn once against that trait
   win/                #[cfg(windows)]
-    render.rs         Direct2D / DirectWrite / DirectComposition
+    render.rs         the D3D/DXGI/DComp chain and the fonts
+    canvas.rs         Direct2D and DirectWrite behind paint::canvas::Canvas
     window.rs         Win32 window, input, timers, menu
     host_impl.rs      Host, LocaleBackend and Waker for Windows
     platform.rs       registry, monitors, clipboard, shortcuts
@@ -62,13 +66,13 @@ than threading conditionals through the program.
 
 **Two traits sit between the front ends and the shared code.** `Canvas` is what
 a renderer has to be able to draw — a rounded rectangle, a line, a circle, an
-arc, a gradient, a clip and two kinds of text. `Shell` is what the widget needs
-from a window system — geometry, a cursor, three timers, a menu, the clipboard
-and the appearance settings. Behind them, `paint.rs` and `app.rs` are written
-once and serve macOS and Linux alike; the Direct2D renderer predates both and
-still draws the same picture from its own code, which
-[Porting](/development/porting) records as the one description of the interface
-too many.
+arc, a gradient, a clip and two kinds of text; four implementations sit behind
+it, and `paint/widget.rs` above it is the only description of what the widget
+looks like. `Shell` is what the widget needs from a window system — geometry, a
+cursor, three timers, a menu, the clipboard and the appearance settings — and
+`app.rs` above it serves macOS and Linux; Windows still owns its own message
+pump, which [Porting](/development/porting) records as the remaining
+duplication and explains why it is a smaller one.
 
 ## The three traits
 
