@@ -118,8 +118,14 @@ pub trait Shell {
     fn set_anim_timer(&mut self, running: bool);
     /// Run the 100 ms timer that drives the undo countdown.
     fn set_undo_timer(&mut self, running: bool);
-    /// Bring the window to the front for a moment, or let it drop back.
-    fn set_peek(&mut self, peeking: bool);
+    /// Bring the window to the front for `for_at_most`, or let it drop back.
+    ///
+    /// The duration is passed rather than left to the widget because not every
+    /// loop can notice a deadline going by. A loop that polls — the X11 one —
+    /// ignores it and watches [`App::peek_deadline`] instead; one that only
+    /// wakes for events — the AppKit one — has to set a timer, and without the
+    /// duration it would have nothing to set it to.
+    fn set_peek(&mut self, for_at_most: Option<Duration>);
 
     /// Show the context menu at the pointer and block until it closes.
     fn show_menu(&mut self, entries: &[menu::Entry]) -> Option<menu::Command>;
@@ -612,7 +618,14 @@ impl App {
 
     // --- Timers -------------------------------------------------------------
 
-    /// The minute tick: the clock, the sync schedule and the settings check.
+    /// The minute tick: the clock, the sync schedule, the settings check and
+    /// the widget's own position.
+    ///
+    /// The position is checked here rather than from a notification because
+    /// the two window systems report a changed screen layout in entirely
+    /// different ways, and because a minute is a perfectly good response time
+    /// for a monitor being unplugged. It costs two calls to the window system
+    /// and only writes anything when the widget really is off every screen.
     pub fn on_minute(&mut self, shell: &mut dyn Shell) {
         let now = Local::now();
         if now.minute() != self.last_minute {
@@ -620,9 +633,13 @@ impl App {
             shell.request_redraw();
         }
         self.reload_config_if_changed(shell);
+        self.rescue_offscreen(shell);
         if now >= self.next_sync_at {
             self.request_sync(shell);
         }
+        // A backstop for the AppKit loop's one-shot timer and the X11 loop's
+        // poll deadline alike: whatever else went wrong, a peek does not
+        // outlive the minute it started in.
         if let Some(until) = self.peek_until
             && Instant::now() >= until
         {
@@ -644,14 +661,7 @@ impl App {
 
     /// The sync thread finished something.
     pub fn on_sync_done(&mut self, shell: &mut dyn Shell) {
-        let (status, sources) = {
-            let guard = sync::lock(&self.shared);
-            (
-                guard.status.clone(),
-                guard.calendars.len() + guard.tasklists.len(),
-            )
-        };
-        let _ = sources;
+        let status = sync::lock(&self.shared).status.clone();
         match status {
             Status::Syncing => {
                 self.anim.spinning = true;
@@ -689,12 +699,19 @@ impl App {
     // --- Peek ---------------------------------------------------------------
 
     /// The global shortcut: bring the widget forward for a few seconds.
+    ///
+    /// This is what makes the bottom-most position workable. The widget is
+    /// never in the way, which also means it is never visible while you work;
+    /// one key press is enough, and it sinks back on its own — no click, and no
+    /// change of focus.
     pub fn begin_peek(&mut self, shell: &mut dyn Shell) {
-        let seconds = self.config().peek_seconds.max(1) as u64;
+        let window = Duration::from_secs(self.config().peek_seconds.max(1) as u64);
         self.peeking = true;
-        self.peek_until = Some(Instant::now() + Duration::from_secs(seconds));
-        shell.set_peek(true);
-        shell.request_redraw();
+        self.peek_until = Some(Instant::now() + window);
+        shell.set_peek(Some(window));
+        // Fade in as for new data: the eye should be led to it.
+        self.anim.restart_reveal();
+        self.kick(shell);
     }
 
     pub fn end_peek(&mut self, shell: &mut dyn Shell) {
@@ -703,7 +720,8 @@ impl App {
         }
         self.peeking = false;
         self.peek_until = None;
-        shell.set_peek(false);
+        shell.set_peek(None);
+        shell.request_redraw();
     }
 
     /// When the peek is due to end, so a loop can wake up for it rather than
@@ -1119,7 +1137,10 @@ impl App {
         // Typography, density and the surface style live in the renderer's
         // fonts and in the metrics, so a change to any of them needs the
         // renderer rebuilt rather than merely repainted.
-        self.needs_rebuild = self.appearance.layout_differs(&appearance)
+        // `|=`, not `=`: an appearance change may already have asked for a
+        // rebuild that the next frame has not picked up yet, and a settings
+        // reload that happens to need none must not cancel it.
+        self.needs_rebuild |= self.appearance.layout_differs(&appearance)
             || metrics.shadow != self.metrics.shadow
             || loc.rtl != self.loc.rtl
             || loc.tag != self.loc.tag;

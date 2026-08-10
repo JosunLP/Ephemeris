@@ -100,7 +100,7 @@ fn new_menu() -> Id {
 
 fn add_item(menu: Id, item: &Item, target: Id, commands: &mut Vec<Command>) {
     commands.push(item.command);
-    let entry = add_item_raw(
+    add_item_raw(
         menu,
         &item.label,
         commands.len() as isize,
@@ -108,7 +108,6 @@ fn add_item(menu: Id, item: &Item, target: Id, commands: &mut Vec<Command>) {
         item.enabled,
         target,
     );
-    let _ = entry;
 }
 
 /// Appends one item and returns it.

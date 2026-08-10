@@ -65,6 +65,7 @@ pub struct Atoms {
     pub net_wm_window_type: Atom,
     pub net_wm_window_type_normal: Atom,
     pub net_wm_desktop: Atom,
+    pub net_wm_name: Atom,
     pub motif_wm_hints: Atom,
     pub clipboard: Atom,
     pub utf8_string: Atom,
@@ -90,6 +91,7 @@ impl Atoms {
             net_wm_window_type: intern("_NET_WM_WINDOW_TYPE"),
             net_wm_window_type_normal: intern("_NET_WM_WINDOW_TYPE_NORMAL"),
             net_wm_desktop: intern("_NET_WM_DESKTOP"),
+            net_wm_name: intern("_NET_WM_NAME"),
             motif_wm_hints: intern("_MOTIF_WM_HINTS"),
             clipboard: intern("CLIPBOARD"),
             utf8_string: intern("UTF8_STRING"),
@@ -145,7 +147,7 @@ pub struct X11Shell {
     screen: c_int,
     cursors: [Cursor; 5],
     current_cursor: usize,
-    anim_until: Option<Instant>,
+    animating: bool,
     undo_running: bool,
     next_minute: Instant,
     peeking: bool,
@@ -175,7 +177,7 @@ impl X11Shell {
     /// event.
     fn next_deadline(&self, peek: Option<Instant>) -> Option<Instant> {
         [
-            self.anim_until.map(|_| Instant::now() + app::ANIM_INTERVAL),
+            self.animating.then(|| Instant::now() + app::ANIM_INTERVAL),
             self.undo_running
                 .then(|| Instant::now() + app::UNDO_INTERVAL),
             Some(self.next_minute),
@@ -298,7 +300,7 @@ pub fn run() -> Result<(), String> {
         screen,
         cursors,
         current_cursor: 0,
-        anim_until: None,
+        animating: false,
         undo_running: false,
         next_minute: next_minute_boundary(),
         peeking: false,
@@ -394,7 +396,7 @@ fn event_loop(app: &mut App, shell: &mut X11Shell, canvas: &mut Cairo, wake: c_i
         }
 
         let now = Instant::now();
-        if shell.anim_until.is_some() {
+        if shell.animating {
             app.pump(shell);
             dirty = true;
         }
@@ -464,15 +466,27 @@ fn handle(app: &mut App, shell: &mut X11Shell, canvas: &mut Cairo, event: &XEven
             // The only key that reaches here is the grabbed one: nothing else
             // is selected for, and the widget never has the input focus.
             app.begin_peek(shell);
-            // Fade in as for new data: the eye should be led to it.
-            app.anim.restart_reveal();
-            app.kick(shell);
             true
         }
 
         SelectionRequest => {
             let e: &XSelectionRequestEvent = unsafe { event.as_ref() };
             shell.answer_selection(e);
+            false
+        }
+
+        // `WM_DELETE_WINDOW` is advertised in `WM_PROTOCOLS`, so it has to be
+        // honoured. The widget has no close button — it has no frame at all —
+        // but `wmctrl -c`, a session ending and a compositor tidying up all
+        // send this, and ignoring a protocol the window claims to speak is how
+        // a widget survives a logout it should not have.
+        ClientMessage => {
+            let e: &XClientMessageEvent = unsafe { event.as_ref() };
+            if e.message_type == shell.atoms.wm_protocols
+                && e.data[0] as Atom == shell.atoms.wm_delete_window
+            {
+                shell.quit();
+            }
             false
         }
 
@@ -502,11 +516,14 @@ fn draw(app: &mut App, shell: &mut X11Shell, canvas: &mut Cairo) {
             *canvas = fresh;
         }
     }
+    // Before the context, not after: `cairo_xlib_surface_set_size` is
+    // documented as something to do between drawing operations, and a `cairo_t`
+    // created against the old size has already sampled it.
+    let rect = shell.window_rect();
+    canvas.resize(rect.width, rect.height);
     if !canvas.begin() {
         return;
     }
-    let rect = shell.window_rect();
-    canvas.resize(rect.width, rect.height);
     let size = (rect.width as f32, rect.height as f32);
     let (metrics, palette, rtl) = (app.metrics, app.palette, app.loc.rtl);
     let appearance = app.appearance.clone();
@@ -548,8 +565,13 @@ fn set_window_properties(libs: &Libs, display: *mut Display, window: Window, ato
         );
     };
 
+    // `XA_WM_NAME` is 39; 31 is `XA_STRING`, which is the *type* here. Both
+    // are written: the old property for anything that still reads it, and
+    // `_NET_WM_NAME` as UTF-8, which is what every current window manager,
+    // taskbar and screen reader looks at first.
     let name = b"TPMPlaner";
-    change(31 /* XA_WM_NAME */, XA_STRING, 8, name, name.len());
+    change(XA_WM_NAME, XA_STRING, 8, name, name.len());
+    change(atoms.net_wm_name, atoms.utf8_string, 8, name, name.len());
 
     let kind = [atoms.net_wm_window_type_normal];
     change(
@@ -762,7 +784,7 @@ impl X11Shell {
     /// X11 has no clipboard: it has an owner who answers questions. This is
     /// the whole of the answer — the list of formats offered, and the text
     /// itself as UTF-8.
-    fn answer_selection(&self, request: &XSelectionRequestEvent) {
+    pub fn answer_selection(&self, request: &XSelectionRequestEvent) {
         let mut property = request.property;
         if property == 0 {
             // An obsolete client asking without naming a property; the
@@ -927,14 +949,17 @@ impl Shell for X11Shell {
     }
 
     fn set_anim_timer(&mut self, running: bool) {
-        self.anim_until = running.then(Instant::now);
+        self.animating = running;
     }
 
     fn set_undo_timer(&mut self, running: bool) {
         self.undo_running = running;
     }
 
-    fn set_peek(&mut self, peeking: bool) {
+    /// The poll loop watches [`App::peek_deadline`] itself, so the duration
+    /// is nothing this front end has to arrange a timer for.
+    fn set_peek(&mut self, for_at_most: Option<Duration>) {
+        let peeking = for_at_most.is_some();
         if peeking == self.peeking {
             return;
         }
@@ -1075,7 +1100,11 @@ fn next_minute_boundary() -> Instant {
 
 // --- Two more Xlib structures -----------------------------------------------
 
-/// Not in [`super::ffi`] because only this file sends one.
+/// `XA_WM_NAME` from `Xatom.h`. Not in [`super::ffi`] because nothing else
+/// names a window.
+const XA_WM_NAME: Atom = 39;
+
+/// Not in [`super::ffi`] because only this file sends or reads one.
 #[repr(C)]
 struct XClientMessageEvent {
     type_: c_int,

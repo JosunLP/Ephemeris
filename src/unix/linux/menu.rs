@@ -28,6 +28,7 @@ use crate::unix::linux::ffi::*;
 use crate::unix::linux::window::X11Shell;
 use std::ffi::{c_int, c_uint};
 use tpmplaner_core::layout::Rect;
+use tpmplaner_core::log;
 use tpmplaner_core::menu::{Command, Entry, Item};
 use tpmplaner_core::theme::Palette;
 
@@ -135,7 +136,12 @@ fn run_level(shell: &mut X11Shell, rows: &[Row]) -> Option<Picked> {
         &appearance,
         rtl,
     )?;
-    measure.begin();
+    // A context is what Pango lays out against. Without one every measurement
+    // is zero, which is not worth refusing to open a menu over — the rows
+    // simply come out at the minimum width.
+    if !measure.begin() {
+        log::warn("Could not measure the menu — falling back to a minimum width");
+    }
     let width = rows
         .iter()
         .fold(MIN_W, |acc, row| {
@@ -226,6 +232,19 @@ fn run_level(shell: &mut X11Shell, rows: &[Row]) -> Option<Picked> {
                         break;
                     }
                 }
+            }
+            // This loop has the display to itself while it runs, so anything
+            // addressed to the widget's own window arrives here instead of in
+            // the main loop. Almost all of it can wait — an `Expose` is made
+            // good by the redraw after the menu closes, and a `ConfigureNotify`
+            // by the size the next frame reads back from the server.
+            //
+            // A selection request cannot. Another application asking for the
+            // agenda this widget copied is *blocked* until it is answered or
+            // its own timeout runs out, and a menu can be open for a while.
+            SelectionRequest => {
+                let e: &XSelectionRequestEvent = unsafe { event.as_ref() };
+                shell.answer_selection(e);
             }
             _ => {}
         }

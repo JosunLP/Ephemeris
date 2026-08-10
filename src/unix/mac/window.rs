@@ -43,6 +43,7 @@ use crate::unix::{autostart, paint};
 use std::cell::RefCell;
 use std::ffi::c_void;
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 use tpmplaner_core::host::Waker;
 use tpmplaner_core::log;
 use tpmplaner_core::theme::SystemVisuals;
@@ -82,6 +83,8 @@ pub struct MacShell {
     anim_timer: Option<Obj>,
     undo_timer: Option<Obj>,
     minute_timer: Option<Obj>,
+    /// One-shot, armed for the length of a peek. See [`MacShell::set_peek`].
+    peek_timer: Option<Obj>,
     /// The level the window rests at, and the one it rises to for a peek.
     resting_level: isize,
     quit: bool,
@@ -203,6 +206,7 @@ pub fn run() -> Result<(), String> {
             anim_timer: None,
             undo_timer: None,
             minute_timer: None,
+            peek_timer: None,
             resting_level,
             quit: false,
             rebuild: false,
@@ -355,6 +359,7 @@ fn classes() -> &'static Classes {
         add_method(delegate, c"onAnim:", on_anim as *const c_void, c"v@:@");
         add_method(delegate, c"onUndo:", on_undo as *const c_void, c"v@:@");
         add_method(delegate, c"onMinute:", on_minute as *const c_void, c"v@:@");
+        add_method(delegate, c"onPeek:", on_peek as *const c_void, c"v@:@");
         add_method(delegate, c"onWake:", on_wake as *const c_void, c"v@:@");
         add_method(
             delegate,
@@ -487,6 +492,14 @@ extern "C" fn on_minute(_this: Id, _sel: Sel, _timer: Id) {
     });
 }
 
+/// The peek is over: back down to the desktop level.
+extern "C" fn on_peek(_this: Id, _sel: Sel, _timer: Id) {
+    with_state(|st| {
+        let (app, shell) = (&mut st.app, &mut st.shell);
+        app.end_peek(shell);
+    });
+}
+
 extern "C" fn on_wake(_this: Id, _sel: Sel, _arg: Id) {
     with_state(|st| {
         let (app, shell) = (&mut st.app, &mut st.shell);
@@ -508,9 +521,6 @@ pub fn on_hotkey() {
     with_state(|st| {
         let (app, shell) = (&mut st.app, &mut st.shell);
         app.begin_peek(shell);
-        // Fade in as for new data: the eye should be led to it.
-        app.anim.restart_reveal();
-        app.kick(shell);
     });
 }
 
@@ -683,22 +693,32 @@ impl Shell for MacShell {
         }
     }
 
-    fn set_peek(&mut self, peeking: bool) {
-        let level = if peeking {
-            NSFloatingWindowLevel
-        } else {
-            self.resting_level
+    /// Raises the window for the length of a peek, and arms the timer that
+    /// puts it back.
+    ///
+    /// The timer is what this loop needs and the X11 one does not: nothing
+    /// else wakes AppKit while the widget sits there, so without it the peek
+    /// would last until the next minute tick noticed it — up to fifty-five
+    /// seconds of a widget that is supposed to sink back after five.
+    fn set_peek(&mut self, for_at_most: Option<Duration>) {
+        invalidate(&mut self.peek_timer);
+        let level = match for_at_most {
+            Some(_) => NSFloatingWindowLevel,
+            None => self.resting_level,
         };
         unsafe {
             send1::<isize, ()>(self.window, c"setLevel:", level);
             // Without this the window keeps its old place in the order until
             // something else disturbs it.
-            let selector = if peeking {
+            let selector = if for_at_most.is_some() {
                 c"orderFront:"
             } else {
                 c"orderBack:"
             };
             send1::<Id, ()>(self.window, selector, nil);
+        }
+        if let Some(window) = for_at_most {
+            self.peek_timer = self.schedule(window.as_secs_f64(), c"onPeek:", false);
         }
     }
 
@@ -770,6 +790,7 @@ impl Shell for MacShell {
         invalidate(&mut self.anim_timer);
         invalidate(&mut self.undo_timer);
         invalidate(&mut self.minute_timer);
+        invalidate(&mut self.peek_timer);
         hotkey::remove();
         unsafe {
             send::<()>(self.window, c"close");

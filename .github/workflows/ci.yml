@@ -189,7 +189,9 @@ jobs:
           LANG: en_US.UTF-8
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends             xvfb libcairo2 libpango-1.0-0 libpangocairo-1.0-0 libx11-6
+          # `libglib2.0-0` for `g_object_unref`: Pango depends on it, but
+          # naming it makes the list match what `Libs::load` actually opens.
+          sudo apt-get install -y --no-install-recommends             xvfb libcairo2 libpango-1.0-0 libpangocairo-1.0-0 libx11-6 libglib2.0-0
           cargo build --locked
           log="$HOME/.config/tpmplaner/tpmplaner.log"
           rm -f "$log"
@@ -198,7 +200,9 @@ jobs:
           cat "$log"
           grep -q "Start — locale" "$log"
           grep -q "X11 session" "$log"
-          if grep -q "ERROR" "$log"; then
+          # The level column, not the word: an error message that happens to
+          # contain "ERROR" is not the same as a line logged at that level.
+          if grep -qE '^[0-9-]+ [0-9:]+ ERROR ' "$log"; then
             echo 'The widget logged an error while starting.'
             exit 1
           fi
