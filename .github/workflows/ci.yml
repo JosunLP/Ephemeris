@@ -45,6 +45,14 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all -- --check
 
+      # A Flatpak build has no network, so every crate is listed as a source
+      # with the checksum `Cargo.lock` already carries. That list is generated,
+      # which means it can go stale — silently, and only discovered by whoever
+      # next tries to build the Flatpak. The generator needs nothing but the
+      # lock file, so checking it costs a second here.
+      - name: Flatpak crate sources are in step with Cargo.lock
+        run: python3 packaging/linux/cargo-sources.py --check
+
   # The portable core must build and pass its tests on the non-Windows
   # systems too. This is what keeps the boundary honest: a stray platform call
   # in `tpmplaner-core` fails here rather than on somebody's laptop months
