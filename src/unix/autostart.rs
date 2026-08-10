@@ -223,49 +223,69 @@ fn register(_path: &std::path::Path) {}
 #[cfg(not(target_os = "macos"))]
 fn unregister(_path: &std::path::Path) {}
 
-#[cfg(test)]
+/// The two platforms write entirely different files, so they get entirely
+/// different tests. `cfg!` at run time would not do: the branch that is false
+/// is still *compiled*, and it names functions that do not exist on the other
+/// system — which is a compile error there rather than a skipped assertion.
+#[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
 
-    /// The entry has to be readable by the thing that reads it, and both
-    /// formats have a required header.
+    /// `launchd` reads this. A missing header or a missing `RunAtLoad` is an
+    /// entry that does nothing at login and says nothing about it.
     #[test]
-    fn the_entry_is_in_the_format_its_reader_expects() {
+    fn the_launch_agent_is_in_the_format_launchd_expects() {
         let text = entry_contents(std::path::Path::new("/opt/tpmplaner/tpmplaner"));
-        assert!(text.contains("/opt/tpmplaner/tpmplaner"), "{text}");
-        if cfg!(target_os = "macos") {
-            assert!(text.starts_with("<?xml"), "{text}");
-            assert!(text.contains("RunAtLoad"), "{text}");
-            // A widget quit from its own menu must stay quit.
-            assert!(!text.contains("KeepAlive"), "{text}");
-        } else {
-            assert!(text.starts_with("[Desktop Entry]"), "{text}");
-            assert!(text.contains("Type=Application"), "{text}");
-        }
+        assert!(text.starts_with("<?xml"), "{text}");
+        assert!(
+            text.contains("<string>/opt/tpmplaner/tpmplaner</string>"),
+            "{text}"
+        );
+        assert!(text.contains("RunAtLoad"), "{text}");
+        // A widget quit from its own menu must stay quit until the next login,
+        // not be restarted a second later.
+        assert!(!text.contains("KeepAlive"), "{text}");
     }
 
-    /// A home directory with a space in it is ordinary on both systems, and an
-    /// entry that breaks on one is an entry that fails at login with nothing
-    /// said.
+    /// A home directory with a space in it is ordinary, and one with an
+    /// ampersand in it is legal — the second would break the XML.
+    #[test]
+    fn a_path_is_escaped_for_xml_and_nothing_else() {
+        let text = entry_contents(std::path::Path::new("/home/a b/My Apps/tpmplaner"));
+        assert!(
+            text.contains("<string>/home/a b/My Apps/tpmplaner</string>"),
+            "{text}"
+        );
+        assert_eq!(xml_escaped("a & b < c"), "a &amp; b &lt; c");
+    }
+}
+
+#[cfg(all(test, not(target_os = "macos")))]
+mod tests {
+    use super::*;
+
+    /// The session reads this at login. Without the two required keys it is
+    /// skipped in silence.
+    #[test]
+    fn the_desktop_entry_is_in_the_format_the_session_expects() {
+        let text = entry_contents(std::path::Path::new("/opt/tpmplaner/tpmplaner"));
+        assert!(text.starts_with("[Desktop Entry]"), "{text}");
+        assert!(text.contains("Type=Application"), "{text}");
+        assert!(text.contains("Exec=/opt/tpmplaner/tpmplaner\n"), "{text}");
+    }
+
+    /// `Exec` is a command line, not a path: the specification gives `"` and
+    /// `\` a meaning inside it, and a home directory containing either would
+    /// otherwise produce an entry that fails at login with nothing said.
     #[test]
     fn a_path_that_needs_quoting_gets_it() {
         let text = entry_contents(std::path::Path::new("/home/a b/My Apps/tpmplaner"));
-        if cfg!(target_os = "macos") {
-            // XML needs no quoting for a space, only for its own three
-            // characters.
-            assert!(text.contains("<string>/home/a b/My Apps/tpmplaner</string>"));
-            #[cfg(target_os = "macos")]
-            assert_eq!(xml_escaped("a & b < c"), "a &amp; b &lt; c");
-        } else {
-            assert!(
-                text.contains("Exec=\"/home/a b/My Apps/tpmplaner\"\n"),
-                "{text}"
-            );
-            // And a quote or a backslash in the path is escaped rather than
-            // ending the argument early.
-            assert_eq!(exec_quoted(r#"/home/a"b\c"#), r#""/home/a\"b\\c""#);
-            // A plain path is left exactly as it is.
-            assert_eq!(exec_quoted("/usr/bin/tpmplaner"), "/usr/bin/tpmplaner");
-        }
+        assert!(
+            text.contains("Exec=\"/home/a b/My Apps/tpmplaner\"\n"),
+            "{text}"
+        );
+        assert_eq!(exec_quoted(r#"/home/a"b\c"#), r#""/home/a\"b\\c""#);
+        // A plain path is left exactly as it is.
+        assert_eq!(exec_quoted("/usr/bin/tpmplaner"), "/usr/bin/tpmplaner");
     }
 }

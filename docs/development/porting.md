@@ -225,3 +225,18 @@ observed, and the same was already true of Direct2D: a broken drawing call is a
 compile error, not something a headless machine notices. What CI does prove
 there is that it compiles, links against the frameworks, and passes every test
 that does not need a screen.
+
+`scripts/check-macos.sh` brings the compile half of that forward for anyone
+working on the port without a Mac. `cargo check` and `cargo clippy` never link,
+so the AppKit symbols do not have to exist — two edits to a scratch copy of the
+tree (compile `src/unix/mac` unconditionally, and change `kind = "framework"`
+to `kind = "dylib"`, which rustc rejects off Apple targets) are enough to make
+a Linux host type-check the whole macOS front end under the same lints CI
+denies warnings for. It runs three passes, because `send_rect` has an `aarch64`
+branch an x86_64 build never looks at and three modules have macOS halves a
+Linux host never compiles, and it injects a deliberate type error first and
+refuses to report success unless the compiler catches it — a green harness that
+checks nothing is the easy mistake here.
+
+What it cannot prove is that the selectors exist, that the message signatures
+match AppKit's, or that anything appears on screen. Those need a Mac.

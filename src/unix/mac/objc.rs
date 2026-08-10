@@ -71,7 +71,6 @@ impl NSRect {
 }
 
 #[link(name = "AppKit", kind = "framework")]
-#[link(name = "Carbon", kind = "framework")]
 unsafe extern "C" {
     pub fn objc_getClass(name: *const c_char) -> Class;
     pub fn objc_allocateClassPair(superclass: Class, name: *const c_char, extra: usize) -> Class;
@@ -576,6 +575,7 @@ pub const shiftKey: u32 = 0x0200;
 pub const optionKey: u32 = 0x0800;
 pub const controlKey: u32 = 0x1000;
 
+#[link(name = "Carbon", kind = "framework")]
 unsafe extern "C" {
     pub fn GetApplicationEventTarget() -> EventTargetRef;
     pub fn InstallEventHandler(

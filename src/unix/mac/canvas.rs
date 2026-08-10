@@ -85,7 +85,7 @@ impl Cg {
                 Font::Footer => (m.fs_footer, false),
                 Font::Tooltip => (m.fs_row, false),
             };
-            let font = make_font(&custom.font_family, size as f64, heavy);
+            let font = make_font(custom.font_family(), size as f64, heavy);
             ellipses.push(make_line("…", font.0, rtl));
             fonts.push(font);
         }
@@ -190,7 +190,11 @@ impl Cg {
     /// keeping every one alive for a widget that redraws at 60 Hz would grow
     /// without bound. What *is* cached is the measurement, which is what the
     /// column widths ask for many times per frame.
-    fn line(&self, s: &str, role: Font) -> Option<Line> {
+    ///
+    /// Not called `line`: [`Canvas`] has a method of that name and the trait's
+    /// would win here, because its `&mut self` matches the receiver a step
+    /// earlier than this one's `&self` does.
+    fn laid_out(&self, s: &str, role: Font) -> Option<Line> {
         Line::new(s, self.font(role), self.rtl)
     }
 }
@@ -201,17 +205,13 @@ impl Canvas for Cg {
         // rectangle goes back to nothing before the panel is drawn over it.
         // Without this, the previous frame shows through wherever the new one
         // is translucent.
+        // Larger than any window, and centred on the origin so it covers
+        // the view whatever the clip happens to be. `CGContextClearRect`
+        // takes a rectangle rather than "everything", and asking the view for
+        // its bounds here would mean a message send per frame for a number
+        // that only has to be big enough.
         unsafe {
-            let mut bounds = NSRect::default();
-            bounds.size = NSSize {
-                width: 1.0e6,
-                height: 1.0e6,
-            };
-            bounds.origin = NSPoint {
-                x: -5.0e5,
-                y: -5.0e5,
-            };
-            CGContextClearRect(self.ctx, bounds);
+            CGContextClearRect(self.ctx, NSRect::new(-5.0e5, -5.0e5, 1.0e6, 1.0e6));
         }
     }
 
@@ -405,7 +405,7 @@ impl Canvas for Cg {
     }
 
     fn text(&mut self, s: &str, font: Font, align: Align, r: Rect, color: u32, alpha: f32) {
-        let Some(line) = self.line(s, font) else {
+        let Some(line) = self.laid_out(s, font) else {
             return;
         };
         let available = r.width().max(0.0);
@@ -501,7 +501,7 @@ impl Canvas for Cg {
         if let Some(w) = self.widths.get(&key) {
             return *w;
         }
-        let width = self.line(s, font).map(|l| l.width()).unwrap_or(0.0);
+        let width = self.laid_out(s, font).map(|l| l.width()).unwrap_or(0.0);
         self.widths.insert(key, width);
         width
     }
@@ -648,10 +648,8 @@ fn paragraph_style(rtl: bool) -> Option<cf::Owned> {
 }
 
 /// The font for one role.
-fn make_font(family: &str, size: f64, heavy: bool) -> OwnedFont {
-    let base = Some(family)
-        .map(str::trim)
-        .filter(|f| !f.is_empty() && !f.eq_ignore_ascii_case("system"))
+fn make_font(family: Option<&str>, size: f64, heavy: bool) -> OwnedFont {
+    let base = family
         .and_then(|f| {
             let name = cf::string(f)?;
             let raw = unsafe { CTFontCreateWithName(name.as_raw(), size, std::ptr::null()) };
