@@ -654,7 +654,9 @@ impl App {
         // A backstop for the AppKit loop's one-shot timer and the polling
         // loops' deadline alike: whatever else went wrong, a peek does not
         // outlive the minute it started in.
-        if self.peek_deadline().is_some_and(|until| Instant::now() >= until) {
+        if let Some(until) = self.peek_deadline()
+            && Instant::now() >= until
+        {
             self.end_peek(shell);
         }
     }
