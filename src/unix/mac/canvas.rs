@@ -415,6 +415,9 @@ impl Canvas for Cg {
         let drawn = line.truncated(available, self.ellipses[font as usize]);
         let width = drawn.width();
 
+        // Placed from the measured width rather than through the paragraph
+        // style's alignment: that one aligns within a *frame*, and a `CTLine`
+        // has none — it is drawn at wherever the text position says.
         let x = match align {
             Align::Left => r.left,
             Align::Center => r.center_x() - width * 0.5,

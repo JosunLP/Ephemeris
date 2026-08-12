@@ -121,8 +121,8 @@ pub trait Shell {
     /// Bring the window to the front for `for_at_most`, or let it drop back.
     ///
     /// The duration is passed rather than left to the widget because not every
-    /// loop can notice a deadline going by. A loop that polls — the X11 one —
-    /// ignores it and watches [`App::peek_deadline`] instead; one that only
+    /// loop can notice a deadline going by. A loop that polls — the X11 and
+    /// Wayland ones — ignore it and watch [`App::peek_deadline`]; one that only
     /// wakes for events — the AppKit one — has to set a timer, and without the
     /// duration it would have nothing to set it to.
     fn set_peek(&mut self, for_at_most: Option<Duration>);
@@ -651,12 +651,10 @@ impl App {
         if now >= self.next_sync_at {
             self.request_sync(shell);
         }
-        // A backstop for the AppKit loop's one-shot timer and the X11 loop's
-        // poll deadline alike: whatever else went wrong, a peek does not
+        // A backstop for the AppKit loop's one-shot timer and the polling
+        // loops' deadline alike: whatever else went wrong, a peek does not
         // outlive the minute it started in.
-        if let Some(until) = self.peek_until
-            && Instant::now() >= until
-        {
+        if self.peek_deadline().is_some_and(|until| Instant::now() >= until) {
             self.end_peek(shell);
         }
     }
@@ -738,8 +736,12 @@ impl App {
         shell.request_redraw();
     }
 
-    /// When the peek is due to end, so a loop can wake up for it rather than
-    /// polling.
+    /// When the peek is due to end.
+    ///
+    /// A loop that polls — the X11 and Wayland ones — waits until this rather
+    /// than waking on a timer; the AppKit loop, which only wakes for events,
+    /// sets a one-shot timer in [`Shell::set_peek`] instead. Both are backed
+    /// up by [`Self::on_minute`], which is what reads this on every platform.
     pub fn peek_deadline(&self) -> Option<Instant> {
         self.peek_until
     }

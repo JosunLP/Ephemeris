@@ -307,9 +307,6 @@ pub const NSTrackingMouseMoved: usize = 0x02;
 pub const NSTrackingActiveAlways: usize = 0x80;
 pub const NSTrackingInVisibleRect: usize = 0x200;
 
-/// `NSEventTypeApplicationDefined`, used to wake the loop from the sync
-/// thread.
-pub const NSEventTypeApplicationDefined: usize = 15;
 /// `NSEventMaskAny`.
 pub const NSEventMaskAny: u64 = u64::MAX;
 
@@ -514,15 +511,8 @@ pub struct CTParagraphStyleSetting {
     pub value: *const c_void,
 }
 
-/// `kCTParagraphStyleSpecifierAlignment`.
-pub const kCTParagraphStyleSpecifierAlignment: u32 = 0;
 /// `kCTParagraphStyleSpecifierBaseWritingDirection`.
 pub const kCTParagraphStyleSpecifierBaseWritingDirection: u32 = 13;
-
-/// `CTTextAlignment`.
-pub const kCTTextAlignmentLeft: u8 = 0;
-pub const kCTTextAlignmentRight: u8 = 1;
-pub const kCTTextAlignmentCenter: u8 = 2;
 
 /// `CTWritingDirection`. Needed for the base direction of a paragraph: an
 /// Arabic layout has to start its lines at the right even when the text in
