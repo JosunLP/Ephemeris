@@ -148,6 +148,44 @@ pub fn hit_point(panel: &Panel, rtl: bool, x: f32, y: f32) -> (f32, f32) {
     (if rtl { panel.mirror_axis - x } else { x }, y)
 }
 
+/// A task that has been ticked off but not yet sent, and can still be undone.
+#[derive(Debug, Clone, Copy)]
+pub struct UndoView<'a> {
+    pub task_id: &'a str,
+    /// 1.0 right after the click, 0.0 when it is sent.
+    pub remaining: f32,
+}
+
+/// Everything a renderer needs for one frame.
+///
+/// Here rather than beside a renderer because every front end draws from
+/// exactly this and nothing else. A field added for one of them would
+/// otherwise be a field the others silently do not draw.
+pub struct Frame<'a> {
+    pub agenda: &'a Agenda,
+    pub loc: &'a Locale,
+    pub status: &'a crate::sync::Status,
+    pub anim: &'a crate::anim::Animations,
+    pub now: DateTime<Local>,
+    pub hover: Option<Hit>,
+    pub sync_minutes: u32,
+    pub opacity: f32,
+    pub show_past_events: bool,
+    pub undo: Option<UndoView<'a>>,
+    /// A syntax error in `config.json`; outranks the sync status line.
+    pub config_error: Option<&'a str>,
+    /// Version of a newer release, if the daily check found one.
+    pub update: Option<&'a str>,
+}
+
+/// What a frame turned out to need, which is what bounds the scrolling.
+#[derive(Debug, Clone, Copy)]
+pub struct FrameResult {
+    /// Total height of the content — the basis for limiting the scroll.
+    pub content_height: f32,
+    pub viewport_height: f32,
+}
+
 /// A list row bleeds this far past the content columns on each side, so the
 /// hover highlight reaches under the text rather than stopping flush with it.
 pub const ROW_BLEED: f32 = 5.0;

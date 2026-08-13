@@ -23,6 +23,11 @@ which several Windows editors add — is tolerated.
   "width": 380.0,
   "height": 620.0,
 
+  // Pin the widget where it is: no dragging, no resizing, and "Reset
+  // position" greyed out. Everything else keeps working. The context menu
+  // toggles this, which is the easier way.
+  "locked": false,
+
   // How often to fetch, in minutes.
   "sync_minutes": 30,
 
@@ -46,7 +51,8 @@ which several Windows editors add — is tolerated.
   // Panel opacity, 0.15 to 1.0. Ignored when the system has transparency off.
   "opacity": 0.82,
   // "none" draws the widget's own shadow and rounded corners.
-  // "acrylic" uses the Windows system backdrop instead.
+  // "acrylic" uses the Windows system backdrop instead; it has no effect on
+  // macOS or Linux, where the widget always draws its own glass.
   "backdrop": "none",
   // Extra scaling on top of the monitor DPI, 0.6 to 3.0.
   "scale": 1.0,
@@ -62,7 +68,9 @@ which several Windows editors add — is tolerated.
   // look" below. "system" means nothing is customised.
   "appearance": "system",
 
-  // Shortcut that brings the widget forward. Empty disables it.
+  // Shortcut that brings the widget forward. Empty disables it. Write the
+  // Command or Super key as "Cmd", "Win" or "Super" — all three are read the
+  // same way, so one settings file works on every machine.
   "peek_hotkey": "Ctrl+Alt+Shift+K",
   // How long it stays in front, 1 to 60 seconds.
   "peek_seconds": 5,
@@ -74,6 +82,11 @@ which several Windows editors add — is tolerated.
 
 Out-of-range values are clamped rather than rejected, so a typo cannot produce
 a zero-sized window or a storm of requests.
+
+The file lives in `%APPDATA%\TPMPlaner` on Windows, `~/Library/Application
+Support/TPMPlaner` on macOS and `$XDG_CONFIG_HOME/tpmplaner` — usually
+`~/.config/tpmplaner` — on Linux. Right-click → **Open data folder** goes there
+whichever it is.
 
 ## Language
 

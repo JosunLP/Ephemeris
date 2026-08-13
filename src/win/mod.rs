@@ -2,11 +2,16 @@
 // Copyright (C) 2026 TPMPlaner contributors
 //! The Windows front end: Direct2D renderer, Win32 window, Windows host.
 //!
+//! What the widget *looks* like is not here — that is [`crate::paint`], shared
+//! with the macOS and Linux front ends. [`canvas`] is Direct2D's implementation
+//! of the trait it draws against, and [`render`] is the device chain behind it.
+//!
 //! Everything below this module may call the operating system freely. What it
 //! exposes upwards is the small set of functions in [`crate`]'s front end
 //! contract — install the host, take the single-instance lock, run, report a
 //! fatal error — so `main` never learns which platform it was built for.
 
+mod canvas;
 mod host_impl;
 mod platform;
 mod render;
@@ -40,6 +45,16 @@ pub fn run() -> Result<(), String> {
     // A failure building the graphics chain is the one thing that can
     // genuinely stop the widget.
     window::run().map_err(|e| e.to_string())
+}
+
+/// Windows has no need of this: the widget registers its own global shortcut
+/// with `RegisterHotKey`, so there is nobody to ask.
+///
+/// It is part of the front end contract because Linux does need it — a Wayland
+/// compositor owns every keybinding — and a contract with a hole in it for one
+/// platform is not one `main` can call without knowing which platform it is on.
+pub fn peek_running_instance() -> bool {
+    false
 }
 
 /// The widget has no console, so a message box is the only way to say

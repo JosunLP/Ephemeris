@@ -69,8 +69,15 @@ rest of the day, then what is due.
 
 ## Honest limitations
 
-Version 1.0 runs on **Windows only**. The portable core already builds and
-tests on macOS and Linux — the interface layer is what still has to follow.
+The widget runs on Windows, macOS and Linux, on Wayland and on X11. The one
+place it cannot do what it is for is **GNOME**: Mutter does not implement
+`wlr-layer-shell` and has said it will not, so there the widget is an ordinary
+window that sits among yours rather than behind them. It says so in its log
+rather than pretending. Everything else works there.
+
+The macOS application bundle is **not notarised** — that needs a paid developer
+account — so Gatekeeper refuses it on first launch until you right-click and
+choose Open.
 
 The Microsoft and CalDAV back ends were built against the documented APIs and
 their response formats are covered by tests, but they have not yet been run

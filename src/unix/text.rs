@@ -1,22 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 TPMPlaner contributors
-//! A text front end for macOS and Linux.
+//! The agenda, printed — for where there is no desktop to draw it on.
 //!
-//! Not the widget. The widget is a window that sits below every other window
-//! and above the desktop, and that window has not been written for these
-//! platforms yet — see `docs/development/porting.md`.
+//! The widget itself is a window, and a container, a continuous-integration
+//! runner and an SSH session have none. Rather than refusing to start, the
+//! front end falls back to this: the whole portable half runs — the settings,
+//! the locale, the same sync thread the window drives — and the agenda the
+//! renderer would have drawn is written to standard output instead.
 //!
-//! What this is instead: the whole portable half, running. It loads the
-//! settings, resolves the locale, drives the same sync thread the Windows
-//! front end drives, and prints the agenda the renderer would have drawn. Two
-//! reasons that is worth having rather than a stub that exits:
+//! `TPMPLANER_TEXT=1` asks for it on a machine that *does* have a desktop,
+//! which makes it a usable command in its own right and is how continuous
+//! integration exercises this path on a runner with a display.
 //!
-//! * It makes the split verifiable. Continuous integration builds and runs
-//!   this on Ubuntu and macOS, so "the core is portable" stops being a claim
-//!   about the crate that compiles and becomes one about the program that
-//!   runs.
-//! * It gives whoever writes the real front end a working data path to render
-//!   against, and something to compare against when the drawing is wrong.
+//! It also keeps the boundary verifiable: "the core is portable" stops being a
+//! claim about a crate that compiles and becomes one about a program that
+//! runs.
 //!
 //! **The columns here are not authoritative.** The first column is padded with
 //! `{:>9}`, which counts `char`s. A terminal counts columns, and the two part
@@ -24,7 +22,8 @@
 //! cover: `終日` is two `char`s and four columns wide, and `Locale::label`
 //! prefixes a right-to-left string with a directional mark that costs a `char`
 //! and no width at all. The data is right; the ragged edge is this module's,
-//! not the renderer's, and it is not worth a width table in a stopgap.
+//! not the renderer's, and it is not worth a width table for output that has
+//! no columns to keep.
 
 use std::io::{self, Write};
 use std::sync::mpsc::{RecvTimeoutError, SyncSender, sync_channel};
@@ -68,8 +67,8 @@ fn print_everything(out: &mut impl Write) -> io::Result<()> {
     writeln!(out, "TPMPlaner {}", env!("CARGO_PKG_VERSION"))?;
     writeln!(
         out,
-        "The graphical widget is not ported to this platform yet. This is the \
-         portable core: same settings, same calendars, same agenda, printed."
+        "No desktop session here, so the agenda is printed rather than drawn. \
+         Same settings, same calendars, same agenda."
     )?;
     writeln!(out, "Settings: {}", config::config_path().display())?;
     if let Some(e) = &config_error {

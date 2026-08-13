@@ -16,12 +16,25 @@ Teams and CalDAV side by side, in one small window that stays out of the way.
 
 ## Install
 
+**Windows**
+
 ```powershell
 irm https://github.com/JosunLP/TPMPlaner/releases/latest/download/install.ps1 | iex
 ```
 
 No administrator rights, nothing outside your user profile, and the SHA-256
 checksum is verified before anything is written to disk.
+
+**macOS and Linux** — a tarball, because neither has an equivalent of that
+one-liner that would not fight the package manager:
+
+```bash
+# Pick the archive for your system from the releases page, then:
+tar -xzf tpmplaner-<target>.tar.gz
+./tpmplaner-<target>/tpmplaner
+```
+
+Right-click the widget and choose *Start at login* to keep it there.
 
 Then connect a calendar — see [connecting accounts](https://josunlp.github.io/TPMPlaner/guide/accounts).
 
@@ -49,6 +62,9 @@ Then connect a calendar — see [connecting accounts](https://josunlp.github.io/
   following the system is not enough, colours, typography, surface style,
   density and per-calendar colours can be set outright, in `config.json` or in
   a theme file you can share.
+- **Stays where you put it.** Right-click and lock it: no more nudging it out
+  of place while reaching for something on the desktop. Everything else goes on
+  working, and the same entry unlocks it.
 
 ## What it costs
 
@@ -64,23 +80,31 @@ There is no render loop: the widget draws when something changes and then stops.
 
 | | Status |
 |---|---|
-| **Windows 10/11** | Supported |
-| **macOS, Linux** | The binary builds and runs, and prints today's agenda; the window is not ported yet |
+| **Windows 10/11** | Direct2D in a Win32 window |
+| **macOS 11+** | Core Graphics in an `NSWindow`, credentials in the Keychain |
+| **Linux, Wayland** | `wlr-layer-shell` on Sway, Hyprland, river, Wayfire and KDE Plasma. On GNOME, which has no layer shell, an ordinary window — and the widget says so in its log rather than pretending |
+| **Linux, X11** | The EWMH hints that give the widget its behaviour, on any window manager |
+
+Cairo and Pango draw both Linux back ends; only the surface differs. Anywhere
+with no desktop — a container, a server over SSH, a CI runner — the agenda is
+printed instead of drawn rather than the widget refusing to start, and
+`TPMPLANER_TEXT=1` asks for that on a machine that does have one.
+
+On Wayland the compositor owns every keyboard shortcut, so bind one to
+`tpmplaner --peek` — `bindsym $mod+k exec tpmplaner --peek` in Sway — and it
+brings the running widget forward exactly as the built-in shortcut does
+elsewhere.
 
 `tpmplaner-core` contains the model, the calendar back ends, synchronisation,
 localisation and the palette, and calls no operating system API at all — CI
-enforces that on Ubuntu, macOS and Windows. What remains platform-specific is
-the renderer and the window.
+enforces that on Ubuntu, macOS and Windows. Above it, the widget's layout, its
+behaviour and its drawing are each written once; only the window, the renderer
+behind a small `Canvas` trait, and the event loop are per platform.
+[The porting notes](https://josunlp.github.io/TPMPlaner/development/porting)
+are the decision record: what was chosen on each system, why, and what is left.
 
-On macOS and Linux everything except the window is in place: the data
-directory, opening a browser, cryptographic random bytes, dates and times from
-the platform's own locale database, and credentials in the Keychain or the
-Secret Service. Running the binary prints the agenda the widget would have
-drawn, so the portable half is exercised end to end on both rather than merely
-type checked. The window is what is left, and
-[the porting notes](https://josunlp.github.io/TPMPlaner/development/porting)
-say which API it needs on each system and which decisions have already been
-made.
+On Linux the desktop's libraries are opened at run time rather than linked, so
+the tarball is a single file with no development package to install first.
 
 ## Build from source
 
@@ -91,11 +115,13 @@ cargo test --workspace
 cargo run --release
 ```
 
-Rust 1.90 or newer; MSVC build tools on Windows. To see the interface without
-connecting an account:
+Rust 1.90 or newer, and MSVC build tools on Windows. Nothing else on macOS or
+Linux: Xlib, Cairo and Pango are opened at run time, so there is no development
+package to install to build it. To see the interface without connecting an
+account:
 
-```powershell
-$env:TPMPLANER_DEMO = "1"; cargo run --release
+```bash
+TPMPLANER_DEMO=1 cargo run --release        # PowerShell: $env:TPMPLANER_DEMO = "1"
 ```
 
 ## Documentation
@@ -112,8 +138,8 @@ $env:TPMPLANER_DEMO = "1"; cargo run --release
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). The largest open piece is the
-cross-platform interface; adding an interface language is a catalogue
+See [CONTRIBUTING.md](CONTRIBUTING.md). The largest open piece is a native
+Wayland back end through `wlr-layer-shell`; adding an interface language is a catalogue
 constant with its plural rule, a `catalog_for` arm and an entry in `CATALOGS`
 — the steps are written out in
 [CONTRIBUTING.md](CONTRIBUTING.md#adding-an-interface-language).

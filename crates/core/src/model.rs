@@ -348,9 +348,78 @@ pub fn local_day_start(day: NaiveDate) -> DateTime<Local> {
     }
 }
 
+/// Today's agenda as plain text, for pasting into a message.
+///
+/// Here rather than in a front end because "copy agenda" is one of the menu
+/// commands and all three offer it. What differs per platform is putting the
+/// string on the clipboard, which is one call; what does not is the shape of
+/// the text, and three copies of that would be three subtly different
+/// agendas.
+///
+/// Deliberately plain: no colour, no box drawing and no alignment padding. It
+/// is pasted into a chat window or an email, where a proportional font makes
+/// columns meaningless — and where `終日` counting as two characters and four
+/// columns would misalign them anyway.
+pub fn agenda_as_text(agenda: &Agenda, loc: &crate::i18n::Locale) -> String {
+    let c = loc.cat;
+    let today = agenda.day.unwrap_or_else(|| Local::now().date_naive());
+    let mut out = format!("{} — {}\n", loc.weekday(today), loc.date_line(today));
+
+    out.push_str(&format!("\n{}\n", c.section_events));
+    if agenda.events.is_empty() {
+        out.push_str(&format!("  {}\n", c.no_events));
+    }
+    for ev in &agenda.events {
+        let when = if ev.all_day {
+            c.all_day.to_string()
+        } else {
+            match (ev.start, ev.end) {
+                (Some(s), Some(e)) => format!("{}-{}", loc.time(s), loc.time(e)),
+                (Some(s), None) => loc.time(s),
+                _ => String::new(),
+            }
+        };
+        match &ev.location {
+            Some(place) => out.push_str(&format!("  {when}  {}  ({place})\n", ev.title)),
+            None => out.push_str(&format!("  {when}  {}\n", ev.title)),
+        }
+    }
+
+    out.push_str(&format!("\n{}\n", c.section_tasks));
+    if agenda.tasks.is_empty() {
+        out.push_str(&format!("  {}\n", c.no_tasks));
+    }
+    for task in &agenda.tasks {
+        let due = match task.due {
+            Some(d) if d == today => c.today.to_string(),
+            Some(d) => loc.day_month(d),
+            None => "-".into(),
+        };
+        // Subtasks indented, as they are on screen.
+        let indent = "  ".repeat(task.depth as usize + 1);
+        out.push_str(&format!("{indent}[ ] {due}  {}\n", task.title));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The copied text is the one thing a user takes out of the widget and
+    /// into somewhere else, so an empty day has to read as an empty day rather
+    /// than as a broken export.
+    #[test]
+    fn the_copied_agenda_names_both_sections_even_when_empty() {
+        let loc = crate::i18n::Locale::resolve("en-GB");
+        let text = agenda_as_text(&Agenda::default(), &loc);
+        assert!(text.contains(loc.cat.section_events), "{text}");
+        assert!(text.contains(loc.cat.section_tasks), "{text}");
+        assert!(text.contains(loc.cat.no_events), "{text}");
+        assert!(text.contains(loc.cat.no_tasks), "{text}");
+        // No placeholder may survive into text somebody pastes.
+        assert!(!text.contains("{}"), "{text}");
+    }
 
     #[test]
     fn due_date_is_not_timezone_shifted() {

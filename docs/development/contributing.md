@@ -13,7 +13,15 @@ cargo test --workspace
 cargo run --release
 ```
 
-Rust 1.90 or newer, plus the MSVC build tools on Windows.
+Rust 1.90 or newer, plus the MSVC build tools on Windows. Nothing beyond a C
+toolchain on macOS or Linux: Xlib, Cairo and Pango are opened at run time
+rather than linked.
+
+Working on the macOS front end without a Mac? `scripts/check-macos.sh`
+type-checks `src/unix/mac` from a Linux or WSL machine under the same lints
+continuous integration denies warnings for — `cargo check` never links, so the
+AppKit symbols do not have to exist. What it cannot tell you is in
+[Porting](/development/porting).
 
 Preview the interface without connecting an account:
 
@@ -37,9 +45,11 @@ builds the core on Ubuntu, macOS and Windows, so a violation fails the build.
 
 ## What is wanted
 
-The largest open piece is the **cross-platform interface**. The portable core
-already builds and tests on all three systems; `render.rs` and `window.rs` are
-what remains Windows-only.
+The largest open piece is a **native Wayland back end** through
+`wlr-layer-shell`: the protocol spoken directly against a `libwayland-client`
+opened the way Xlib already is, and a Cairo image surface behind a
+shared-memory buffer. Everything above the `Canvas` and `Shell` traits already
+works and would not change. See [Porting](/development/porting).
 
 Also useful, and smaller:
 
@@ -49,7 +59,9 @@ Also useful, and smaller:
   for what a translation pull request should contain: who checked the text, the
   right plural variant, and strings that fit the column.
 - Verification of the Microsoft and CalDAV back ends against real servers
-- Keychain and Secret Service backends for `Host::protect`
+- The Direct2D renderer moved onto the `Canvas` trait, so there is one
+  description of the interface rather than two
+- A Flatpak, and a signed and notarised macOS `.app`
 
 ## House style
 

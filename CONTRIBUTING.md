@@ -18,7 +18,16 @@ To see the interface without connecting a calendar account:
 TPMPLANER_DEMO=1 cargo run --release      # PowerShell: $env:TPMPLANER_DEMO=1
 ```
 
-Rust 1.90 or newer. On Windows you also need the MSVC build tools.
+Rust 1.90 or newer. On Windows you also need the MSVC build tools; on macOS and
+Linux nothing beyond a C toolchain, because Xlib, Cairo and Pango are opened at
+run time rather than linked.
+
+**Working on the macOS front end without a Mac.** `scripts/check-macos.sh`
+type-checks `src/unix/mac` from a Linux or WSL machine and runs the same lints
+continuous integration denies warnings for. `cargo check` never links, so the
+AppKit symbols do not have to exist. It cannot tell you whether a selector is
+spelled correctly or whether anything appears on screen — see
+[Porting](/development/porting) for exactly what it does and does not prove.
 
 ## The one architectural rule
 

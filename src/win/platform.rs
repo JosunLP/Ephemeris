@@ -407,47 +407,37 @@ pub fn set_clipboard_text(owner: HWND, text: &str) -> bool {
     }
 }
 
-/// Splits `"Win+Alt+K"` into modifiers and a virtual key code.
+/// The Win32 numbers for a parsed combination.
 ///
-/// Deliberately frugal: letters, digits and F1 to F12 cover what anyone
-/// realistically picks as a shortcut.
-pub fn parse_hotkey(spec: &str) -> Option<(u32, u32)> {
+/// Reading `"Win+Alt+K"` is [`tpmplaner_core::hotkey`]'s job and the same on
+/// every platform; only these numbers are Windows'.
+pub fn hotkey_codes(combo: tpmplaner_core::hotkey::Combination) -> (u32, u32) {
+    use tpmplaner_core::hotkey::Key;
     use windows::Win32::UI::Input::KeyboardAndMouse::{MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN};
-    let mut modifiers = 0u32;
-    let mut key = None;
 
-    for part in spec.split('+').map(str::trim).filter(|p| !p.is_empty()) {
-        match part.to_ascii_lowercase().as_str() {
-            "win" | "windows" => modifiers |= MOD_WIN.0,
-            "alt" => modifiers |= MOD_ALT.0,
-            "ctrl" | "control" | "strg" => modifiers |= MOD_CONTROL.0,
-            "shift" | "umschalt" => modifiers |= MOD_SHIFT.0,
-            other => {
-                let bytes = other.as_bytes();
-                key = if bytes.len() == 1 && bytes[0].is_ascii_alphanumeric() {
-                    // The virtual key codes for A-Z and 0-9 are the ASCII
-                    // values of the upper case letters and digits.
-                    Some(bytes[0].to_ascii_uppercase() as u32)
-                } else if let Some(number) = other.strip_prefix('f') {
-                    // F1 to F12 run consecutively from VK_F1 (0x70).
-                    number
-                        .parse::<u32>()
-                        .ok()
-                        .filter(|n| (1..=12).contains(n))
-                        .map(|n| 0x6F + n)
-                } else {
-                    None
-                };
-            }
-        }
+    let mut modifiers = 0u32;
+    if combo.ctrl {
+        modifiers |= MOD_CONTROL.0;
     }
-    // Without a modifier this would be a global single key, taken away from
-    // every other application.
-    match (modifiers, key) {
-        (0, _) => None,
-        (_, Some(k)) => Some((modifiers, k)),
-        _ => None,
+    if combo.alt {
+        modifiers |= MOD_ALT.0;
     }
+    if combo.shift {
+        modifiers |= MOD_SHIFT.0;
+    }
+    if combo.meta {
+        modifiers |= MOD_WIN.0;
+    }
+
+    let key = match combo.key {
+        // The virtual key codes for A-Z and 0-9 are the ASCII values of the
+        // upper case letters and the digits.
+        Key::Letter(c) => c as u32,
+        Key::Digit(d) => (b'0' + d) as u32,
+        // F1 to F12 run consecutively from VK_F1 (0x70).
+        Key::Function(n) => 0x6F + n as u32,
+    };
+    (modifiers, key)
 }
 
 /// Takes the single instance lock. `false` means a widget is already running.
@@ -525,7 +515,7 @@ pub fn trim_working_set() {
 #[cfg(test)]
 mod tests {
     use super::{
-        autostart_enabled, autostart_enabled_in, open_clipboard, parse_hotkey, set_autostart,
+        autostart_enabled, autostart_enabled_in, hotkey_codes, open_clipboard, set_autostart,
         set_autostart_in, set_clipboard_text, wide,
     };
     use windows::Win32::Foundation::HWND;
@@ -774,39 +764,28 @@ mod tests {
         assert_eq!(read_back, sample);
     }
 
-    /// Virtual key codes: 'K' is 0x4B, F5 is 0x74.
+    /// Virtual key codes: 'K' is 0x4B, F5 is 0x74, '7' is 0x37.
+    ///
+    /// Reading the specification is tested in `tpmplaner_core::hotkey`; what
+    /// is Windows' own — and what a wrong table would break silently, by
+    /// registering some other key — is this mapping.
     #[test]
-    fn common_combinations_parse() {
-        let (m, k) = parse_hotkey("Win+Alt+K").unwrap();
+    fn a_parsed_combination_becomes_the_right_win32_numbers() {
+        use windows::Win32::UI::Input::KeyboardAndMouse::{
+            MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN,
+        };
+
+        let (m, k) = hotkey_codes(tpmplaner_core::hotkey::parse("Win+Alt+K").unwrap());
         assert_eq!(k, 0x4B);
-        assert_ne!(m, 0);
+        assert_eq!(m, MOD_WIN.0 | MOD_ALT.0);
 
-        assert_eq!(parse_hotkey("Ctrl+Shift+F5").unwrap().1, 0x74);
-        assert_eq!(parse_hotkey("strg+umschalt+7").unwrap().1, 0x37);
-    }
+        let (m, k) = hotkey_codes(tpmplaner_core::hotkey::parse("Ctrl+Shift+F5").unwrap());
+        assert_eq!(k, 0x74);
+        assert_eq!(m, MOD_CONTROL.0 | MOD_SHIFT.0);
 
-    #[test]
-    fn spelling_and_spacing_are_forgiving() {
-        assert_eq!(parse_hotkey("win + alt + k"), parse_hotkey("WIN+ALT+K"));
         assert_eq!(
-            parse_hotkey("Control+Shift+P"),
-            parse_hotkey("ctrl+shift+p")
+            hotkey_codes(tpmplaner_core::hotkey::parse("strg+umschalt+7").unwrap()).1,
+            0x37
         );
-    }
-
-    #[test]
-    fn a_bare_key_is_rejected() {
-        // Without a modifier the key would be claimed globally and no longer
-        // available to any other application.
-        assert_eq!(parse_hotkey("K"), None);
-        assert_eq!(parse_hotkey("F5"), None);
-    }
-
-    #[test]
-    fn nonsense_is_rejected_instead_of_guessed() {
-        assert_eq!(parse_hotkey(""), None);
-        assert_eq!(parse_hotkey("Win+Alt"), None);
-        assert_eq!(parse_hotkey("Win+Alt+F13"), None);
-        assert_eq!(parse_hotkey("Win+Alt+Ente"), None);
     }
 }
