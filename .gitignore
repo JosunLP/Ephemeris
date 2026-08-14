@@ -1,3 +1,7 @@
 /target
 # flatpak-builder puts its ccache here whatever `--state-dir` says.
 /.flatpak-builder
+# The Flathub submission, generated from a tag by
+# `packaging/linux/flathub-manifest.py` and copied into the flathub repository.
+# Derived from a revision of this one, so there is nothing to keep here.
+/packaging/linux/flathub

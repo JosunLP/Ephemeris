@@ -267,12 +267,18 @@ non-variadic type never sets it.
   icon is in place — `assets/logo.svg`, installed into
   `hicolor/scalable/apps` under the application ID, which is what
   `appstreamcli compose` looks for at the end of every build and used to stop
-  on. What Flathub still wants is at least one screenshot. That is a linter
-  error rather than a build failure, so the build itself now completes, but
-  the submission does not pass without it — and screenshots have to be
-  mirrored to `dl.flathub.org` rather than served from anywhere else. The
-  manifest the submission is made with also has to name a tag and a commit
-  rather than build from a directory.
+  on. The submission manifest is settled too: it is generated rather than
+  kept, by `packaging/linux/flathub-manifest.py --tag vX.Y.Z`, which replaces
+  the directory source with the tag and the commit it points at, checks the
+  crate list against the lock file *at that revision*, and writes the pair to
+  copy into the Flathub repository. Generating it from the pinned commit
+  rather than from the working tree is the point: there is one manifest to
+  edit, and nothing that can drift away from what was submitted.
+
+  What Flathub still wants is at least one screenshot. That is a linter error
+  rather than a build failure, so the build itself now completes, but the
+  submission does not pass without it — and screenshots have to be mirrored to
+  `dl.flathub.org` rather than served from anywhere else.
 - **The Windows window on `Shell`**, so all four front ends share the
   behaviour as well as the drawing. Less pressing than the renderer was: a
   Win32 message pump and a `poll` loop really are different things, and what a

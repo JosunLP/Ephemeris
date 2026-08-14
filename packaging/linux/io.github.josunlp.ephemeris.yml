@@ -18,6 +18,16 @@
 #         manifest packaging/linux/io.github.josunlp.ephemeris.yml
 #     flatpak run --command=flatpak-builder-lint org.flatpak.Builder repo repo
 #
+# This manifest builds from a directory, which is what you want locally and is
+# rejected for a submission — Flathub builds a tag and the commit it points at.
+# The manifest to submit is generated from this one rather than kept beside it:
+#
+#     python3 packaging/linux/flathub-manifest.py --tag v1.1.0
+#
+# which writes `packaging/linux/flathub/` for copying into a checkout of
+# `flathub/io.github.josunlp.ephemeris`. Everything below is shared between the
+# two, so this is the only file to edit.
+#
 # The runtime already carries everything the widget opens at run time — Xlib,
 # Cairo, Pango and libwayland all come with the freedesktop platform — so this
 # builds one binary and nothing else.

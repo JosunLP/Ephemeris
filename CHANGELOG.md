@@ -57,6 +57,18 @@ All notable changes to this project are documented here. The format follows
   and that every generated file is present and structurally what the script
   writes, down to the `.ico` directory and the `.icns` chunk lengths.
 
+- **The Flathub submission manifest is generated rather than kept.**
+  `packaging/linux/io.github.josunlp.ephemeris.yml` builds from a directory,
+  which is right for building a checkout in front of you and is rejected for a
+  submission: Flathub builds a tag and the commit that tag points at.
+  `packaging/linux/flathub-manifest.py --tag vX.Y.Z` writes that manifest,
+  together with the `cargo-sources.json` belonging to the same revision, for
+  copying into the Flathub repository. It reads the manifest as it stands at
+  the pinned commit rather than in the working tree, so what is submitted is
+  what that revision actually builds, and it refuses a revision whose crate
+  list has gone out of step with its own `Cargo.lock` — a Flatpak build has no
+  network to discover that with.
+
 ### Fixed
 
 - **Ticking a task off no longer takes another account's task with it.** The
