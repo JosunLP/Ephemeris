@@ -1,1 +1,3 @@
 /target
+# flatpak-builder puts its ccache here whatever `--state-dir` says.
+/.flatpak-builder

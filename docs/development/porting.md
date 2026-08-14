@@ -262,8 +262,16 @@ non-variadic type never sets it.
 - **A notarised macOS `.app`**, which needs a paid developer account. The
   release builds an unsigned bundle, which Gatekeeper refuses on first launch
   until the user right-clicks and chooses Open.
-- **Publishing the Flatpak.** The manifest is in `packaging/linux`; what
-  remains is `cargo-sources.json` and a Flathub submission.
+- **Publishing the Flatpak.** The manifest is in `packaging/linux` and
+  `cargo-sources.json` is generated and checked against the lock file. What
+  Flathub still wants is an application icon and at least one screenshot,
+  and neither exists yet. The icon is not a review note but a build failure:
+  `appstreamcli compose` runs at the end of every build and stops on
+  `icon-not-found`, so nothing is exported without one. Screenshots are a
+  linter error rather than a build one, and they have to be mirrored to
+  `dl.flathub.org` rather than served from anywhere else. The manifest the
+  submission is made with also has to name a tag and a commit rather than
+  build from a directory.
 - **The Windows window on `Shell`**, so all four front ends share the
   behaviour as well as the drawing. Less pressing than the renderer was: a
   Win32 message pump and a `poll` loop really are different things, and what a
