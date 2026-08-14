@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright (C) 2026 TPMPlaner contributors
+# Copyright (C) 2026 Ephemeris contributors
 #
-# Installs TPMPlaner for real, checks what landed on disk and in the registry,
+# Installs Ephemeris for real, checks what landed on disk and in the registry,
 # then uninstalls it and checks that nothing was left behind.
 #
 # This exists because v1.0.0 shipped an installer that could not install: the
@@ -30,17 +30,17 @@ param(
     [Parameter(Mandatory)][string]$UninstallScript,
     # Which release the installer should pull its binary from.
     [string]$Version = 'latest',
-    [string]$Repo = 'JosunLP/TPMPlaner'
+    [string]$Repo = 'JosunLP/Ephemeris'
 )
 
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$installDir = Join-Path $env:LOCALAPPDATA 'Programs\TPMPlaner'
-$exePath = Join-Path $installDir 'tpmplaner.exe'
-$shortcut = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\TPMPlaner.lnk'
+$installDir = Join-Path $env:LOCALAPPDATA 'Programs\Ephemeris'
+$exePath = Join-Path $installDir 'ephemeris.exe'
+$shortcut = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Ephemeris.lnk'
 $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
-$uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\TPMPlaner'
+$uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Ephemeris'
 
 $failures = @()
 function Check($description, [scriptblock]$condition) {
@@ -145,7 +145,7 @@ $base = if ($Version -eq 'latest') {
     "https://github.com/$Repo/releases/download/$Version"
 }
 $sumFile = Join-Path ([IO.Path]::GetTempPath()) "smoke-$arch.sha256"
-Invoke-WebRequest -Uri "$base/tpmplaner-$arch.exe.sha256" -OutFile $sumFile -UseBasicParsing
+Invoke-WebRequest -Uri "$base/ephemeris-$arch.exe.sha256" -OutFile $sumFile -UseBasicParsing
 $published = ((Get-Content $sumFile -Raw) -split '\s+')[0].ToLower()
 
 Check 'the published checksum is a sha256' { $published -match '^[0-9a-f]{64}$' }
@@ -158,13 +158,13 @@ Check 'a Start menu shortcut points at the binary' {
     (New-Object -ComObject WScript.Shell).CreateShortcut($shortcut).TargetPath -eq $exePath
 }
 Check 'the uninstall entry is registered' {
-    (Get-ItemProperty -Path $uninstallKey -ErrorAction SilentlyContinue).DisplayName -eq 'TPMPlaner'
+    (Get-ItemProperty -Path $uninstallKey -ErrorAction SilentlyContinue).DisplayName -eq 'Ephemeris'
 }
 Check 'the uninstaller was placed next to the binary' {
     Test-Path (Join-Path $installDir 'uninstall.ps1')
 }
 Check '-NoAutostart left no autostart entry' {
-    $null -eq (Get-ItemProperty -Path $runKey -Name TPMPlaner -ErrorAction SilentlyContinue)
+    $null -eq (Get-ItemProperty -Path $runKey -Name Ephemeris -ErrorAction SilentlyContinue)
 }
 # Creating the key belongs to the autostart branch alone, so -NoAutostart must
 # not leave one behind either.
@@ -183,7 +183,7 @@ Check 'the binary still matches the published checksum' {
 # The Run key was removed above, so this is also the check that the installer
 # creates it rather than failing on a profile that never had one.
 Check 'autostart is registered in a Run key the installer created' {
-    (Get-ItemProperty -Path $runKey -Name TPMPlaner -ErrorAction SilentlyContinue).TPMPlaner `
+    (Get-ItemProperty -Path $runKey -Name Ephemeris -ErrorAction SilentlyContinue).Ephemeris `
         -eq "`"$exePath`""
 }
 
@@ -197,7 +197,7 @@ Write-Host "==> Uninstalling" -ForegroundColor Cyan
 Check 'the program directory is gone' { -not (Test-Path $installDir) }
 Check 'the Start menu shortcut is gone' { -not (Test-Path $shortcut) }
 Check 'the autostart entry is gone' {
-    $null -eq (Get-ItemProperty -Path $runKey -Name TPMPlaner -ErrorAction SilentlyContinue)
+    $null -eq (Get-ItemProperty -Path $runKey -Name Ephemeris -ErrorAction SilentlyContinue)
 }
 Check 'the uninstall entry is gone' { -not (Test-Path $uninstallKey) }
 

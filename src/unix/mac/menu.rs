@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! The right-click menu as an `NSMenu`.
 //!
-//! What the menu contains is decided in [`tpmplaner_core::menu`]; this puts it
+//! What the menu contains is decided in [`ephemeris_core::menu`]; this puts it
 //! on screen. `-popUpMenuPositioningItem:atLocation:inView:` runs its own
 //! tracking loop and does not return until the menu closes, which is exactly
 //! the blocking behaviour [`crate::unix::app::Shell::show_menu`] is defined to
@@ -14,8 +14,8 @@
 //! while the tracking loop still owns the stack.
 
 use crate::unix::mac::objc::*;
+use ephemeris_core::menu::{Command, Entry, Item};
 use std::cell::Cell;
-use tpmplaner_core::menu::{Command, Entry, Item};
 
 thread_local! {
     /// The tag of the item last chosen, if the menu has been closed by

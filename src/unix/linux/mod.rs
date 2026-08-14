@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! The Linux front end: one binary, two window systems.
 //!
 //! | | |
@@ -31,7 +31,7 @@ pub mod visuals;
 pub mod wayland;
 pub mod window;
 
-use tpmplaner_core::log;
+use ephemeris_core::log;
 
 /// Is there anything here to open a window on?
 pub fn has_display() -> bool {
@@ -73,7 +73,7 @@ pub fn open_path(path: &std::path::Path) {
             // Reaped so the widget does not collect zombies over days of
             // uptime, for the reason set out in `unix::host::open_url`.
             let _ = std::thread::Builder::new()
-                .name("tpmplaner-open".into())
+                .name("ephemeris-open".into())
                 .spawn(move || {
                     let _ = child.wait();
                 });
@@ -110,7 +110,7 @@ fn socket_name() -> String {
     let display = std::env::var("WAYLAND_DISPLAY")
         .or_else(|_| std::env::var("DISPLAY"))
         .unwrap_or_default();
-    format!("tpmplaner-{display}")
+    format!("ephemeris-{display}")
 }
 
 /// Only one widget per display, and a way to talk to it.
@@ -122,7 +122,7 @@ fn socket_name() -> String {
 ///
 /// It is also the channel `--peek` uses. That is not an extra: Wayland gives
 /// no client the power to grab a key, so a compositor keybinding running
-/// `tpmplaner --peek` is the only way the shortcut can work there, and this is
+/// `ephemeris --peek` is the only way the shortcut can work there, and this is
 /// what it talks to.
 pub fn acquire_single_instance() -> bool {
     use std::os::linux::net::SocketAddrExt;

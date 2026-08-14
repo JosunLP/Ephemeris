@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! The system's appearance and accessibility settings, read from macOS.
 //!
-//! [`tpmplaner_core::theme::SystemVisuals`] is what the palette is resolved
+//! [`ephemeris_core::theme::SystemVisuals`] is what the palette is resolved
 //! against, and every one of its five values has an answer here:
 //!
 //! | | |
@@ -26,7 +26,7 @@
 //! behaviour of the field, not a gap.
 
 use crate::unix::mac::objc::*;
-use tpmplaner_core::theme::SystemVisuals;
+use ephemeris_core::theme::SystemVisuals;
 
 pub fn read() -> SystemVisuals {
     let _pool = Pool::new();

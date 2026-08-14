@@ -1,16 +1,20 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 
-# TPMPlaner
+<p align="center">
+  <img src="assets/logo.png" alt="" width="128" height="128">
+</p>
+
+# Ephemeris
 
 **Today's calendar events and due tasks on your desktop.** Google, Outlook,
 Teams and CalDAV side by side, in one small window that stays out of the way.
 
-[![CI](https://github.com/JosunLP/TPMPlaner/actions/workflows/ci.yml/badge.svg)](https://github.com/JosunLP/TPMPlaner/actions/workflows/ci.yml)
+[![CI](https://github.com/JosunLP/Ephemeris/actions/workflows/ci.yml/badge.svg)](https://github.com/JosunLP/Ephemeris/actions/workflows/ci.yml)
 [![License: GPL v3](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
-[![Documentation](https://img.shields.io/badge/docs-josunlp.github.io-brightgreen)](https://josunlp.github.io/TPMPlaner/)
+[![Documentation](https://img.shields.io/badge/docs-josunlp.github.io-brightgreen)](https://josunlp.github.io/Ephemeris/)
 
-📖 **[Documentation](https://josunlp.github.io/TPMPlaner/)** ·
-⬇️ **[Releases](https://github.com/JosunLP/TPMPlaner/releases/latest)**
+📖 **[Documentation](https://josunlp.github.io/Ephemeris/)** ·
+⬇️ **[Releases](https://github.com/JosunLP/Ephemeris/releases/latest)**
 
 ---
 
@@ -19,7 +23,7 @@ Teams and CalDAV side by side, in one small window that stays out of the way.
 **Windows**
 
 ```powershell
-irm https://github.com/JosunLP/TPMPlaner/releases/latest/download/install.ps1 | iex
+irm https://github.com/JosunLP/Ephemeris/releases/latest/download/install.ps1 | iex
 ```
 
 No administrator rights, nothing outside your user profile, and the SHA-256
@@ -30,13 +34,13 @@ one-liner that would not fight the package manager:
 
 ```bash
 # Pick the archive for your system from the releases page, then:
-tar -xzf tpmplaner-<target>.tar.gz
-./tpmplaner-<target>/tpmplaner
+tar -xzf ephemeris-<target>.tar.gz
+./ephemeris-<target>/ephemeris
 ```
 
 Right-click the widget and choose *Start at login* to keep it there.
 
-Then connect a calendar — see [connecting accounts](https://josunlp.github.io/TPMPlaner/guide/accounts).
+Then connect a calendar — see [connecting accounts](https://josunlp.github.io/Ephemeris/guide/accounts).
 
 ## What it does
 
@@ -88,19 +92,19 @@ There is no render loop: the widget draws when something changes and then stops.
 Cairo and Pango draw both Linux back ends; only the surface differs. Anywhere
 with no desktop — a container, a server over SSH, a CI runner — the agenda is
 printed instead of drawn rather than the widget refusing to start, and
-`TPMPLANER_TEXT=1` asks for that on a machine that does have one.
+`EPHEMERIS_TEXT=1` asks for that on a machine that does have one.
 
 On Wayland the compositor owns every keyboard shortcut, so bind one to
-`tpmplaner --peek` — `bindsym $mod+k exec tpmplaner --peek` in Sway — and it
+`ephemeris --peek` — `bindsym $mod+k exec ephemeris --peek` in Sway — and it
 brings the running widget forward exactly as the built-in shortcut does
 elsewhere.
 
-`tpmplaner-core` contains the model, the calendar back ends, synchronisation,
+`ephemeris-core` contains the model, the calendar back ends, synchronisation,
 localisation and the palette, and calls no operating system API at all — CI
 enforces that on Ubuntu, macOS and Windows. Above it, the widget's layout, its
 behaviour and its drawing are each written once; only the window, the renderer
 behind a small `Canvas` trait, and the event loop are per platform.
-[The porting notes](https://josunlp.github.io/TPMPlaner/development/porting)
+[The porting notes](https://josunlp.github.io/Ephemeris/development/porting)
 are the decision record: what was chosen on each system, why, and what is left.
 
 On Linux the desktop's libraries are opened at run time rather than linked, so
@@ -109,8 +113,8 @@ the tarball is a single file with no development package to install first.
 ## Build from source
 
 ```bash
-git clone https://github.com/JosunLP/TPMPlaner
-cd TPMPlaner
+git clone https://github.com/JosunLP/Ephemeris
+cd Ephemeris
 cargo test --workspace
 cargo run --release
 ```
@@ -121,20 +125,20 @@ package to install to build it. To see the interface without connecting an
 account:
 
 ```bash
-TPMPLANER_DEMO=1 cargo run --release        # PowerShell: $env:TPMPLANER_DEMO = "1"
+EPHEMERIS_DEMO=1 cargo run --release        # PowerShell: $env:EPHEMERIS_DEMO = "1"
 ```
 
 ## Documentation
 
 | | |
 |---|---|
-| [Getting started](https://josunlp.github.io/TPMPlaner/guide/getting-started) | Install and first run |
-| [Connecting accounts](https://josunlp.github.io/TPMPlaner/guide/accounts) | Google, Microsoft and CalDAV setup |
-| [Using the widget](https://josunlp.github.io/TPMPlaner/guide/using) | What the panel shows and how to drive it |
-| [Configuration](https://josunlp.github.io/TPMPlaner/guide/configuration) | Every setting |
-| [Troubleshooting](https://josunlp.github.io/TPMPlaner/guide/troubleshooting) | When something is wrong |
-| [Architecture](https://josunlp.github.io/TPMPlaner/development/architecture) | How it is put together, and the traps |
-| [Porting](https://josunlp.github.io/TPMPlaner/development/porting) | What macOS and Linux still need, and what was decided |
+| [Getting started](https://josunlp.github.io/Ephemeris/guide/getting-started) | Install and first run |
+| [Connecting accounts](https://josunlp.github.io/Ephemeris/guide/accounts) | Google, Microsoft and CalDAV setup |
+| [Using the widget](https://josunlp.github.io/Ephemeris/guide/using) | What the panel shows and how to drive it |
+| [Configuration](https://josunlp.github.io/Ephemeris/guide/configuration) | Every setting |
+| [Troubleshooting](https://josunlp.github.io/Ephemeris/guide/troubleshooting) | When something is wrong |
+| [Architecture](https://josunlp.github.io/Ephemeris/development/architecture) | How it is put together, and the traps |
+| [Porting](https://josunlp.github.io/Ephemeris/development/porting) | What macOS and Linux still need, and what was decided |
 
 ## Contributing
 
@@ -150,7 +154,7 @@ The Microsoft Graph and CalDAV back ends were written against the documented
 APIs and their response formats are covered by tests, but they have not been
 run against every live tenant and server configuration. If something is off,
 the log will say what — please
-[open an issue](https://github.com/JosunLP/TPMPlaner/issues/new/choose).
+[open an issue](https://github.com/JosunLP/Ephemeris/issues/new/choose).
 
 ## Licence
 

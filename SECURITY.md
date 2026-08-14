@@ -3,7 +3,7 @@
 ## Reporting a vulnerability
 
 Please report security issues privately through
-[GitHub's advisory form](https://github.com/JosunLP/TPMPlaner/security/advisories/new)
+[GitHub's advisory form](https://github.com/JosunLP/Ephemeris/security/advisories/new)
 rather than opening a public issue.
 
 Expect an acknowledgement within a few days. If the issue is confirmed, a fix
@@ -11,7 +11,7 @@ and an advisory follow; you will be credited unless you prefer otherwise.
 
 ## What the widget holds
 
-TPMPlaner stores credentials for the calendar accounts you connect. Understanding
+Ephemeris stores credentials for the calendar accounts you connect. Understanding
 what is where matters for judging impact:
 
 | Item                      | Where                                         | Protection                                                       |

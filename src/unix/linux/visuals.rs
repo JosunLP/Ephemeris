@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! The desktop's appearance settings, read through the XDG settings portal.
 //!
 //! `org.freedesktop.appearance` is the one interface that now covers both
@@ -23,11 +23,11 @@
 //! is the gap `docs/development/porting.md` predicted, and it is a gap in the
 //! portal rather than in this.
 
+use ephemeris_core::log;
+use ephemeris_core::theme::SystemVisuals;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use tpmplaner_core::log;
-use tpmplaner_core::theme::SystemVisuals;
 
 /// Raised by the watcher thread, taken by the event loop.
 static CHANGED: AtomicBool = AtomicBool::new(false);
@@ -78,7 +78,7 @@ pub fn watch(wake: std::os::fd::RawFd) {
     };
 
     let started = std::thread::Builder::new()
-        .name("tpmplaner-appearance".into())
+        .name("ephemeris-appearance".into())
         .spawn(move || {
             for line in BufReader::new(stdout).lines().map_while(Result::ok) {
                 if !line.contains("org.freedesktop.appearance") {

@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! The macOS front end: an `NSWindow` at the desktop level with a Core
 //! Graphics renderer.
 //!
 //! What is here is only what AppKit, Core Graphics, Core Text and Carbon are
 //! needed for. The widget's behaviour is in [`crate::unix::app`] and its
 //! drawing in [`crate::paint::widget`], both shared with the Linux front end;
-//! everything portable is in `tpmplaner-core`.
+//! everything portable is in `ephemeris-core`.
 //!
 //! | | |
 //! |---|---|

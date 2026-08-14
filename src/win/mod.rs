@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! The Windows front end: Direct2D renderer, Win32 window, Windows host.
 //!
 //! What the widget *looks* like is not here — that is [`crate::paint`], shared
@@ -18,8 +18,8 @@ mod render;
 mod secure;
 mod window;
 
+use ephemeris_core::host;
 use std::sync::Arc;
-use tpmplaner_core::host;
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
 use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MESSAGEBOX_STYLE, MessageBoxW};
 use windows::core::PCWSTR;
@@ -28,6 +28,12 @@ use windows::core::PCWSTR;
 pub fn install_host() {
     host::set_host(Arc::new(host_impl::WindowsHost));
     host::set_locale_backend(Arc::new(host_impl::WindowsLocale));
+}
+
+/// Moves the autostart entry across the program's rename. See
+/// [`crate::migrate`].
+pub fn migrate_autostart_entry() {
+    platform::migrate_autostart_entry();
 }
 
 /// A second start would put an identical window on top of the first; both
@@ -61,7 +67,7 @@ pub fn peek_running_instance() -> bool {
 /// anything at all before exiting.
 pub fn fatal(message: &str) {
     let text = platform::wide(message);
-    let title = platform::wide("TPMPlaner");
+    let title = platform::wide("Ephemeris");
     unsafe {
         MessageBoxW(
             None,

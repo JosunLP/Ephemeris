@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! The slice of the Objective-C runtime, AppKit, Core Graphics and Core Text
 //! the macOS front end needs.
 //!

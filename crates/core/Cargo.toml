@@ -1,10 +1,10 @@
 [package]
-name = "tpmplaner-core"
+name = "ephemeris-core"
 version = "1.1.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
-description = "Portable core of TPMPlaner: calendar providers, sync, model, localisation"
-repository = "https://github.com/JosunLP/TPMPlaner"
+description = "Portable core of Ephemeris: calendar providers, sync, model, localisation"
+repository = "https://github.com/JosunLP/Ephemeris"
 rust-version = "1.90"
 
 [dependencies]

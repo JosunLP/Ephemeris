@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! What the right-click menu contains, decided once for every platform.
 //!
 //! The menu is the widget's only settings dialogue, so its contents are a

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! The agenda, printed — for where there is no desktop to draw it on.
 //!
 //! The widget itself is a window, and a container, a continuous-integration
@@ -8,7 +8,7 @@
 //! the locale, the same sync thread the window drives — and the agenda the
 //! renderer would have drawn is written to standard output instead.
 //!
-//! `TPMPLANER_TEXT=1` asks for it on a machine that *does* have a desktop,
+//! `EPHEMERIS_TEXT=1` asks for it on a machine that *does* have a desktop,
 //! which makes it a usable command in its own right and is how continuous
 //! integration exercises this path on a runner with a display.
 //!
@@ -25,16 +25,16 @@
 //! not the renderer's, and it is not worth a width table for output that has
 //! no columns to keep.
 
+use ephemeris_core::config::{self, Config};
+use ephemeris_core::host::Waker;
+use ephemeris_core::i18n::{self, Locale};
+use ephemeris_core::model::{Agenda, Event, Task};
+use ephemeris_core::sync::{self, Command, Shared, Status};
+use ephemeris_core::{demo, log};
 use std::io::{self, Write};
 use std::sync::mpsc::{RecvTimeoutError, SyncSender, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tpmplaner_core::config::{self, Config};
-use tpmplaner_core::host::Waker;
-use tpmplaner_core::i18n::{self, Locale};
-use tpmplaner_core::model::{Agenda, Event, Task};
-use tpmplaner_core::sync::{self, Command, Shared, Status};
-use tpmplaner_core::{demo, log};
 
 /// How long to wait for the first sync before printing what is already known.
 ///
@@ -48,7 +48,7 @@ pub fn run() -> Result<(), String> {
     let mut out = stdout.lock();
     match print_everything(&mut out) {
         Ok(()) => Ok(()),
-        // `tpmplaner | head` closes the pipe as soon as it has seen enough,
+        // `ephemeris | head` closes the pipe as soon as it has seen enough,
         // which is an ordinary thing to do and not a failure. Left alone it
         // would be a panic, and the panic hook would put it in the very log
         // users are asked to attach to bug reports.
@@ -64,7 +64,7 @@ fn print_everything(out: &mut impl Write) -> io::Result<()> {
     // this one.
     i18n::set_global(loc.cat);
 
-    writeln!(out, "TPMPlaner {}", env!("CARGO_PKG_VERSION"))?;
+    writeln!(out, "Ephemeris {}", env!("CARGO_PKG_VERSION"))?;
     writeln!(
         out,
         "No desktop session here, so the agenda is printed rather than drawn. \

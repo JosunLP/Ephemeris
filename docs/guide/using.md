@@ -53,12 +53,12 @@ Command key as `Cmd`, `Win` or `Super`, whichever your keyboard says.
 
 **On Wayland the compositor owns every keyboard shortcut** and will not let a
 program claim one — deliberately, and it is an improvement on X11. So bind a
-key to `tpmplaner --peek` instead, which tells the widget already running to
+key to `ephemeris --peek` instead, which tells the widget already running to
 come forward:
 
 ```
 # Sway, in ~/.config/sway/config
-bindsym $mod+k exec tpmplaner --peek
+bindsym $mod+k exec ephemeris --peek
 ```
 
 It works on X11 too, if you would rather your desktop owned the shortcut.

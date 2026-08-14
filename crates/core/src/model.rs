@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! The widget's domain model: what actually gets drawn.
 //!
 //! Deliberately decoupled from any provider's JSON shapes, so the renderer

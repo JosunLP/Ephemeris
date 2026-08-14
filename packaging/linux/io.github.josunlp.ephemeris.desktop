@@ -1,10 +1,10 @@
 [Desktop Entry]
 Type=Application
-Name=TPMPlaner
+Name=Ephemeris
 GenericName=Calendar widget
 Comment=Today's calendar events and due tasks on your desktop
-Exec=tpmplaner
-Icon=io.github.josunlp.tpmplaner
+Exec=ephemeris
+Icon=io.github.josunlp.ephemeris
 Terminal=false
 Categories=Office;Calendar;
 Keywords=calendar;agenda;tasks;todo;widget;

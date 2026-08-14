@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! Opening the desktop's libraries at run time rather than linking them.
 //!
 //! Xlib, Cairo and Pango are all on any Linux machine with a desktop, and on
@@ -19,8 +19,8 @@
 //! the unversioned link belongs to the development package and is exactly what
 //! is not installed on the machines this runs on.
 
+use ephemeris_core::log;
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
-use tpmplaner_core::log;
 
 unsafe extern "C" {
     fn dlopen(filename: *const c_char, flags: c_int) -> *mut c_void;

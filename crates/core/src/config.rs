@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! Settings, stored as `config.json` in the data directory.
 //!
 //! Read at start-up and written back whenever the window moves or is resized.

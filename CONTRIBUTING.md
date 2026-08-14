@@ -6,8 +6,8 @@ merged.
 ## Getting set up
 
 ```bash
-git clone https://github.com/JosunLP/TPMPlaner
-cd TPMPlaner
+git clone https://github.com/JosunLP/Ephemeris
+cd Ephemeris
 cargo test --workspace
 cargo run --release
 ```
@@ -15,7 +15,7 @@ cargo run --release
 To see the interface without connecting a calendar account:
 
 ```bash
-TPMPLANER_DEMO=1 cargo run --release      # PowerShell: $env:TPMPLANER_DEMO=1
+EPHEMERIS_DEMO=1 cargo run --release      # PowerShell: $env:EPHEMERIS_DEMO=1
 ```
 
 Rust 1.90 or newer. On Windows you also need the MSVC build tools; on macOS and
@@ -35,10 +35,10 @@ The project is a workspace with a deliberate split:
 
 | Crate            | Contains                                               | May call the operating system |
 | ---------------- | ------------------------------------------------------ | ----------------------------- |
-| `tpmplaner-core` | model, calendar back ends, sync, localisation, palette | **no**                        |
-| `tpmplaner`      | the front ends: `src/win`, `src/unix`                  | yes                           |
+| `ephemeris-core` | model, calendar back ends, sync, localisation, palette | **no**                        |
+| `ephemeris`      | the front ends: `src/win`, `src/unix`                  | yes                           |
 
-`tpmplaner-core` must compile and pass its tests on Windows, macOS and Linux.
+`ephemeris-core` must compile and pass its tests on Windows, macOS and Linux.
 Anything it needs from the system goes through a trait in `core/src/host.rs`,
 supplied by the front end at start-up. Continuous integration checks this on
 all three systems, so a stray platform call fails the build rather than
@@ -97,11 +97,11 @@ What a translation pull request is expected to contain:
   form where Russian puts it in `one`. Arabic has six categories, Hebrew has a
   dual, and Chinese, Japanese, Korean and Turkish have exactly one form.
 - **Strings that fit.** The panel is about 380 device-independent pixels wide
-  and several labels sit in a fixed column. `cargo test -p tpmplaner-core`
+  and several labels sit in a fixed column. `cargo test -p ephemeris-core`
   enforces a width budget for those and flags anything that ran away from its
   English original; a failure means "find a shorter word", not "raise the
   budget".
-- **A screenshot, if you can.** Run `TPMPLANER_DEMO=1 cargo run --release`
+- **A screenshot, if you can.** Run `EPHEMERIS_DEMO=1 cargo run --release`
   with `"language"` set to your tag. For a script Segoe UI does not cover —
   CJK, Thai, Devanagari — this is the only way to see whether font fallback
   picked something sensible.
@@ -112,7 +112,7 @@ only where the text genuinely differs, as `pt` and `pt-BR` do. Chinese is
 matched by script rather than by region, so `zh-TW` and `zh-HK` reach the
 traditional catalogue.
 
-[`Plural`]: https://github.com/JosunLP/TPMPlaner/blob/main/crates/core/src/i18n.rs
+[`Plural`]: https://github.com/JosunLP/Ephemeris/blob/main/crates/core/src/i18n.rs
 
 ## Reporting a bug
 

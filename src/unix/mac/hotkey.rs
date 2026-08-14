@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! The global shortcut that brings the widget forward for a few seconds.
 //!
 //! `RegisterEventHotKey` rather than an `NSEvent` global monitor, and
@@ -17,10 +17,10 @@
 
 use crate::unix::mac::objc::*;
 use crate::unix::mac::window;
+use ephemeris_core::hotkey::{Combination, Key};
+use ephemeris_core::log;
 use std::cell::Cell;
 use std::ffi::c_void;
-use tpmplaner_core::hotkey::{Combination, Key};
-use tpmplaner_core::log;
 
 thread_local! {
     /// The registration, kept so it can be undone at shutdown.
@@ -29,8 +29,8 @@ thread_local! {
     static HANDLER: Cell<bool> = const { Cell::new(false) };
 }
 
-/// `'TPMP'` as the four-character signature Carbon identifies the hotkey by.
-const SIGNATURE: u32 = u32::from_be_bytes(*b"TPMP");
+/// `'EPHM'` as the four-character signature Carbon identifies the hotkey by.
+const SIGNATURE: u32 = u32::from_be_bytes(*b"EPHM");
 
 /// Registers the shortcut, falling back through the shared list when the
 /// configured one is already taken.
@@ -45,8 +45,8 @@ pub fn install(configured: &str) {
         return;
     }
 
-    for spec in tpmplaner_core::hotkey::candidates(configured) {
-        let Some(combo) = tpmplaner_core::hotkey::parse(spec) else {
+    for spec in ephemeris_core::hotkey::candidates(configured) {
+        let Some(combo) = ephemeris_core::hotkey::parse(spec) else {
             log::warn(&format!("peek_hotkey '{spec}' is not a usable combination"));
             continue;
         };
@@ -151,7 +151,7 @@ extern "C" fn on_hotkey(
 /// Carbon's modifier mask for a parsed combination.
 ///
 /// The Command key is what `meta` means here. The settings file calls it
-/// `Win`, `Cmd` or `Super` and [`tpmplaner_core::hotkey`] accepts all three,
+/// `Win`, `Cmd` or `Super` and [`ephemeris_core::hotkey`] accepts all three,
 /// precisely so one file can be carried between machines.
 fn modifiers(combo: Combination) -> u32 {
     let mut mask = 0;
@@ -216,8 +216,8 @@ mod tests {
     /// registrable, or the list is quietly one shorter here than elsewhere.
     #[test]
     fn every_fallback_maps_to_a_key_code() {
-        for spec in tpmplaner_core::hotkey::FALLBACKS {
-            let combo = tpmplaner_core::hotkey::parse(spec).expect(spec);
+        for spec in ephemeris_core::hotkey::FALLBACKS {
+            let combo = ephemeris_core::hotkey::parse(spec).expect(spec);
             assert!(key_code(combo.key).is_some(), "{spec}");
             assert_ne!(modifiers(combo), 0, "{spec}");
         }

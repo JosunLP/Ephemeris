@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! Internationalisation.
 //!
 //! Two responsibilities, and keeping them apart is the whole point:
@@ -503,7 +503,7 @@ pub const EN: Catalog = Catalog {
     update_available: "Version {} available — click to update",
     menu_relogin: "Sign in to Google again",
     menu_quit: "Exit",
-    auth_connected_title: "TPMPlaner is connected.",
+    auth_connected_title: "Ephemeris is connected.",
     auth_connected_body: "You can close this window now.",
     auth_cancelled_title: "Sign-in cancelled.",
     auth_waiting: "Waiting for the Google sign-in …",
@@ -512,7 +512,7 @@ pub const EN: Catalog = Catalog {
     err_grant_expired: "Google revoked or expired the access — please sign in again (right-click the widget). Most common cause: the OAuth client is still in \"Testing\" status, where refresh tokens expire after 7 days.",
     err_no_refresh_token: "Google did not return a refresh token. Remove the access at myaccount.google.com/permissions and sign in again.",
     err_timeout: "Sign-in timed out.",
-    fatal_start: "TPMPlaner could not start.",
+    fatal_start: "Ephemeris could not start.",
 };
 
 pub const DE: Catalog = Catalog {
@@ -566,7 +566,7 @@ pub const DE: Catalog = Catalog {
     update_available: "Version {} verfügbar — klicken zum Aktualisieren",
     menu_relogin: "Neu bei Google anmelden",
     menu_quit: "Beenden",
-    auth_connected_title: "TPMPlaner ist verbunden.",
+    auth_connected_title: "Ephemeris ist verbunden.",
     auth_connected_body: "Du kannst dieses Fenster jetzt schließen.",
     auth_cancelled_title: "Anmeldung abgebrochen.",
     auth_waiting: "Warte auf die Google-Anmeldung …",
@@ -575,7 +575,7 @@ pub const DE: Catalog = Catalog {
     err_grant_expired: "Zugriff von Google widerrufen oder abgelaufen — bitte neu anmelden (Rechtsklick auf das Widget). Häufigste Ursache: Der OAuth-Client steht noch auf Veröffentlichungsstatus \"Testing\", dort verfallen Refresh-Tokens nach 7 Tagen.",
     err_no_refresh_token: "Google hat keinen Refresh-Token geliefert. Bitte den Zugriff unter myaccount.google.com/permissions entfernen und erneut anmelden.",
     err_timeout: "Zeitüberschreitung bei der Anmeldung.",
-    fatal_start: "TPMPlaner konnte nicht gestartet werden.",
+    fatal_start: "Ephemeris konnte nicht gestartet werden.",
 };
 
 pub const FR: Catalog = Catalog {
@@ -630,7 +630,7 @@ pub const FR: Catalog = Catalog {
     update_available: "Version {} disponible — cliquez pour mettre à jour",
     menu_relogin: "Se reconnecter à Google",
     menu_quit: "Quitter",
-    auth_connected_title: "TPMPlaner est connecté.",
+    auth_connected_title: "Ephemeris est connecté.",
     auth_connected_body: "Vous pouvez fermer cette fenêtre.",
     auth_cancelled_title: "Connexion annulée.",
     auth_waiting: "En attente de la connexion Google …",
@@ -639,7 +639,7 @@ pub const FR: Catalog = Catalog {
     err_grant_expired: "Accès révoqué ou expiré — veuillez vous reconnecter (clic droit sur le widget). Cause la plus fréquente : le client OAuth est encore en statut « Testing », où les jetons d'actualisation expirent au bout de 7 jours.",
     err_no_refresh_token: "Google n'a pas fourni de jeton d'actualisation. Supprimez l'accès sur myaccount.google.com/permissions puis reconnectez-vous.",
     err_timeout: "Délai de connexion dépassé.",
-    fatal_start: "TPMPlaner n'a pas pu démarrer.",
+    fatal_start: "Ephemeris n'a pas pu démarrer.",
 };
 
 pub const ES: Catalog = Catalog {
@@ -693,7 +693,7 @@ pub const ES: Catalog = Catalog {
     update_available: "Versión {} disponible — haz clic para actualizar",
     menu_relogin: "Volver a iniciar sesión en Google",
     menu_quit: "Salir",
-    auth_connected_title: "TPMPlaner está conectado.",
+    auth_connected_title: "Ephemeris está conectado.",
     auth_connected_body: "Ya puedes cerrar esta ventana.",
     auth_cancelled_title: "Inicio de sesión cancelado.",
     auth_waiting: "Esperando el inicio de sesión de Google …",
@@ -702,7 +702,7 @@ pub const ES: Catalog = Catalog {
     err_grant_expired: "Acceso revocado o caducado — vuelve a iniciar sesión (clic derecho en el widget). Causa más frecuente: el cliente OAuth sigue en estado «Testing», donde los tokens de actualización caducan a los 7 días.",
     err_no_refresh_token: "Google no devolvió un token de actualización. Elimina el acceso en myaccount.google.com/permissions y vuelve a iniciar sesión.",
     err_timeout: "Tiempo de espera agotado al iniciar sesión.",
-    fatal_start: "No se pudo iniciar TPMPlaner.",
+    fatal_start: "No se pudo iniciar Ephemeris.",
 };
 
 pub const IT: Catalog = Catalog {
@@ -756,7 +756,7 @@ pub const IT: Catalog = Catalog {
     update_available: "Versione {} disponibile — clicca per aggiornare",
     menu_relogin: "Accedi di nuovo a Google",
     menu_quit: "Esci",
-    auth_connected_title: "TPMPlaner è connesso.",
+    auth_connected_title: "Ephemeris è connesso.",
     auth_connected_body: "Puoi chiudere questa finestra.",
     auth_cancelled_title: "Accesso annullato.",
     auth_waiting: "In attesa dell'accesso Google …",
@@ -765,7 +765,7 @@ pub const IT: Catalog = Catalog {
     err_grant_expired: "Accesso revocato o scaduto — accedi di nuovo (clic destro sul widget). Causa più frequente: il client OAuth è ancora in stato «Testing», dove i token di aggiornamento scadono dopo 7 giorni.",
     err_no_refresh_token: "Google non ha restituito un token di aggiornamento. Rimuovi l'accesso su myaccount.google.com/permissions e accedi di nuovo.",
     err_timeout: "Timeout durante l'accesso.",
-    fatal_start: "Impossibile avviare TPMPlaner.",
+    fatal_start: "Impossibile avviare Ephemeris.",
 };
 
 /// European Portuguese. Brazilian Portuguese is [`PT_BR`]: the two differ in
@@ -822,7 +822,7 @@ pub const PT: Catalog = Catalog {
     update_available: "Versão {} disponível — clique para atualizar",
     menu_relogin: "Iniciar sessão no Google novamente",
     menu_quit: "Sair",
-    auth_connected_title: "O TPMPlaner está ligado.",
+    auth_connected_title: "O Ephemeris está ligado.",
     auth_connected_body: "Já pode fechar esta janela.",
     auth_cancelled_title: "Início de sessão cancelado.",
     auth_waiting: "À espera do início de sessão do Google …",
@@ -831,7 +831,7 @@ pub const PT: Catalog = Catalog {
     err_grant_expired: "O Google revogou o acesso ou este expirou — inicie sessão novamente (clique com o botão direito no widget). Causa mais frequente: o cliente OAuth ainda está no estado «Testing», onde os tokens de atualização expiram ao fim de 7 dias.",
     err_no_refresh_token: "O Google não devolveu um token de atualização. Remova o acesso em myaccount.google.com/permissions e inicie sessão novamente.",
     err_timeout: "Tempo esgotado ao iniciar sessão.",
-    fatal_start: "Não foi possível iniciar o TPMPlaner.",
+    fatal_start: "Não foi possível iniciar o Ephemeris.",
 };
 
 /// Brazilian Portuguese. Reached by `pt-BR`; plain `pt` gets [`PT`].
@@ -888,7 +888,7 @@ pub const PT_BR: Catalog = Catalog {
     update_available: "Versão {} disponível — clique para atualizar",
     menu_relogin: "Entrar novamente no Google",
     menu_quit: "Sair",
-    auth_connected_title: "O TPMPlaner está conectado.",
+    auth_connected_title: "O Ephemeris está conectado.",
     auth_connected_body: "Você já pode fechar esta janela.",
     auth_cancelled_title: "Login cancelado.",
     auth_waiting: "Aguardando o login do Google …",
@@ -897,7 +897,7 @@ pub const PT_BR: Catalog = Catalog {
     err_grant_expired: "O Google revogou o acesso ou ele expirou — faça login novamente (clique com o botão direito no widget). Causa mais comum: o cliente OAuth ainda está no estado «Testing», onde os tokens de atualização expiram após 7 dias.",
     err_no_refresh_token: "O Google não retornou um token de atualização. Remova o acesso em myaccount.google.com/permissions e faça login novamente.",
     err_timeout: "Tempo esgotado ao fazer login.",
-    fatal_start: "Não foi possível iniciar o TPMPlaner.",
+    fatal_start: "Não foi possível iniciar o Ephemeris.",
 };
 
 pub const NL: Catalog = Catalog {
@@ -951,7 +951,7 @@ pub const NL: Catalog = Catalog {
     update_available: "Versie {} beschikbaar — klik om bij te werken",
     menu_relogin: "Opnieuw aanmelden bij Google",
     menu_quit: "Afsluiten",
-    auth_connected_title: "TPMPlaner is verbonden.",
+    auth_connected_title: "Ephemeris is verbonden.",
     auth_connected_body: "U kunt dit venster nu sluiten.",
     auth_cancelled_title: "Aanmelden geannuleerd.",
     auth_waiting: "Wachten op de Google-aanmelding …",
@@ -960,7 +960,7 @@ pub const NL: Catalog = Catalog {
     err_grant_expired: "Google heeft de toegang ingetrokken of laten verlopen — meld u opnieuw aan (rechtsklik op de widget). Meest voorkomende oorzaak: de OAuth-client staat nog op «Testing», waar vernieuwingstokens na 7 dagen verlopen.",
     err_no_refresh_token: "Google heeft geen vernieuwingstoken teruggegeven. Verwijder de toegang op myaccount.google.com/permissions en meld u opnieuw aan.",
     err_timeout: "Time-out bij het aanmelden.",
-    fatal_start: "TPMPlaner kon niet worden gestart.",
+    fatal_start: "Ephemeris kon niet worden gestart.",
 };
 
 pub const SV: Catalog = Catalog {
@@ -1014,7 +1014,7 @@ pub const SV: Catalog = Catalog {
     update_available: "Version {} finns — klicka för att uppdatera",
     menu_relogin: "Logga in på Google igen",
     menu_quit: "Avsluta",
-    auth_connected_title: "TPMPlaner är ansluten.",
+    auth_connected_title: "Ephemeris är ansluten.",
     auth_connected_body: "Du kan stänga det här fönstret nu.",
     auth_cancelled_title: "Inloggningen avbröts.",
     auth_waiting: "Väntar på Google-inloggningen …",
@@ -1023,7 +1023,7 @@ pub const SV: Catalog = Catalog {
     err_grant_expired: "Google har återkallat åtkomsten eller låtit den gå ut — logga in igen (högerklicka på widgeten). Vanligaste orsaken: OAuth-klienten står fortfarande på «Testing», där uppdateringstoken går ut efter 7 dagar.",
     err_no_refresh_token: "Google returnerade ingen uppdateringstoken. Ta bort åtkomsten på myaccount.google.com/permissions och logga in igen.",
     err_timeout: "Tidsgränsen för inloggning överskreds.",
-    fatal_start: "TPMPlaner kunde inte startas.",
+    fatal_start: "Ephemeris kunde inte startas.",
 };
 
 /// Polish. Three plural forms, and not the Russian ones — see
@@ -1081,7 +1081,7 @@ pub const PL: Catalog = Catalog {
     update_available: "Dostępna wersja {} — kliknij, aby zaktualizować",
     menu_relogin: "Zaloguj się ponownie do Google",
     menu_quit: "Zakończ",
-    auth_connected_title: "TPMPlaner jest połączony.",
+    auth_connected_title: "Ephemeris jest połączony.",
     auth_connected_body: "Możesz już zamknąć to okno.",
     auth_cancelled_title: "Logowanie anulowane.",
     auth_waiting: "Oczekiwanie na logowanie Google …",
@@ -1090,7 +1090,7 @@ pub const PL: Catalog = Catalog {
     err_grant_expired: "Google cofnął dostęp lub dostęp wygasł — zaloguj się ponownie (kliknij widżet prawym przyciskiem). Najczęstsza przyczyna: klient OAuth ma nadal status «Testing», w którym tokeny odświeżania wygasają po 7 dniach.",
     err_no_refresh_token: "Google nie zwrócił tokenu odświeżania. Usuń dostęp na myaccount.google.com/permissions i zaloguj się ponownie.",
     err_timeout: "Przekroczono czas logowania.",
-    fatal_start: "Nie można uruchomić TPMPlanera.",
+    fatal_start: "Nie można uruchomić Ephemerisa.",
 };
 
 pub const CS: Catalog = Catalog {
@@ -1146,7 +1146,7 @@ pub const CS: Catalog = Catalog {
     update_available: "K dispozici je verze {} — klikněte pro aktualizaci",
     menu_relogin: "Znovu se přihlásit ke Google",
     menu_quit: "Ukončit",
-    auth_connected_title: "TPMPlaner je připojen.",
+    auth_connected_title: "Ephemeris je připojen.",
     auth_connected_body: "Toto okno můžete zavřít.",
     auth_cancelled_title: "Přihlášení zrušeno.",
     auth_waiting: "Čekání na přihlášení ke Google …",
@@ -1155,7 +1155,7 @@ pub const CS: Catalog = Catalog {
     err_grant_expired: "Google přístup odvolal nebo jeho platnost vypršela — přihlaste se prosím znovu (klikněte pravým tlačítkem na widget). Nejčastější příčina: klient OAuth je stále ve stavu «Testing», kde obnovovací tokeny vyprší po 7 dnech.",
     err_no_refresh_token: "Google nevrátil obnovovací token. Odeberte přístup na myaccount.google.com/permissions a přihlaste se znovu.",
     err_timeout: "Vypršel časový limit přihlášení.",
-    fatal_start: "TPMPlaner se nepodařilo spustit.",
+    fatal_start: "Ephemeris se nepodařilo spustit.",
 };
 
 /// Turkish. A numeral leaves the noun in the singular, so every counted string
@@ -1205,7 +1205,7 @@ pub const TR: Catalog = Catalog {
     update_available: "{} sürümü mevcut — güncellemek için tıklayın",
     menu_relogin: "Google'da yeniden oturum aç",
     menu_quit: "Çıkış",
-    auth_connected_title: "TPMPlaner bağlandı.",
+    auth_connected_title: "Ephemeris bağlandı.",
     auth_connected_body: "Bu pencereyi şimdi kapatabilirsiniz.",
     auth_cancelled_title: "Oturum açma iptal edildi.",
     auth_waiting: "Google oturum açma bekleniyor …",
@@ -1214,7 +1214,7 @@ pub const TR: Catalog = Catalog {
     err_grant_expired: "Google erişimi iptal etti veya erişimin süresi doldu — lütfen yeniden oturum açın (widget'a sağ tıklayın). En sık neden: OAuth istemcisi hâlâ «Testing» durumunda; orada yenileme belirteçleri 7 gün sonra geçersiz olur.",
     err_no_refresh_token: "Google bir yenileme belirteci döndürmedi. myaccount.google.com/permissions adresinden erişimi kaldırın ve yeniden oturum açın.",
     err_timeout: "Oturum açma zaman aşımına uğradı.",
-    fatal_start: "TPMPlaner başlatılamadı.",
+    fatal_start: "Ephemeris başlatılamadı.",
 };
 
 pub const RU: Catalog = Catalog {
@@ -1270,7 +1270,7 @@ pub const RU: Catalog = Catalog {
     update_available: "Доступна версия {} — нажмите, чтобы обновить",
     menu_relogin: "Войти в Google заново",
     menu_quit: "Выход",
-    auth_connected_title: "TPMPlaner подключён.",
+    auth_connected_title: "Ephemeris подключён.",
     auth_connected_body: "Это окно можно закрыть.",
     auth_cancelled_title: "Вход отменён.",
     auth_waiting: "Ожидание входа в Google …",
@@ -1279,7 +1279,7 @@ pub const RU: Catalog = Catalog {
     err_grant_expired: "Google отозвал доступ или срок его действия истёк — войдите снова (правый щелчок по виджету). Самая частая причина: клиент OAuth всё ещё в статусе «Testing», где токены обновления действуют 7 дней.",
     err_no_refresh_token: "Google не вернул токен обновления. Удалите доступ на myaccount.google.com/permissions и войдите снова.",
     err_timeout: "Время ожидания входа истекло.",
-    fatal_start: "Не удалось запустить TPMPlaner.",
+    fatal_start: "Не удалось запустить Ephemeris.",
 };
 
 pub const UK: Catalog = Catalog {
@@ -1335,7 +1335,7 @@ pub const UK: Catalog = Catalog {
     update_available: "Доступна версія {} — натисніть, щоб оновити",
     menu_relogin: "Увійти в Google знову",
     menu_quit: "Вихід",
-    auth_connected_title: "TPMPlaner підключено.",
+    auth_connected_title: "Ephemeris підключено.",
     auth_connected_body: "Це вікно можна закрити.",
     auth_cancelled_title: "Вхід скасовано.",
     auth_waiting: "Очікування входу в Google …",
@@ -1344,7 +1344,7 @@ pub const UK: Catalog = Catalog {
     err_grant_expired: "Google відкликав доступ або строк його дії минув — увійдіть знову (клацніть віджет правою кнопкою). Найчастіша причина: клієнт OAuth досі має статус «Testing», де токени оновлення діють 7 днів.",
     err_no_refresh_token: "Google не повернув токен оновлення. Видаліть доступ на myaccount.google.com/permissions і увійдіть знову.",
     err_timeout: "Час очікування входу минув.",
-    fatal_start: "Не вдалося запустити TPMPlaner.",
+    fatal_start: "Не вдалося запустити Ephemeris.",
 };
 
 pub const JA: Catalog = Catalog {
@@ -1392,7 +1392,7 @@ pub const JA: Catalog = Catalog {
     update_available: "バージョン {} が利用可能 — クリックして更新",
     menu_relogin: "Google に再ログイン",
     menu_quit: "終了",
-    auth_connected_title: "TPMPlaner が接続されました。",
+    auth_connected_title: "Ephemeris が接続されました。",
     auth_connected_body: "このウィンドウを閉じてかまいません。",
     auth_cancelled_title: "ログインを中止しました。",
     auth_waiting: "Google のログインを待っています …",
@@ -1401,7 +1401,7 @@ pub const JA: Catalog = Catalog {
     err_grant_expired: "Google がアクセスを取り消したか、有効期限が切れました — もう一度ログインしてください（ウィジェットを右クリック）。最も多い原因: OAuth クライアントが「Testing」のままで、そこではリフレッシュ トークンが 7 日で失効します。",
     err_no_refresh_token: "Google がリフレッシュ トークンを返しませんでした。myaccount.google.com/permissions でアクセスを削除し、もう一度ログインしてください。",
     err_timeout: "ログインがタイムアウトしました。",
-    fatal_start: "TPMPlaner を起動できませんでした。",
+    fatal_start: "Ephemeris を起動できませんでした。",
 };
 
 /// Simplified Chinese. Reached by `zh`, `zh-Hans`, `zh-CN` and `zh-SG`; the
@@ -1451,7 +1451,7 @@ pub const ZH_HANS: Catalog = Catalog {
     update_available: "有新版本 {} — 点击更新",
     menu_relogin: "重新登录 Google",
     menu_quit: "退出",
-    auth_connected_title: "TPMPlaner 已连接。",
+    auth_connected_title: "Ephemeris 已连接。",
     auth_connected_body: "现在可以关闭此窗口。",
     auth_cancelled_title: "登录已取消。",
     auth_waiting: "正在等待 Google 登录 …",
@@ -1460,7 +1460,7 @@ pub const ZH_HANS: Catalog = Catalog {
     err_grant_expired: "Google 已撤销访问权限，或权限已过期 — 请重新登录（右键点击小组件）。最常见的原因：OAuth 客户端仍处于「Testing」状态，刷新令牌会在 7 天后失效。",
     err_no_refresh_token: "Google 未返回刷新令牌。请在 myaccount.google.com/permissions 移除访问权限后重新登录。",
     err_timeout: "登录超时。",
-    fatal_start: "无法启动 TPMPlaner。",
+    fatal_start: "无法启动 Ephemeris。",
 };
 
 /// Traditional Chinese. Reached by `zh-Hant` and by the regions that use it —
@@ -1510,7 +1510,7 @@ pub const ZH_HANT: Catalog = Catalog {
     update_available: "有新版本 {} — 點擊更新",
     menu_relogin: "重新登入 Google",
     menu_quit: "結束",
-    auth_connected_title: "TPMPlaner 已連線。",
+    auth_connected_title: "Ephemeris 已連線。",
     auth_connected_body: "現在可以關閉此視窗。",
     auth_cancelled_title: "已取消登入。",
     auth_waiting: "正在等待 Google 登入 …",
@@ -1519,7 +1519,7 @@ pub const ZH_HANT: Catalog = Catalog {
     err_grant_expired: "Google 已撤銷存取權，或存取權已過期 — 請重新登入（在小工具上按右鍵）。最常見的原因：OAuth 用戶端仍處於「Testing」狀態，更新權杖會在 7 天後失效。",
     err_no_refresh_token: "Google 未傳回更新權杖。請在 myaccount.google.com/permissions 移除存取權後重新登入。",
     err_timeout: "登入逾時。",
-    fatal_start: "無法啟動 TPMPlaner。",
+    fatal_start: "無法啟動 Ephemeris。",
 };
 
 pub const KO: Catalog = Catalog {
@@ -1567,7 +1567,7 @@ pub const KO: Catalog = Catalog {
     update_available: "버전 {} 사용 가능 — 클릭하여 업데이트",
     menu_relogin: "Google에 다시 로그인",
     menu_quit: "종료",
-    auth_connected_title: "TPMPlaner가 연결되었습니다.",
+    auth_connected_title: "Ephemeris가 연결되었습니다.",
     auth_connected_body: "이제 이 창을 닫아도 됩니다.",
     auth_cancelled_title: "로그인이 취소되었습니다.",
     auth_waiting: "Google 로그인을 기다리는 중 …",
@@ -1576,7 +1576,7 @@ pub const KO: Catalog = Catalog {
     err_grant_expired: "Google이 액세스를 취소했거나 액세스가 만료되었습니다 — 다시 로그인하세요(위젯을 마우스 오른쪽 버튼으로 클릭). 가장 흔한 원인: OAuth 클라이언트가 아직 「Testing」 상태이며, 이 경우 갱신 토큰은 7일 후 만료됩니다.",
     err_no_refresh_token: "Google이 갱신 토큰을 반환하지 않았습니다. myaccount.google.com/permissions에서 액세스를 제거한 뒤 다시 로그인하세요.",
     err_timeout: "로그인 시간이 초과되었습니다.",
-    fatal_start: "TPMPlaner를 시작할 수 없습니다.",
+    fatal_start: "Ephemeris를 시작할 수 없습니다.",
 };
 
 /// Arabic. The first catalogue with `rtl: true`, so this is where the layout
@@ -1640,7 +1640,7 @@ pub const AR: Catalog = Catalog {
     update_available: "الإصدار {} متاح — انقر للتحديث",
     menu_relogin: "تسجيل الدخول إلى Google مرة أخرى",
     menu_quit: "إنهاء",
-    auth_connected_title: "تم توصيل TPMPlaner.",
+    auth_connected_title: "تم توصيل Ephemeris.",
     auth_connected_body: "يمكنك إغلاق هذه النافذة الآن.",
     auth_cancelled_title: "تم إلغاء تسجيل الدخول.",
     auth_waiting: "في انتظار تسجيل الدخول إلى Google …",
@@ -1649,7 +1649,7 @@ pub const AR: Catalog = Catalog {
     err_grant_expired: "ألغى Google الوصول أو انتهت صلاحيته — يرجى تسجيل الدخول مرة أخرى (انقر بزر الفأرة الأيمن على الأداة). السبب الأكثر شيوعًا: عميل OAuth ما زال في حالة «Testing»، حيث تنتهي صلاحية رموز التحديث بعد 7 أيام.",
     err_no_refresh_token: "لم يُرجع Google رمز تحديث. أزل الوصول من myaccount.google.com/permissions ثم سجّل الدخول مرة أخرى.",
     err_timeout: "انتهت مهلة تسجيل الدخول.",
-    fatal_start: "تعذّر بدء تشغيل TPMPlaner.",
+    fatal_start: "تعذّر بدء تشغيل Ephemeris.",
 };
 
 /// Hebrew. Reached by `he` and by the superseded ISO code `iw`, which some
@@ -1707,7 +1707,7 @@ pub const HE: Catalog = Catalog {
     update_available: "גרסה {} זמינה — לחץ לעדכון",
     menu_relogin: "התחבר שוב ל-Google",
     menu_quit: "יציאה",
-    auth_connected_title: "TPMPlaner מחובר.",
+    auth_connected_title: "Ephemeris מחובר.",
     auth_connected_body: "אפשר לסגור את החלון הזה.",
     auth_cancelled_title: "ההתחברות בוטלה.",
     auth_waiting: "ממתין להתחברות ל-Google …",
@@ -1716,7 +1716,7 @@ pub const HE: Catalog = Catalog {
     err_grant_expired: "Google ביטל את הגישה או שתוקפה פג — יש להתחבר שוב (לחיצה ימנית על הווידג'ט). הסיבה הנפוצה ביותר: לקוח ה-OAuth עדיין במצב «Testing», שבו אסימוני רענון פגים לאחר 7 ימים.",
     err_no_refresh_token: "Google לא החזיר אסימון רענון. הסר את הגישה בכתובת myaccount.google.com/permissions והתחבר שוב.",
     err_timeout: "פג הזמן הקצוב להתחברות.",
-    fatal_start: "לא ניתן היה להפעיל את TPMPlaner.",
+    fatal_start: "לא ניתן היה להפעיל את Ephemeris.",
 };
 
 /// Every shipped catalogue, English first.

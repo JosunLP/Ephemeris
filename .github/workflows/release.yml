@@ -35,10 +35,10 @@ jobs:
         include:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            binary: tpmplaner.exe
+            binary: ephemeris.exe
           - os: windows-11-arm
             target: aarch64-pc-windows-msvc
-            binary: tpmplaner.exe
+            binary: ephemeris.exe
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -58,7 +58,7 @@ jobs:
         run: |
           $tag = "${{ inputs.tag || github.ref_name }}" -replace '^v', ''
           $manifest = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
-          $version = ($manifest.packages | Where-Object name -eq tpmplaner).version
+          $version = ($manifest.packages | Where-Object name -eq ephemeris).version
           if ($tag -ne $version) {
             throw "Tag '$tag' does not match Cargo.toml version '$version'"
           }
@@ -72,7 +72,7 @@ jobs:
       - name: Package and checksum
         shell: pwsh
         run: |
-          $name = "tpmplaner-${{ matrix.target }}"
+          $name = "ephemeris-${{ matrix.target }}"
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary }}" "dist/$name.exe"
           $hash = (Get-FileHash "dist/$name.exe" -Algorithm SHA256).Hash.ToLower()
@@ -130,7 +130,7 @@ jobs:
           tag="$TAG"
           tag="${tag#v}"
           version=$(cargo metadata --no-deps --format-version 1 |
-            python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "tpmplaner"))')
+            python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "ephemeris"))')
           if [ "$tag" != "$version" ]; then
             echo "Tag '$tag' does not match Cargo.toml version '$version'" >&2
             exit 1
@@ -151,28 +151,35 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
-          app="dist/TPMPlaner.app"
+          app="dist/Ephemeris.app"
           mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-          cp "target/${{ matrix.target }}/release/tpmplaner" "$app/Contents/MacOS/"
+          cp "target/${{ matrix.target }}/release/ephemeris" "$app/Contents/MacOS/"
           sed "s/@VERSION@/$version/g" packaging/macos/Info.plist \
             > "$app/Contents/Info.plist"
           cp LICENSE README.md "$app/Contents/Resources/"
+          # Under the name `CFBundleIconFile` gives. The container is built
+          # from the SVG by `scripts/render-logo.py` and committed, so no
+          # rendering happens on the runner and `iconutil` is not needed.
+          cp assets/logo.icns "$app/Contents/Resources/Ephemeris.icns"
 
       # The archive carries the licence and the readme beside the binary,
       # because a tarball is all a distribution packager or a curious user
       # gets — there is no installer to point them anywhere else.
       - name: Package and checksum
         run: |
-          name="tpmplaner-${{ matrix.target }}"
+          name="ephemeris-${{ matrix.target }}"
           mkdir -p "dist/$name"
-          cp "target/${{ matrix.target }}/release/tpmplaner" "dist/$name/"
+          cp "target/${{ matrix.target }}/release/ephemeris" "dist/$name/"
           cp LICENSE README.md "dist/$name/"
-          if [ -d dist/TPMPlaner.app ]; then
-            cp -R dist/TPMPlaner.app "dist/$name/"
-            rm -rf dist/TPMPlaner.app
+          if [ -d dist/Ephemeris.app ]; then
+            cp -R dist/Ephemeris.app "dist/$name/"
+            rm -rf dist/Ephemeris.app
           fi
           if [ "${{ runner.os }}" = "Linux" ]; then
-            cp packaging/linux/io.github.josunlp.tpmplaner.desktop "dist/$name/"
+            cp packaging/linux/io.github.josunlp.ephemeris.desktop "dist/$name/"
+            # Beside it, under the name its `Icon=` names, so whoever installs
+            # the one has the other in the form `hicolor/scalable/apps` wants.
+            cp assets/logo.svg "dist/$name/io.github.josunlp.ephemeris.svg"
           fi
           tar -czf "dist/$name.tar.gz" -C dist "$name"
           rm -rf "dist/$name"

@@ -1,14 +1,14 @@
 # Contributing
 
 The full text lives in
-[CONTRIBUTING.md](https://github.com/JosunLP/TPMPlaner/blob/main/CONTRIBUTING.md).
+[CONTRIBUTING.md](https://github.com/JosunLP/Ephemeris/blob/main/CONTRIBUTING.md).
 The essentials:
 
 ## Build
 
 ```bash
-git clone https://github.com/JosunLP/TPMPlaner
-cd TPMPlaner
+git clone https://github.com/JosunLP/Ephemeris
+cd Ephemeris
 cargo test --workspace
 cargo run --release
 ```
@@ -26,7 +26,7 @@ AppKit symbols do not have to exist. What it cannot tell you is in
 Preview the interface without connecting an account:
 
 ```powershell
-$env:TPMPLANER_DEMO = "1"; cargo run --release
+$env:EPHEMERIS_DEMO = "1"; cargo run --release
 ```
 
 ## Before a pull request
@@ -39,7 +39,7 @@ cargo test --workspace
 
 ## The rule that matters
 
-`tpmplaner-core` may not call an operating system API. If it needs one, add a
+`ephemeris-core` may not call an operating system API. If it needs one, add a
 method to a trait in `core/src/host.rs` and implement it in the front end. CI
 builds the core on Ubuntu, macOS and Windows, so a violation fails the build.
 
@@ -55,7 +55,7 @@ Also useful, and smaller:
 
 - Additional interface languages — one `Catalog` constant in `i18n.rs`, plus a
   line in `catalog_for` and `CATALOGS`. See
-  [CONTRIBUTING.md](https://github.com/JosunLP/TPMPlaner/blob/main/CONTRIBUTING.md#adding-an-interface-language)
+  [CONTRIBUTING.md](https://github.com/JosunLP/Ephemeris/blob/main/CONTRIBUTING.md#adding-an-interface-language)
   for what a translation pull request should contain: who checked the text, the
   right plural variant, and strings that fit the column.
 - Verification of the Microsoft and CalDAV back ends against real servers

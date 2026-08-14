@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! The widget, drawn — once, for every front end.
 //!
-//! Everything here is arithmetic over [`tpmplaner_core::layout`] and calls into
+//! Everything here is arithmetic over [`ephemeris_core::layout`] and calls into
 //! [`Canvas`]. It never touches an operating system API, which is why the same
 //! file serves Direct2D, Core Graphics and Cairo alike: a rounded rectangle, a
 //! line, a circle and a line of text are the four things a panel is made of,
@@ -23,19 +23,19 @@
 //! than fading each call site.
 //!
 //! What is *decided* rather than drawn is a layer further down again, in
-//! `tpmplaner_core::layout`: which rows are visible, where the now line goes,
+//! `ephemeris_core::layout`: which rows are visible, where the now line goes,
 //! how wide a column has to be, which rectangle a click landed in. That half
 //! can be tested without a device; this half cannot, which is the line between
 //! the two.
 
 use crate::paint::canvas::{Align, Canvas, Font, Stop};
-use std::f32::consts::PI;
-use tpmplaner_core::layout::{
+use ephemeris_core::layout::{
     self, EventList, Frame, FrameResult, Hit, HitRegion, Panel, Rect, TaskList,
 };
-use tpmplaner_core::model::{Event, Task};
-use tpmplaner_core::sync::Status;
-use tpmplaner_core::theme::{Appearance, Metrics, Palette, mix};
+use ephemeris_core::model::{Event, Task};
+use ephemeris_core::sync::Status;
+use ephemeris_core::theme::{Appearance, Metrics, Palette, mix};
+use std::f32::consts::PI;
 
 /// Where a line of text sits inside its box, in reading order rather than on
 /// screen.

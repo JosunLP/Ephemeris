@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! The widget's surface on Wayland.
 //!
 //! **`wlr-layer-shell` is the whole point.** It is the only Wayland protocol
@@ -42,14 +42,14 @@ use crate::unix::autostart;
 use crate::unix::linux::canvas::{Cairo, Look};
 use crate::unix::linux::ffi::Libs;
 use crate::unix::linux::visuals;
+use ephemeris_core::host::Waker;
+use ephemeris_core::log;
+use ephemeris_core::theme::SystemVisuals;
 use std::cell::RefCell;
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tpmplaner_core::host::Waker;
-use tpmplaner_core::log;
-use tpmplaner_core::theme::SystemVisuals;
 
 /// How the surface is shown — the one thing a compositor may not let the
 /// widget choose.
@@ -312,7 +312,7 @@ impl Buffers {
 
         // `memfd` rather than a file under `/tmp`: nothing is left behind, the
         // memory is anonymous, and there is no path for anything else to open.
-        let fd = unsafe { libc::memfd_create(c"tpmplaner".as_ptr(), libc::MFD_CLOEXEC) };
+        let fd = unsafe { libc::memfd_create(c"ephemeris".as_ptr(), libc::MFD_CLOEXEC) };
         if fd < 0 {
             log::error("Could not create a shared-memory buffer for the widget");
             return None;
@@ -809,7 +809,7 @@ impl WaylandShell {
 
     fn create_layer_surface(&mut self) {
         let wl = self.connection.wl.clone();
-        let namespace = c"tpmplaner";
+        let namespace = c"ephemeris";
         // `get_layer_surface(new_id, surface, output, layer, namespace)`. The
         // output is null: "wherever the compositor thinks best", which for a
         // single-monitor desktop is the only monitor and for several is the
@@ -910,7 +910,7 @@ impl WaylandShell {
         self.connection.send1(
             self.xdg_toplevel,
             xdg_toplevel::SET_TITLE,
-            c"TPMPlaner".as_ptr(),
+            c"Ephemeris".as_ptr(),
         );
         // The application identifier a desktop matches against its `.desktop`
         // file, which is what gives the window the right icon and groups it
@@ -918,7 +918,7 @@ impl WaylandShell {
         self.connection.send1(
             self.xdg_toplevel,
             xdg_toplevel::SET_APP_ID,
-            c"tpmplaner".as_ptr(),
+            c"ephemeris".as_ptr(),
         );
         self.connection.send2(
             self.xdg_toplevel,
@@ -1535,8 +1535,8 @@ impl Shell for WaylandShell {
 
     fn show_menu(
         &mut self,
-        entries: &[tpmplaner_core::menu::Entry],
-    ) -> Option<tpmplaner_core::menu::Command> {
+        entries: &[ephemeris_core::menu::Entry],
+    ) -> Option<ephemeris_core::menu::Command> {
         menu::show(self, entries)
     }
 
@@ -2073,7 +2073,7 @@ impl SingleBuffer {
         let stride = width * 4;
         let length = (stride as usize) * (height as usize);
 
-        let fd = unsafe { libc::memfd_create(c"tpmplaner-menu".as_ptr(), libc::MFD_CLOEXEC) };
+        let fd = unsafe { libc::memfd_create(c"ephemeris-menu".as_ptr(), libc::MFD_CLOEXEC) };
         if fd < 0 {
             return None;
         }

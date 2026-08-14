@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! [`LocaleBackend`] for macOS and Linux.
 //!
 //! The design note in `i18n.rs` asks for the platform's own locale database
@@ -40,10 +40,10 @@
 //! with ordinary tests, which run on both systems continuous integration
 //! builds this front end on. What is left unsafe is a thin shell around it.
 //!
-//! [`PortableLocale`]: tpmplaner_core::host::PortableLocale
+//! [`PortableLocale`]: ephemeris_core::host::PortableLocale
 
 use chrono::{DateTime, Local, NaiveDate};
-use tpmplaner_core::host::{LocaleBackend, PortableLocale, PosixLocale, posix_environment_locale};
+use ephemeris_core::host::{LocaleBackend, PortableLocale, PosixLocale, posix_environment_locale};
 
 /// The tag that stands for no language at all.
 ///
@@ -74,7 +74,7 @@ impl LocaleBackend for UnixLocale {
     /// The environment first, then the platform.
     ///
     /// Order matters, and getting it wrong is not a small thing: asking Core
-    /// Foundation first makes `LC_ALL=fr_FR.UTF-8 tpmplaner` print English on a
+    /// Foundation first makes `LC_ALL=fr_FR.UTF-8 ephemeris` print English on a
     /// machine set to English, because `CFLocaleCopyCurrent` reports what
     /// System Settings says and knows nothing about the environment. Somebody
     /// who sets the variable has said which language they want, explicitly, for
@@ -1291,7 +1291,7 @@ mod platform {
 /// **On a machine without the locale generated they skip.** `newlocale` fails
 /// for `de_DE.UTF-8` on a stock container, and a developer's laptop is not
 /// obliged to carry every locale this checks. Continuous integration generates
-/// them and sets `TPMPLANER_REQUIRE_SYSTEM_LOCALE`, which turns the skip back
+/// them and sets `EPHEMERIS_REQUIRE_SYSTEM_LOCALE`, which turns the skip back
 /// into a failure — so a green run there means the back end answered, not that
 /// it was excused. macOS needs neither: Core Foundation carries the data
 /// itself.
@@ -1309,7 +1309,7 @@ mod backend {
 
     /// `None` when this system has no such locale, unless CI said it must.
     fn answer(what: &str, tag: &str, got: Option<String>) -> Option<String> {
-        if got.is_none() && std::env::var_os("TPMPLANER_REQUIRE_SYSTEM_LOCALE").is_some() {
+        if got.is_none() && std::env::var_os("EPHEMERIS_REQUIRE_SYSTEM_LOCALE").is_some() {
             panic!(
                 "{what} returned nothing for {tag}, but this run requires the \
                  system locale to be present"
@@ -1322,7 +1322,7 @@ mod backend {
     /// language.
     ///
     /// This is what a smoke test caught on macOS: asking Core Foundation first
-    /// made `LC_ALL=fr_FR.UTF-8 tpmplaner` print an English agenda, because
+    /// made `LC_ALL=fr_FR.UTF-8 ephemeris` print an English agenda, because
     /// `CFLocaleCopyCurrent` reports System Settings and never looks at the
     /// environment. Every variable is read here rather than set — the
     /// environment is process-wide and tests share it — so this checks the

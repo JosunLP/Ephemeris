@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! Where everything goes, in device-independent pixels.
 //!
 //! The renderer draws; this decides what to draw and where. That split matters

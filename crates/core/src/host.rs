@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! The seam between portable logic and the operating system.
 //!
 //! Everything in this crate is meant to compile and behave the same on
@@ -183,23 +183,23 @@ impl Host for PortableHost {
         #[cfg(windows)]
         {
             if let Some(appdata) = std::env::var_os("APPDATA") {
-                return PathBuf::from(appdata).join("TPMPlaner");
+                return PathBuf::from(appdata).join("Ephemeris");
             }
         }
         #[cfg(target_os = "macos")]
         {
             if let Some(home) = std::env::var_os("HOME") {
-                return PathBuf::from(home).join("Library/Application Support/TPMPlaner");
+                return PathBuf::from(home).join("Library/Application Support/Ephemeris");
             }
         }
         #[cfg(all(unix, not(target_os = "macos")))]
         {
             // XDG_CONFIG_HOME wins, then the specified default.
             if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
-                return PathBuf::from(xdg).join("tpmplaner");
+                return PathBuf::from(xdg).join("ephemeris");
             }
             if let Some(home) = std::env::var_os("HOME") {
-                return PathBuf::from(home).join(".config/tpmplaner");
+                return PathBuf::from(home).join(".config/ephemeris");
             }
         }
         PathBuf::from(".")
@@ -345,9 +345,9 @@ mod tests {
         let text = dir.to_string_lossy().to_lowercase();
         assert!(!text.is_empty());
         #[cfg(windows)]
-        assert!(text.contains("tpmplaner"));
+        assert!(text.contains("ephemeris"));
         #[cfg(all(unix, not(target_os = "macos")))]
-        assert!(text.contains("tpmplaner"));
+        assert!(text.contains("ephemeris"));
         #[cfg(target_os = "macos")]
         assert!(text.contains("application support"));
     }

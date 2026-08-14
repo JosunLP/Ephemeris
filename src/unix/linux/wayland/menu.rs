@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! The right-click menu on Wayland: an `xdg_popup` with a grab.
 //!
-//! What the menu contains is [`tpmplaner_core::menu`]'s and what it looks like
+//! What the menu contains is [`ephemeris_core::menu`]'s and what it looks like
 //! is [`crate::unix::linux::drawn_menu`]'s, shared with the X11 back end. What
 //! is here is the one construct in Wayland that behaves like a menu.
 //!
@@ -25,10 +25,10 @@ use super::window::{PointerEvent, Shape, WaylandShell};
 use crate::paint::canvas::Canvas as _;
 use crate::unix::linux::canvas::Cairo;
 use crate::unix::linux::drawn_menu::{self, Picked, Row};
+use ephemeris_core::log;
+use ephemeris_core::menu::{Command, Entry};
 use std::ffi::c_void;
 use std::time::Duration;
-use tpmplaner_core::log;
-use tpmplaner_core::menu::{Command, Entry};
 
 /// Shows the menu at the pointer and returns what was picked.
 pub fn show(shell: &mut WaylandShell, entries: &[Entry]) -> Option<Command> {

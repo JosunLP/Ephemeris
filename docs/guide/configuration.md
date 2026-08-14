@@ -1,6 +1,6 @@
 # Configuration
 
-Settings live in `%APPDATA%\TPMPlaner\config.json`. Right-click the widget and
+Settings live in `%APPDATA%\Ephemeris\config.json`. Right-click the widget and
 choose *Edit configuration* to open it.
 
 Changes are picked up **within a minute, without a restart**. A change of
@@ -83,9 +83,9 @@ which several Windows editors add — is tolerated.
 Out-of-range values are clamped rather than rejected, so a typo cannot produce
 a zero-sized window or a storm of requests.
 
-The file lives in `%APPDATA%\TPMPlaner` on Windows, `~/Library/Application
-Support/TPMPlaner` on macOS and `$XDG_CONFIG_HOME/tpmplaner` — usually
-`~/.config/tpmplaner` — on Linux. Right-click → **Open data folder** goes there
+The file lives in `%APPDATA%\Ephemeris` on Windows, `~/Library/Application
+Support/Ephemeris` on macOS and `$XDG_CONFIG_HOME/ephemeris` — usually
+`~/.config/ephemeris` — on Linux. Right-click → **Open data folder** goes there
 whichever it is.
 
 ## Language
@@ -202,7 +202,7 @@ Put it next to `config.json` as `<name>.theme.json` and point at it by name:
 "appearance": "midnight"
 ```
 
-reads `%APPDATA%\TPMPlaner\midnight.theme.json`, whose contents are the object
+reads `%APPDATA%\Ephemeris\midnight.theme.json`, whose contents are the object
 above. That file can be shared as-is. A theme that is missing or malformed
 falls back to the system look and says so in the log.
 
@@ -248,7 +248,7 @@ falls back to the system one, and the log names it.
 | `caldav-<id>.json` | CalDAV server and user name |
 | `token-<id>.bin` | Your credentials, or a reference to them — see below |
 | `cache.json` | Last synced day, so something shows at start-up |
-| `tpmplaner.log` | Log, rotated at 256 KB |
+| `ephemeris.log` | Log, rotated at 256 KB |
 
 What `token-<id>.bin` holds depends on where it was written, because the three
 systems do not offer the same thing:

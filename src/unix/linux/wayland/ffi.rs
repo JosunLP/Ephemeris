@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! Wayland without generated code.
 //!
 //! Every Wayland binding in existence is produced by `wayland-scanner` from

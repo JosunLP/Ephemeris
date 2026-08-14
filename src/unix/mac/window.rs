@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! The widget's window on macOS.
 //!
 //! It behaves the way the Windows one does, through the equivalent AppKit
@@ -41,13 +41,13 @@ use crate::unix::autostart;
 use crate::unix::mac::canvas::Cg;
 use crate::unix::mac::objc::*;
 use crate::unix::mac::{hotkey, menu, visuals};
+use ephemeris_core::host::Waker;
+use ephemeris_core::log;
+use ephemeris_core::theme::SystemVisuals;
 use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
-use tpmplaner_core::host::Waker;
-use tpmplaner_core::log;
-use tpmplaner_core::theme::SystemVisuals;
 
 thread_local! {
     /// The running widget. See the module note on why this is taken rather
@@ -333,7 +333,7 @@ unsafe impl Sync for Classes {}
 fn classes() -> &'static Classes {
     static CLASSES: OnceLock<Classes> = OnceLock::new();
     CLASSES.get_or_init(|| unsafe {
-        let window = objc_allocateClassPair(class(c"NSWindow"), c"TPMPlanerWindow".as_ptr(), 0);
+        let window = objc_allocateClassPair(class(c"NSWindow"), c"EphemerisWindow".as_ptr(), 0);
         add_method(
             window,
             c"canBecomeKeyWindow",
@@ -348,7 +348,7 @@ fn classes() -> &'static Classes {
         );
         objc_registerClassPair(window);
 
-        let view = objc_allocateClassPair(class(c"NSView"), c"TPMPlanerView".as_ptr(), 0);
+        let view = objc_allocateClassPair(class(c"NSView"), c"EphemerisView".as_ptr(), 0);
         add_method(view, c"isFlipped", is_flipped as *const c_void, c"c@:");
         add_method(
             view,
@@ -369,7 +369,7 @@ fn classes() -> &'static Classes {
         }
         objc_registerClassPair(view);
 
-        let delegate = objc_allocateClassPair(class(c"NSObject"), c"TPMPlanerAgent".as_ptr(), 0);
+        let delegate = objc_allocateClassPair(class(c"NSObject"), c"EphemerisAgent".as_ptr(), 0);
         add_method(delegate, c"onAnim:", on_anim as *const c_void, c"v@:@");
         add_method(delegate, c"onUndo:", on_undo as *const c_void, c"v@:@");
         add_method(delegate, c"onMinute:", on_minute as *const c_void, c"v@:@");
@@ -402,7 +402,7 @@ extern "C" fn can_become_key(_this: Id, _sel: Sel) -> i8 {
 }
 
 /// The origin at the top left, so view coordinates and
-/// [`tpmplaner_core::layout`] agree without a conversion at every call.
+/// [`ephemeris_core::layout`] agree without a conversion at every call.
 extern "C" fn is_flipped(_this: Id, _sel: Sel) -> i8 {
     1
 }
@@ -764,8 +764,8 @@ impl Shell for MacShell {
 
     fn show_menu(
         &mut self,
-        entries: &[tpmplaner_core::menu::Entry],
-    ) -> Option<tpmplaner_core::menu::Command> {
+        entries: &[ephemeris_core::menu::Entry],
+    ) -> Option<ephemeris_core::menu::Command> {
         menu::show(entries, self.delegate)
     }
 
@@ -783,7 +783,7 @@ impl Shell for MacShell {
                 // Reaped so the widget does not collect zombies over days of
                 // uptime, for the reason set out in `unix::host::open_url`.
                 let _ = std::thread::Builder::new()
-                    .name("tpmplaner-open".into())
+                    .name("ephemeris-open".into())
                     .spawn(move || {
                         let _ = child.wait();
                     });

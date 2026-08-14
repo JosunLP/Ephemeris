@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
-//! TPMPlaner — a desktop widget for calendar events and due tasks.
+// Copyright (C) 2026 Ephemeris contributors
+//! Ephemeris — a desktop widget for calendar events and due tasks.
 //!
 //! This file knows nothing about any operating system. Everything portable —
 //! the model, the calendar back ends, synchronisation, localisation and the
-//! palette — lives in `tpmplaner-core`; everything platform-specific lives in
+//! palette — lives in `ephemeris-core`; everything platform-specific lives in
 //! one front end module, selected below, and reaches the rest of the binary
 //! only through the four functions this file calls.
 //!
@@ -19,6 +19,7 @@
 //! |---|---|
 //! | `install_host()` | Give the core its [`Host`] and [`LocaleBackend`]. Runs before anything touches a path, a secret or a date format. |
 //! | `acquire_single_instance() -> bool` | `false` if another copy already owns the desktop. |
+//! | `migrate_autostart_entry()` | Carry a start-with-the-session entry across the program's rename. See [`migrate`]. |
 //! | `run() -> Result<(), String>` | The event loop. Returns only when the widget is finished, or with the reason it could not start. |
 //! | `fatal(&str)` | Say why, to a user who may have no console. |
 //! | `peek_running_instance() -> bool` | Tell a copy that is already running to come forward. |
@@ -28,13 +29,17 @@
 //! desktop at all the agenda is printed instead of drawn. See
 //! `docs/development/porting.md`.
 //!
-//! [`Host`]: tpmplaner_core::host::Host
-//! [`LocaleBackend`]: tpmplaner_core::host::LocaleBackend
+//! [`Host`]: ephemeris_core::host::Host
+//! [`LocaleBackend`]: ephemeris_core::host::LocaleBackend
 //!
 //! On Windows there is no console window: the widget is a pure graphical
 //! application. The text front end on the other platforms needs one, so the
 //! attribute is conditional rather than unconditional.
 #![cfg_attr(windows, windows_subsystem = "windows")]
+
+/// Carrying an installation made under the program's former name across the
+/// rename.
+mod migrate;
 
 /// What the widget looks like, and how it is drawn. Shared by every front end
 /// — see [`paint`].
@@ -50,11 +55,11 @@ mod unix;
 #[cfg(unix)]
 use unix as frontend;
 
-use tpmplaner_core::log;
+use ephemeris_core::log;
 
 /// The exit status is part of the contract now that one of the front ends is a
 /// command. On Windows nothing ever read it — `fatal` puts up a message box and
-/// the process is started from a shortcut — but `tpmplaner || notify-send …`, a
+/// the process is started from a shortcut — but `ephemeris || notify-send …`, a
 /// systemd unit and the smoke test in continuous integration all read it, and a
 /// program that could not start must not report success to them.
 ///
@@ -68,7 +73,7 @@ fn main() -> std::process::ExitCode {
     // Before anything touches a path, a secret or a date format.
     frontend::install_host();
 
-    // `tpmplaner --peek` is not a second widget: it is one message to the one
+    // `ephemeris --peek` is not a second widget: it is one message to the one
     // already running, and then it exits. A Wayland compositor owns every
     // keyboard shortcut and will not let a client grab one, so a keybinding
     // running this is the only way the peek shortcut can work there — and it
@@ -86,11 +91,16 @@ fn main() -> std::process::ExitCode {
         return std::process::ExitCode::SUCCESS;
     }
 
+    // After the lock, so two copies racing to start cannot both move the same
+    // directory, and before `run` reads a single setting — which is the whole
+    // point: the settings it is about to read may still be under the old name.
+    migrate::from_legacy_name();
+
     if let Err(e) = frontend::run() {
         // The language is already settled: `run` sets it first thing.
         frontend::fatal(&format!(
             "{}\n\n{e}",
-            tpmplaner_core::i18n::global().fatal_start
+            ephemeris_core::i18n::global().fatal_start
         ));
         return std::process::ExitCode::FAILURE;
     }

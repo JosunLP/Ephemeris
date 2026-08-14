@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! Background synchronisation on a thread of its own.
 //!
 //! The user interface owns all the scheduling and sends commands in; this
@@ -277,7 +277,7 @@ impl SyncHandle {
 pub fn spawn(shared: Arc<Mutex<Shared>>, waker: Arc<dyn Waker>) -> SyncHandle {
     let (tx, rx) = channel();
     std::thread::Builder::new()
-        .name("tpmplaner-sync".into())
+        .name("ephemeris-sync".into())
         .spawn(move || worker(shared, waker, rx))
         .expect("could not start the sync thread");
     SyncHandle { tx }
@@ -817,7 +817,7 @@ mod tests {
         // two checkouts, an editor testing while the terminal does — would have
         // one deleting the other's fixtures mid-assertion, and the failure
         // would look like a bug in `stale_tmp_files`.
-        let dir = std::env::temp_dir().join(format!("tpmplaner-test-sweep{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("ephemeris-test-sweep{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("scratch directory");
         let cache = dir.join("cache.json");

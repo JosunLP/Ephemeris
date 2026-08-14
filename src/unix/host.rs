@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! [`Host`] for macOS and Linux.
 //!
 //! All five methods are implemented: the data directory follows each system's
@@ -9,17 +9,17 @@
 //! which also explains what happens on a machine that has none.
 
 use crate::unix::secure;
+use ephemeris_core::host::{Host, PortableHost, is_openable_url};
+use ephemeris_core::log;
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use tpmplaner_core::host::{Host, PortableHost, is_openable_url};
-use tpmplaner_core::log;
 
 pub struct UnixHost;
 
 impl Host for UnixHost {
-    /// `$XDG_CONFIG_HOME/tpmplaner` on Linux, `~/Library/Application
-    /// Support/TPMPlaner` on macOS.
+    /// `$XDG_CONFIG_HOME/ephemeris` on Linux, `~/Library/Application
+    /// Support/Ephemeris` on macOS.
     ///
     /// Delegated: the portable fallback already knows every platform's
     /// convention, and a second copy of that knowledge is a second place for
@@ -43,7 +43,7 @@ impl Host for UnixHost {
         // here for the caller that is coming: `Event::html_link` arrives in the
         // calendar server's JSON, and an opener launches whatever is registered
         // for the scheme rather than merely browsing. The rule, and why it is
-        // an allowlist, is in `tpmplaner_core::host::is_openable_url`.
+        // an allowlist, is in `ephemeris_core::host::is_openable_url`.
         let opener = if cfg!(target_os = "macos") {
             "open"
         } else {
@@ -73,7 +73,7 @@ impl Host for UnixHost {
             Ok(mut child) => {
                 let opener = opener.to_owned();
                 let reaper = std::thread::Builder::new()
-                    .name("tpmplaner-opener".into())
+                    .name("ephemeris-opener".into())
                     .spawn(move || {
                         if let Err(e) = child.wait() {
                             log::warn(&format!("Could not wait for {opener}: {e}"));
@@ -184,7 +184,7 @@ mod tests {
     use super::*;
 
     /// The rule itself is tested where it lives, in
-    /// `tpmplaner_core::host::is_openable_url`. What is this front end's own is
+    /// `ephemeris_core::host::is_openable_url`. What is this front end's own is
     /// that the opener is handed exactly the string that passed the check.
     #[test]
     fn what_is_checked_is_what_is_opened() {

@@ -2,7 +2,7 @@
 
 The port is done.
 
-`tpmplaner-core` holds the model, the calendar back ends, synchronisation,
+`ephemeris-core` holds the model, the calendar back ends, synchronisation,
 localisation and the palette, and calls no operating system API. On top of it
 sit four front ends: a Direct2D renderer in a Win32 window, a Core Graphics
 renderer in an `NSWindow`, and a Cairo renderer in either a Wayland surface or
@@ -98,8 +98,8 @@ them is platform-specific than it looks. Four layers, from the portable end:
 
 | | |
 |---|---|
-| `tpmplaner_core::layout` | Where everything goes. Row and hit rectangles, the day rail's span, the tick circle, the scroll thumb, tooltip placement, which rows are visible, what fades, where the now line goes. Arithmetic over the metrics and the model, with its own tests. |
-| `tpmplaner_core::menu` | What the right-click menu contains — which entries, which ticked, which greyed. Also tested. |
+| `ephemeris_core::layout` | Where everything goes. Row and hit rectangles, the day rail's span, the tick circle, the scroll thumb, tooltip placement, which rows are visible, what fades, where the now line goes. Arithmetic over the metrics and the model, with its own tests. |
+| `ephemeris_core::menu` | What the right-click menu contains — which entries, which ticked, which greyed. Also tested. |
 | `src/paint/widget.rs` | The widget's *drawing*, written once against the `Canvas` trait. **Every** front end. |
 | `src/unix/app.rs` | The widget's *behaviour* — input, timers, commands — written once against the `Shell` trait, by the two front ends that were written together. |
 
@@ -117,7 +117,7 @@ That is a smaller duplication than the drawing was — a message pump and a
 and the loop is not — and the *decisions* a loop makes are already shared
 through `layout` and `menu`.
 
-`src/paint` sits beside the front ends rather than in `tpmplaner-core`, and the
+`src/paint` sits beside the front ends rather than in `ephemeris-core`, and the
 line is worth naming. The core answers *what to show* and *where it goes*, and
 can be tested without a device. `paint` answers *what it looks like*, which
 cannot be, and would drag a notion of drawing into a crate whose whole point is
@@ -226,7 +226,7 @@ The alternatives were weighed and remain rejected:
 | Credentials | `secret-tool` | The Secret Service is a D-Bus interface, and every client is either a C library to link or a dozen crates to carry. `secret-tool` is the reference client and ships wherever the service does. The headless fallback is in place and says it is not encrypting |
 | Appearance | `org.freedesktop.appearance` through `gdbus` | One portal interface that covers GNOME and KDE alike, and answers inside a Flatpak too. Driven with `gdbus` for the `secret-tool` reason; `gdbus monitor` watches for changes rather than the widget polling. The portal carries no key for "reduce motion" or "high contrast", so those come from `gsettings` where it answers and default to the values that change nothing where it does not |
 | Menu | Drawn by the widget | Neither X11 nor Wayland has menus, and with no toolkit there is nothing to ask. The rows, the measurements and the painting are shared (`drawn_menu.rs`); what differs is the surface and the dismissal. X11 uses an override-redirect window with a pointer grab; Wayland uses an `xdg_popup`, the only object in that protocol that comes with a grab and a "the user clicked elsewhere" event. Submenus open in place with a row back to the top, which avoids a hierarchy of grabs |
-| Hotkey | `XGrabKey` on X11; the compositor's own binding on Wayland | Wayland gives no client the power to grab a key — deliberately, and it is an improvement. So `tpmplaner --peek` tells the running copy to come forward through the socket that already makes it single-instance, and one line in the compositor's configuration is the shortcut. It works on X11 too |
+| Hotkey | `XGrabKey` on X11; the compositor's own binding on Wayland | Wayland gives no client the power to grab a key — deliberately, and it is an improvement. So `ephemeris --peek` tells the running copy to come forward through the socket that already makes it single-instance, and one line in the compositor's configuration is the shortcut. It works on X11 too |
 | Autostart | A `.desktop` file in `$XDG_CONFIG_HOME/autostart` | Old, small, and honoured by GNOME, KDE, XFCE, LXQt and the tiling compositors' session managers alike |
 | Single instance | An abstract socket | No path, so nothing is left in `/tmp` for the next start to trip over, and the kernel releases it however the process ends. Named after the display, so two sessions on one host are two desktops |
 | Shipping | Tarball; distributions package from source | There is no equivalent of the `install.ps1` one-liner, and inventing one that writes outside the package manager's view would be a worse citizen than having none. A Flatpak is the obvious next packaging step |
@@ -263,15 +263,16 @@ non-variadic type never sets it.
   release builds an unsigned bundle, which Gatekeeper refuses on first launch
   until the user right-clicks and chooses Open.
 - **Publishing the Flatpak.** The manifest is in `packaging/linux` and
-  `cargo-sources.json` is generated and checked against the lock file. What
-  Flathub still wants is an application icon and at least one screenshot,
-  and neither exists yet. The icon is not a review note but a build failure:
-  `appstreamcli compose` runs at the end of every build and stops on
-  `icon-not-found`, so nothing is exported without one. Screenshots are a
-  linter error rather than a build one, and they have to be mirrored to
-  `dl.flathub.org` rather than served from anywhere else. The manifest the
-  submission is made with also has to name a tag and a commit rather than
-  build from a directory.
+  `cargo-sources.json` is generated and checked against the lock file. The
+  icon is in place — `assets/logo.svg`, installed into
+  `hicolor/scalable/apps` under the application ID, which is what
+  `appstreamcli compose` looks for at the end of every build and used to stop
+  on. What Flathub still wants is at least one screenshot. That is a linter
+  error rather than a build failure, so the build itself now completes, but
+  the submission does not pass without it — and screenshots have to be
+  mirrored to `dl.flathub.org` rather than served from anywhere else. The
+  manifest the submission is made with also has to name a tag and a commit
+  rather than build from a directory.
 - **The Windows window on `Shell`**, so all four front ends share the
   behaviour as well as the drawing. Less pressing than the renderer was: a
   Win32 message pump and a `poll` loop really are different things, and what a

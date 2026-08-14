@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! Preview mode with sample data.
 //!
-//! Active when the `TPMPLANER_DEMO` environment variable is set. Intended for
+//! Active when the `EPHEMERIS_DEMO` environment variable is set. Intended for
 //! looking at and adjusting the layout — size, scaling, opacity — before any
 //! calendar account is connected. Nothing is synchronised in this mode.
 
@@ -10,7 +10,7 @@ use crate::model::{Agenda, Event, Task};
 use chrono::{Duration, Local};
 
 pub fn enabled() -> bool {
-    std::env::var_os("TPMPLANER_DEMO").is_some()
+    std::env::var_os("EPHEMERIS_DEMO").is_some()
 }
 
 pub fn agenda() -> Agenda {

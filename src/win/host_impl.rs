@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! The Windows answers to the portable core's questions.
 //!
-//! `tpmplaner-core` deliberately cannot call an operating system API. The
+//! `ephemeris-core` deliberately cannot call an operating system API. The
 //! handful of things that genuinely differ per platform — where settings
 //! live, how a secret is stored, how a browser opens, how a locale formats a
 //! date, how a background thread wakes the window — are declared there as
@@ -12,8 +12,8 @@
 //! core never learns which one it received.
 
 use chrono::{DateTime, Datelike, Local, NaiveDate, Timelike};
+use ephemeris_core::host::{Host, LocaleBackend, Waker};
 use std::path::PathBuf;
-use tpmplaner_core::host::{Host, LocaleBackend, Waker};
 use windows::Win32::Foundation::SYSTEMTIME;
 use windows::Win32::Globalization::{
     DATE_LONGDATE, ENUM_DATE_FORMATS_FLAGS, GetDateFormatEx, GetLocaleInfoEx, GetTimeFormatEx,
@@ -29,7 +29,7 @@ pub struct WindowsHost;
 impl Host for WindowsHost {
     fn data_dir(&self) -> PathBuf {
         match std::env::var_os("APPDATA") {
-            Some(v) => PathBuf::from(v).join("TPMPlaner"),
+            Some(v) => PathBuf::from(v).join("Ephemeris"),
             None => PathBuf::from("."),
         }
     }

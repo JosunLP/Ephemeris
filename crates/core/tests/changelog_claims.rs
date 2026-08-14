@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! Tests for the claims made in the changelog that unit tests did not cover.
 //!
 //! Several features had only ever been reasoned about: the panic hook, log
@@ -11,10 +11,10 @@
 //! The host trait is what makes most of this testable: a temporary directory
 //! can be installed as the data directory without touching a real one.
 
+use ephemeris_core::host::{Host, PortableHost};
+use ephemeris_core::{i18n, log, update};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use tpmplaner_core::host::{Host, PortableHost};
-use tpmplaner_core::{i18n, log, update};
 
 /// A host that redirects the data directory into a scratch folder.
 struct TempHost(PathBuf);
@@ -41,7 +41,7 @@ impl Host for TempHost {
 static HOST_LOCK: Mutex<()> = Mutex::new(());
 
 fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("tpmplaner-test-{name}"));
+    let dir = std::env::temp_dir().join(format!("ephemeris-test-{name}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("scratch directory");
     dir
@@ -165,10 +165,10 @@ fn relative_times_render_in_every_language() {
 fn the_log_rotates_once_it_grows_too_large() {
     let _guard = HOST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = scratch("log-rotation");
-    tpmplaner_core::host::set_host(Arc::new(TempHost(dir.clone())));
+    ephemeris_core::host::set_host(Arc::new(TempHost(dir.clone())));
 
-    let path = dir.join("tpmplaner.log");
-    let rotated = dir.join("tpmplaner.log.1");
+    let path = dir.join("ephemeris.log");
+    let rotated = dir.join("ephemeris.log.1");
 
     // Write past the 256 KB threshold. Each line is roughly 120 bytes.
     for i in 0..2600 {
@@ -189,7 +189,7 @@ fn the_log_rotates_once_it_grows_too_large() {
     let tail = std::fs::read_to_string(&path).expect("read live log");
     assert!(tail.contains("line 2599"), "the newest line was lost");
 
-    tpmplaner_core::host::set_host(Arc::new(PortableHost));
+    ephemeris_core::host::set_host(Arc::new(PortableHost));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -200,7 +200,7 @@ fn the_log_rotates_once_it_grows_too_large() {
 fn a_panic_is_recorded_before_the_process_would_die() {
     let _guard = HOST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = scratch("panic-hook");
-    tpmplaner_core::host::set_host(Arc::new(TempHost(dir.clone())));
+    ephemeris_core::host::set_host(Arc::new(TempHost(dir.clone())));
     log::install_panic_hook();
 
     // Under the test profile panics unwind, so the hook can be observed
@@ -210,7 +210,7 @@ fn a_panic_is_recorded_before_the_process_would_die() {
     });
     assert!(result.is_err(), "the panic did not happen");
 
-    let text = std::fs::read_to_string(dir.join("tpmplaner.log")).expect("log file");
+    let text = std::fs::read_to_string(dir.join("ephemeris.log")).expect("log file");
     assert!(text.contains("PANIC"), "no panic line in the log:\n{text}");
     assert!(
         text.contains("deliberate failure for the panic hook test"),
@@ -222,7 +222,7 @@ fn a_panic_is_recorded_before_the_process_would_die() {
     );
 
     let _ = std::panic::take_hook();
-    tpmplaner_core::host::set_host(Arc::new(PortableHost));
+    ephemeris_core::host::set_host(Arc::new(PortableHost));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -248,7 +248,7 @@ fn the_release_check_survives_a_repository_without_releases() {
 /// test, and "we read the value" is not the same as "we act on it".
 #[test]
 fn the_system_appearance_switches_actually_change_the_palette() {
-    use tpmplaner_core::theme::{ContrastColors, Palette, SystemVisuals, ThemePref};
+    use ephemeris_core::theme::{ContrastColors, Palette, SystemVisuals, ThemePref};
 
     let base = SystemVisuals::default();
 
@@ -339,7 +339,7 @@ fn the_system_appearance_switches_actually_change_the_palette() {
 /// Motion has to stop entirely when the system says so, not merely run faster.
 #[test]
 fn animations_disabled_means_no_animation_at_all() {
-    use tpmplaner_core::anim::Animations;
+    use ephemeris_core::anim::Animations;
 
     let mut anim = Animations::default();
     anim.enabled = false;

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! The drawing surface the widget is painted onto.
 //!
 //! Direct2D, Core Graphics and Cairo are the same *kind* of interface — an
@@ -16,19 +16,19 @@
 //! * **The reveal fade.** A single factor multiplied into every alpha, applied
 //!   in the same place and for the same reason.
 //! * **Colour.** Colours arrive as `0xRRGGBB` plus an alpha, exactly as
-//!   [`tpmplaner_core::theme`] produces them. Converting to whatever the
+//!   [`ephemeris_core::theme`] produces them. Converting to whatever the
 //!   platform wants is one function per back end.
 //!
 //! Text is the part that genuinely differs, and the trait keeps it narrow on
 //! purpose: draw one line into a box, draw a wrapped block into a box, measure
 //! a line, measure a block. Everything else about the widget's typography —
 //! which size, which weight, what gets ellipsised — is decided in
-//! [`Font`] and in [`tpmplaner_core::layout`].
+//! [`Font`] and in [`ephemeris_core::layout`].
 
-use tpmplaner_core::layout::Rect;
+use ephemeris_core::layout::Rect;
 
 /// A type role. The size and weight behind each one come from
-/// [`tpmplaner_core::theme::Metrics`] and the user's customisation, and are
+/// [`ephemeris_core::theme::Metrics`] and the user's customisation, and are
 /// resolved once when the back end is built.
 ///
 /// There is no role for the refresh symbol. It used to be a glyph from Segoe
@@ -90,7 +90,7 @@ pub struct Stop {
 /// What a renderer has to be able to draw.
 ///
 /// Coordinates are device-independent pixels with the origin at the window's
-/// top-left corner, matching [`tpmplaner_core::layout`]. Scaling for the
+/// top-left corner, matching [`ephemeris_core::layout`]. Scaling for the
 /// display is the back end's job and happens once, not per call.
 pub trait Canvas {
     /// Everything transparent again, ready for a new frame.
@@ -151,7 +151,7 @@ pub trait Canvas {
 
     /// How wide one line is, unconstrained.
     ///
-    /// The measurement [`tpmplaner_core::layout::column_width`] is waiting for:
+    /// The measurement [`ephemeris_core::layout::column_width`] is waiting for:
     /// what to do with the number is the same everywhere, and only the front
     /// end knows how wide a word actually is.
     fn text_width(&mut self, s: &str, font: Font) -> f32;

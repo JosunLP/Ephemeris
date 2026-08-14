@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! The slice of Xlib, Cairo and Pango the Linux front end needs, resolved at
 //! run time.
 //!

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! [`Canvas`] on Core Graphics, with Core Text for the type.
 //!
 //! The context comes from AppKit: the view is asked to draw and hands the
@@ -9,7 +9,7 @@
 //! this file is a third the length of the Direct2D one.
 //!
 //! **The view is flipped** (`isFlipped` returns YES), so y grows downwards and
-//! the coordinates match [`tpmplaner_core::layout`] exactly. Two things follow.
+//! the coordinates match [`ephemeris_core::layout`] exactly. Two things follow.
 //! Glyphs would come out upside down, so the text matrix carries a `(1, -1)`
 //! scale — the standard recipe for Core Text in a flipped context. And a
 //! wrapped block, which Core Text lays out into a frame from the bottom up,
@@ -27,10 +27,10 @@
 use crate::paint::canvas::{Align, Canvas, FONTS, Font, Stop};
 use crate::unix::cf;
 use crate::unix::mac::objc::*;
+use ephemeris_core::layout::Rect;
+use ephemeris_core::theme::{self, Appearance, Metrics};
 use std::collections::HashMap;
 use std::f32::consts::PI;
-use tpmplaner_core::layout::Rect;
-use tpmplaner_core::theme::{self, Appearance, Metrics};
 
 /// A Core Text font this code owns.
 struct OwnedFont(CTFontRef);

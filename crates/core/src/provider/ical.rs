@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! A small iCalendar (RFC 5545) reader for the parts a day view needs.
 //!
 //! This deliberately does **not** implement recurrence rules. The CalDAV

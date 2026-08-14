@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! Reading `peek_hotkey` out of the settings.
 //!
 //! `"Ctrl+Alt+Shift+K"` is a string a user types into a JSON file, and turning

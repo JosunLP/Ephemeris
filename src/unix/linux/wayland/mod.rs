@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! The Wayland back end.
 //!
 //! | | |
@@ -18,7 +18,7 @@ pub mod ffi;
 pub mod menu;
 pub mod window;
 
-use tpmplaner_core::log;
+use ephemeris_core::log;
 use window::Shape;
 
 pub fn run() -> Result<(), String> {
@@ -65,7 +65,7 @@ pub fn report_hotkey(configured: &str) {
     }
     log::info(
         "Wayland compositors own every keyboard shortcut, so peek_hotkey does nothing here. \
-         Bind a key to `tpmplaner --peek` in your compositor's configuration instead — \
-         for example `bindsym $mod+k exec tpmplaner --peek` in Sway.",
+         Bind a key to `ephemeris --peek` in your compositor's configuration instead — \
+         for example `bindsym $mod+k exec ephemeris --peek` in Sway.",
     );
 }

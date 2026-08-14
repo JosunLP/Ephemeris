@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Flatpak manifest for TPMPlaner.
+# Flatpak manifest for Ephemeris.
 #
 # Build and install locally with:
 #
 #     flatpak-builder --user --install --force-clean build \
-#         packaging/linux/io.github.josunlp.tpmplaner.yml
+#         packaging/linux/io.github.josunlp.ephemeris.yml
 #
 # Flathub runs two further checks on every build, and both can be run here
 # first. `org.flatpak.Builder` carries the linter, so it is the build to use
@@ -13,26 +13,26 @@
 #
 #     flatpak run org.flatpak.Builder --user --install --force-clean \
 #         --install-deps-from=flathub --repo=repo build \
-#         packaging/linux/io.github.josunlp.tpmplaner.yml
+#         packaging/linux/io.github.josunlp.ephemeris.yml
 #     flatpak run --command=flatpak-builder-lint org.flatpak.Builder \
-#         manifest packaging/linux/io.github.josunlp.tpmplaner.yml
+#         manifest packaging/linux/io.github.josunlp.ephemeris.yml
 #     flatpak run --command=flatpak-builder-lint org.flatpak.Builder repo repo
 #
 # The runtime already carries everything the widget opens at run time — Xlib,
 # Cairo, Pango and libwayland all come with the freedesktop platform — so this
 # builds one binary and nothing else.
-app-id: io.github.josunlp.tpmplaner
+app-id: io.github.josunlp.ephemeris
 runtime: org.freedesktop.Platform
 runtime-version: '25.08'
 sdk: org.freedesktop.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
-command: tpmplaner
+command: ephemeris
 
 build-options:
   append-path: /usr/lib/sdk/rust-stable/bin
   env:
-    CARGO_HOME: /run/build/tpmplaner/cargo
+    CARGO_HOME: /run/build/ephemeris/cargo
 
 finish-args:
   # The widget draws on the desktop, so it needs the display it is on —
@@ -61,16 +61,21 @@ finish-args:
   - --talk-name=org.freedesktop.portal.OpenURI
 
 modules:
-  - name: tpmplaner
+  - name: ephemeris
     buildsystem: simple
     build-commands:
       - cargo --offline fetch --manifest-path Cargo.toml --verbose
       - cargo --offline build --release --verbose
-      - install -Dm755 target/release/tpmplaner /app/bin/tpmplaner
-      - install -Dm644 packaging/linux/io.github.josunlp.tpmplaner.desktop
-        /app/share/applications/io.github.josunlp.tpmplaner.desktop
-      - install -Dm644 packaging/linux/io.github.josunlp.tpmplaner.metainfo.xml
-        /app/share/metainfo/io.github.josunlp.tpmplaner.metainfo.xml
+      - install -Dm755 target/release/ephemeris /app/bin/ephemeris
+      - install -Dm644 packaging/linux/io.github.josunlp.ephemeris.desktop
+        /app/share/applications/io.github.josunlp.ephemeris.desktop
+      - install -Dm644 packaging/linux/io.github.josunlp.ephemeris.metainfo.xml
+        /app/share/metainfo/io.github.josunlp.ephemeris.metainfo.xml
+      # What the `.desktop` file's `Icon=` has been naming all along. The
+      # scalable directory is enough on its own: the name matches the app ID,
+      # which is what Flathub checks for.
+      - install -Dm644 assets/logo.svg
+        /app/share/icons/hicolor/scalable/apps/io.github.josunlp.ephemeris.svg
     sources:
       - type: dir
         path: ../..

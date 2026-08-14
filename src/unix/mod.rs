@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! The macOS and Linux front end.
 //!
 //! [`host`] gives the core its data directory, its browser, its random bytes
@@ -36,9 +36,9 @@ mod mac;
 mod secure;
 mod text;
 
+use ephemeris_core::host as core_host;
+use ephemeris_core::log;
 use std::sync::Arc;
-use tpmplaner_core::host as core_host;
-use tpmplaner_core::log;
 
 pub fn install_host() {
     // Before the first write, so the settings and the credential file land in
@@ -51,6 +51,12 @@ pub fn install_host() {
     // as `4 August 2026` on a twenty-four-hour clock — right for no one in
     // particular.
     core_host::set_locale_backend(Arc::new(locale::UnixLocale));
+}
+
+/// Moves the autostart entry across the program's rename. See
+/// [`crate::migrate`].
+pub fn migrate_autostart_entry() {
+    autostart::migrate_entry();
 }
 
 /// A second copy would draw an identical window over the first and
@@ -100,12 +106,12 @@ pub fn run() -> Result<(), String> {
 
 /// Is there a desktop to put a window on?
 ///
-/// `TPMPLANER_TEXT=1` forces the text front end whatever the answer, which is
+/// `EPHEMERIS_TEXT=1` forces the text front end whatever the answer, which is
 /// what makes the printed agenda usable as a command on a machine that does
 /// have a display — and what lets continuous integration exercise it on a
 /// runner that has one.
 fn windowed() -> bool {
-    if std::env::var_os("TPMPLANER_TEXT").is_some_and(|v| v != "0") {
+    if std::env::var_os("EPHEMERIS_TEXT").is_some_and(|v| v != "0") {
         return false;
     }
     #[cfg(target_os = "macos")]
@@ -155,7 +161,7 @@ pub fn peek_running_instance() -> bool {
 /// message box and this does not.
 ///
 /// `writeln!` rather than `eprintln!`, which panics if stderr is gone —
-/// `tpmplaner 2>&1 | head -1` reaches that, and so does a supervisor that
+/// `ephemeris 2>&1 | head -1` reaches that, and so does a supervisor that
 /// closed the inherited handle. [`text::run`] takes the same care with stdout
 /// for the same reason: a panic report in the log users are asked to attach is
 /// worse than no message, and this is the one path that only runs when

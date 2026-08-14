@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! Colour palette and layout metrics.
 //!
 //! Visually modelled on the Aero gadgets of Windows Vista. Three ingredients

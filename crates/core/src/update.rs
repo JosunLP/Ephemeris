@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! Checks GitHub Releases for a newer build.
 //!
 //! The widget runs unattended for weeks at a time, so it has to notice
@@ -15,8 +15,8 @@
 use serde::Deserialize;
 use std::time::Duration;
 
-const RELEASES_API: &str = "https://api.github.com/repos/JosunLP/TPMPlaner/releases/latest";
-pub const RELEASES_PAGE: &str = "https://github.com/JosunLP/TPMPlaner/releases/latest";
+const RELEASES_API: &str = "https://api.github.com/repos/JosunLP/Ephemeris/releases/latest";
+pub const RELEASES_PAGE: &str = "https://github.com/JosunLP/Ephemeris/releases/latest";
 
 /// At most one check per day.
 pub const CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);

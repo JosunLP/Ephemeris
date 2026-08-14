@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! The right-click menu on X11: an override-redirect window with a pointer
 //! grab.
 //!
-//! What the menu contains is [`tpmplaner_core::menu`]'s; what it looks like is
+//! What the menu contains is [`ephemeris_core::menu`]'s; what it looks like is
 //! [`super::drawn_menu`]'s, shared with the Wayland back end. What is here is
 //! the two things X11 does its own way — a window the window manager leaves
 //! entirely alone, and a grab that makes a click beside the menu close it.
@@ -15,9 +15,9 @@ use crate::unix::linux::canvas::Cairo;
 use crate::unix::linux::drawn_menu::{self, Picked, Row};
 use crate::unix::linux::ffi::*;
 use crate::unix::linux::window::X11Shell;
+use ephemeris_core::log;
+use ephemeris_core::menu::{Command, Entry};
 use std::ffi::{c_int, c_uint};
-use tpmplaner_core::log;
-use tpmplaner_core::menu::{Command, Entry};
 
 /// Shows the menu at the pointer and returns what was picked.
 pub fn show(shell: &mut X11Shell, entries: &[Entry]) -> Option<Command> {

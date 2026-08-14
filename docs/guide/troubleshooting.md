@@ -136,7 +136,7 @@ animations turned off, the widget skips them entirely.
 
 ## Still stuck
 
-[Open an issue](https://github.com/JosunLP/TPMPlaner/issues/new/choose) with
+[Open an issue](https://github.com/JosunLP/Ephemeris/issues/new/choose) with
 the relevant log lines. Redact anything private — the log contains no event
 titles, but it does contain account labels and error messages from your
 provider.

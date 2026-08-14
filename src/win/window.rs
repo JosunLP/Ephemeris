@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! The widget window.
 //!
 //! It behaves like a Vista gadget:
@@ -28,18 +28,18 @@
 use crate::win::platform;
 use crate::win::render::{self, Frame, Hit, HitRegion, Renderer, UndoView};
 use chrono::{DateTime, Duration as ChronoDuration, Local, Timelike};
+use ephemeris_core::anim::Animations;
+use ephemeris_core::config::{self, Config};
+use ephemeris_core::i18n::Locale;
+use ephemeris_core::layout::{Panel, hit_point};
+use ephemeris_core::log;
+use ephemeris_core::menu;
+use ephemeris_core::model::TaskKey;
+use ephemeris_core::sync::{self, Command, Shared, Status, SyncHandle};
+use ephemeris_core::theme::{Appearance, Metrics, Palette, SystemVisuals, ThemePref};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
-use tpmplaner_core::anim::Animations;
-use tpmplaner_core::config::{self, Config};
-use tpmplaner_core::i18n::Locale;
-use tpmplaner_core::layout::{Panel, hit_point};
-use tpmplaner_core::log;
-use tpmplaner_core::menu;
-use tpmplaner_core::model::TaskKey;
-use tpmplaner_core::sync::{self, Command, Shared, Status, SyncHandle};
-use tpmplaner_core::theme::{Appearance, Metrics, Palette, SystemVisuals, ThemePref};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{
     DWMSBT_NONE, DWMSBT_TRANSIENTWINDOW, DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE,
@@ -204,7 +204,7 @@ pub fn run() -> Result<()> {
         let loc = Locale::resolve(&cfg.language);
         // The sync thread and the emergency exit have no access to this
         // instance, so they reach for the global catalogue instead.
-        tpmplaner_core::i18n::set_global(loc.cat);
+        ephemeris_core::i18n::set_global(loc.cat);
         let palette = palette_for(&cfg, &appearance, visuals, false);
         log::info(&format!(
             "Start — locale {} ({}{}), theme {}{}, accent #{:06X}, sync every {} min",
@@ -229,19 +229,19 @@ pub fn run() -> Result<()> {
             hInstance: instance.into(),
             hCursor: LoadCursorW(None, IDC_ARROW)?,
             hbrBackground: HBRUSH::default(),
-            lpszClassName: w!("TPMPlanerWidget"),
+            lpszClassName: w!("EphemerisWidget"),
             ..Default::default()
         };
         if RegisterClassExW(&class) == 0 {
             return Err(windows::core::Error::from_thread());
         }
 
-        let demo = tpmplaner_core::demo::enabled();
+        let demo = ephemeris_core::demo::enabled();
         let mut state = Box::new(State {
             hwnd: HWND::default(),
             shared: Arc::new(Mutex::new(Shared {
                 agenda: if demo {
-                    tpmplaner_core::demo::agenda()
+                    ephemeris_core::demo::agenda()
                 } else {
                     // The last known state, so start-up does not begin with a
                     // blank surface.
@@ -288,8 +288,8 @@ pub fn run() -> Result<()> {
         // on an actual monitor.
         let hwnd = CreateWindowExW(
             WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-            w!("TPMPlanerWidget"),
-            w!("TPMPlaner"),
+            w!("EphemerisWidget"),
+            w!("Ephemeris"),
             WS_POPUP,
             cfg.x.unwrap_or(0),
             cfg.y.unwrap_or(0),
@@ -924,7 +924,7 @@ fn start_update(st: &mut State) {
     log::info(&format!("Installing update {}", update.version));
 
     const INSTALLER: &str =
-        "irm https://github.com/JosunLP/TPMPlaner/releases/latest/download/install.ps1 | iex";
+        "irm https://github.com/JosunLP/Ephemeris/releases/latest/download/install.ps1 | iex";
     let args = platform::wide(&format!(
         "-NoProfile -ExecutionPolicy Bypass -Command \"{INSTALLER}\""
     ));
@@ -956,7 +956,7 @@ fn start_update(st: &mut State) {
 fn copy_agenda(st: &mut State) {
     let text = {
         let guard = sync::lock(&st.shared);
-        tpmplaner_core::model::agenda_as_text(&guard.agenda, &st.loc)
+        ephemeris_core::model::agenda_as_text(&guard.agenda, &st.loc)
     };
 
     // The widget's own window owns the clipboard: with a null handle
@@ -976,8 +976,8 @@ fn register_peek_hotkey(hwnd: HWND, cfg: &Config) {
         return;
     }
 
-    for spec in tpmplaner_core::hotkey::candidates(&cfg.peek_hotkey) {
-        let Some(combo) = tpmplaner_core::hotkey::parse(spec) else {
+    for spec in ephemeris_core::hotkey::candidates(&cfg.peek_hotkey) {
+        let Some(combo) = ephemeris_core::hotkey::parse(spec) else {
             log::warn(&format!("peek_hotkey '{spec}' is not a usable combination"));
             continue;
         };
@@ -1186,7 +1186,7 @@ fn reload_config_if_changed(st: &mut State) {
     // and the line breaking rules — see `render::locale_name`.
     let new_loc = Locale::resolve(&cfg.language);
     let text_layout_changed = new_loc.rtl != st.loc.rtl || new_loc.tag != st.loc.tag;
-    tpmplaner_core::i18n::set_global(new_loc.cat);
+    ephemeris_core::i18n::set_global(new_loc.cat);
     st.loc = new_loc;
 
     st.scale = cfg.scale;
@@ -1571,7 +1571,7 @@ fn save_geometry(st: &mut State) {
 /// which is how the tick circle beats the task row, and the undo area beats
 /// them both.
 ///
-/// The point is folded first. The rectangles come out of `tpmplaner_core`
+/// The point is folded first. The rectangles come out of `ephemeris_core`
 /// unmirrored and the drawing is mirrored at the primitives, so a raw client
 /// position and a hit rectangle are in different coordinates in a right-to-left
 /// layout. See [`hit_point`].
@@ -1756,7 +1756,7 @@ fn current_size_px(hwnd: HWND) -> (u32, u32) {
 /// Puts the shared menu model on screen as a Win32 popup, and runs whatever
 /// was picked.
 ///
-/// What the menu *contains* is decided in [`tpmplaner_core::menu`], so this
+/// What the menu *contains* is decided in [`ephemeris_core::menu`], so this
 /// function only translates: an [`Entry`] becomes an `AppendMenuW` call, and a
 /// command identifier becomes an index into the commands collected on the way
 /// in. That indirection replaces the block of `CMD_*` constants this used to

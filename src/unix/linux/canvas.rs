@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! [`Canvas`] on Cairo, with Pango for the type.
 //!
 //! The surface is an Xlib one wrapped straight around the window, so Cairo
@@ -10,7 +10,7 @@
 //! `"backdrop"` and transparency settings already have to cope with.
 //!
 //! Cairo's coordinates already have y growing downwards, so they match
-//! [`tpmplaner_core::layout`] with no conversion.
+//! [`ephemeris_core::layout`] with no conversion.
 //!
 //! Text goes through Pango rather than `cairo_show_text` — see the note in
 //! [`super::ffi`]. Every line is one `PangoLayout`, built and thrown away; the
@@ -19,12 +19,12 @@
 
 use crate::paint::canvas::{Align, Canvas, FONTS, Font, Stop};
 use crate::unix::linux::ffi::*;
+use ephemeris_core::layout::Rect;
+use ephemeris_core::theme::{self, Appearance, Metrics, Palette};
 use std::collections::HashMap;
 use std::f64::consts::PI;
 use std::ffi::{CString, c_int};
 use std::sync::Arc;
-use tpmplaner_core::layout::Rect;
-use tpmplaner_core::theme::{self, Appearance, Metrics, Palette};
 
 /// What the surface draws into, which decides what `resize` and `present`
 /// can do.

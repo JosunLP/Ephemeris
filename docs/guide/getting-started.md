@@ -9,10 +9,10 @@
 ## Install
 
 ```powershell
-irm https://github.com/JosunLP/TPMPlaner/releases/latest/download/install.ps1 | iex
+irm https://github.com/JosunLP/Ephemeris/releases/latest/download/install.ps1 | iex
 ```
 
-This installs into `%LOCALAPPDATA%\Programs\TPMPlaner`, adds a Start menu
+This installs into `%LOCALAPPDATA%\Programs\Ephemeris`, adds a Start menu
 entry, enables autostart and launches the widget. Nothing outside your user
 profile is touched and no administrator rights are needed.
 
@@ -32,9 +32,9 @@ installed.
 
 ### Manual install
 
-Download `tpmplaner-x86_64-pc-windows-msvc.exe` from the
-[releases page](https://github.com/JosunLP/TPMPlaner/releases/latest), verify
-it against the `.sha256` file next to it, rename it to `tpmplaner.exe` and run
+Download `ephemeris-x86_64-pc-windows-msvc.exe` from the
+[releases page](https://github.com/JosunLP/Ephemeris/releases/latest), verify
+it against the `.sha256` file next to it, rename it to `ephemeris.exe` and run
 it. It is a single self-contained binary of roughly 1.7 MB with no runtime to
 install.
 
@@ -49,7 +49,7 @@ Two things are worth doing before you connect anything:
 ### Look at it first
 
 ```powershell
-$env:TPMPLANER_DEMO = "1"; & "$env:LOCALAPPDATA\Programs\TPMPlaner\tpmplaner.exe"
+$env:EPHEMERIS_DEMO = "1"; & "$env:LOCALAPPDATA\Programs\Ephemeris\ephemeris.exe"
 ```
 
 Preview mode fills the widget with sample data and synchronises nothing. Use it

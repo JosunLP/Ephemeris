@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! [`Canvas`] on Direct2D, with DirectWrite for the type.
 //!
 //! The device chain this draws through is built in [`super::render`]; what is
@@ -16,10 +16,10 @@
 //! runs.
 
 use crate::paint::canvas::{Align, Canvas, FONTS, Font, Stop};
+use ephemeris_core::layout::Rect;
+use ephemeris_core::theme::{self, Appearance, Metrics};
 use std::cell::RefCell;
 use std::collections::HashMap;
-use tpmplaner_core::layout::Rect;
-use tpmplaner_core::theme::{self, Appearance, Metrics};
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D_RECT_F, D2D_SIZE_F, D2D1_COLOR_F, D2D1_FIGURE_BEGIN_FILLED, D2D1_FIGURE_BEGIN_HOLLOW,
     D2D1_FIGURE_END_CLOSED, D2D1_FIGURE_END_OPEN, D2D1_GRADIENT_STOP,

@@ -30,7 +30,7 @@ Examples of unacceptable behaviour:
 
 Instances of abusive, harassing or otherwise unacceptable behaviour may be
 reported to the maintainers through
-[a private security advisory](https://github.com/JosunLP/TPMPlaner/security/advisories/new)
+[a private security advisory](https://github.com/JosunLP/Ephemeris/security/advisories/new)
 or by contacting the repository owner directly. All complaints will be reviewed
 and investigated promptly and fairly, and the privacy and security of the
 reporter will be respected.

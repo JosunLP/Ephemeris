@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! Small Windows helpers: opening a browser, autostart, trimming memory.
 
-use tpmplaner_core::log;
-use tpmplaner_core::theme::{ContrastColors, SystemVisuals};
+use ephemeris_core::log;
+use ephemeris_core::theme::{ContrastColors, SystemVisuals};
 use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError, HWND, RECT};
 use windows::Win32::Graphics::Gdi::{
     HMONITOR, MONITOR_DEFAULTTONULL, MONITORINFO, MonitorFromRect,
@@ -20,7 +20,11 @@ use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 use windows::core::PCWSTR;
 
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
-const RUN_VALUE: &str = "TPMPlaner";
+const RUN_VALUE: &str = "Ephemeris";
+/// The name the same value had before the program was renamed. Only
+/// [`migrate_autostart_entry`] reads it, and it can go once no installation
+/// predating the rename is plausible.
+const LEGACY_RUN_VALUE: &str = "TPMPlaner";
 const PERSONALIZE_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
 
 /// UTF-16 with a trailing null, as the Win32 `*W` functions expect.
@@ -44,7 +48,7 @@ pub fn open_in_browser(url: &str) {
     // Trimmed once, so the string checked and the string opened are the same
     // bytes.
     let url = url.trim();
-    if !tpmplaner_core::host::is_openable_url(url) {
+    if !ephemeris_core::host::is_openable_url(url) {
         log::warn(&format!("Refusing to open '{url}': not an openable URL"));
         return;
     }
@@ -53,7 +57,7 @@ pub fn open_in_browser(url: &str) {
 
 /// Opens a path in its associated program: the settings file, the data folder.
 ///
-/// Every caller passes a path from [`config`](tpmplaner_core::config) or the
+/// Every caller passes a path from [`config`](ephemeris_core::config) or the
 /// log — ours, not a server's — which is why this does not go through the URL
 /// rule.
 pub fn open_path(path: &std::path::Path) {
@@ -78,14 +82,18 @@ fn shell_open(target: &str) {
 }
 
 pub fn autostart_enabled() -> bool {
-    autostart_enabled_in(RUN_KEY)
+    autostart_enabled_in(RUN_KEY, RUN_VALUE)
 }
 
 /// Split out from [`autostart_enabled`] so a test can drive it against a
 /// scratch key. Pointing the test at the real Run key would mean deleting the
 /// user's own autostart entries to reach the case worth testing: the key not
 /// being there at all.
-fn autostart_enabled_in(subkey: &str) -> bool {
+///
+/// The value is a parameter for the second caller,
+/// [`migrate_autostart_entry`], which has to ask about a name that is no longer
+/// this program's.
+fn autostart_enabled_in(subkey: &str, value: &str) -> bool {
     unsafe {
         let mut key = HKEY::default();
         let sub = wide(subkey);
@@ -100,7 +108,7 @@ fn autostart_enabled_in(subkey: &str) -> bool {
         {
             return false;
         }
-        let name = wide(RUN_VALUE);
+        let name = wide(value);
         let mut size = 0u32;
         let present = RegQueryValueExW(
             key,
@@ -117,12 +125,32 @@ fn autostart_enabled_in(subkey: &str) -> bool {
 }
 
 pub fn set_autostart(enabled: bool) {
-    set_autostart_in(RUN_KEY, enabled);
+    set_autostart_in(RUN_KEY, RUN_VALUE, enabled);
+}
+
+/// Moves an autostart entry written under the former program name to the
+/// current one.
+///
+/// The old value is not renamed but replaced: it holds the path of the old
+/// executable, which the installer has just stopped putting there. Writing the
+/// new one through [`set_autostart`] records this binary's own path instead —
+/// the one that just started, and so the one the user wants at the next login.
+///
+/// Called once at start-up from [`crate::migrate`].
+pub fn migrate_autostart_entry() {
+    if !autostart_enabled_in(RUN_KEY, LEGACY_RUN_VALUE) {
+        return;
+    }
+    // The new value first: if the process dies between the two, an autostart
+    // entry that points at the old path beats none at all.
+    set_autostart(true);
+    set_autostart_in(RUN_KEY, LEGACY_RUN_VALUE, false);
+    log::info("Moved the autostart entry to the new program name");
 }
 
 /// Split out from [`set_autostart`] for the same reason as
-/// [`autostart_enabled_in`].
-fn set_autostart_in(subkey: &str, enabled: bool) {
+/// [`autostart_enabled_in`], and carrying the value name for the same one.
+fn set_autostart_in(subkey: &str, value: &str, enabled: bool) {
     unsafe {
         let mut key = HKEY::default();
         let sub = wide(subkey);
@@ -409,10 +437,10 @@ pub fn set_clipboard_text(owner: HWND, text: &str) -> bool {
 
 /// The Win32 numbers for a parsed combination.
 ///
-/// Reading `"Win+Alt+K"` is [`tpmplaner_core::hotkey`]'s job and the same on
+/// Reading `"Win+Alt+K"` is [`ephemeris_core::hotkey`]'s job and the same on
 /// every platform; only these numbers are Windows'.
-pub fn hotkey_codes(combo: tpmplaner_core::hotkey::Combination) -> (u32, u32) {
-    use tpmplaner_core::hotkey::Key;
+pub fn hotkey_codes(combo: ephemeris_core::hotkey::Combination) -> (u32, u32) {
+    use ephemeris_core::hotkey::Key;
     use windows::Win32::UI::Input::KeyboardAndMouse::{MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN};
 
     let mut modifiers = 0u32;
@@ -449,7 +477,7 @@ pub fn acquire_single_instance() -> bool {
     unsafe {
         // "Local\" scopes the lock to the logon session, so every user of a
         // terminal server may have their own widget.
-        let name = wide(r"Local\TPMPlaner.SingleInstance");
+        let name = wide(r"Local\Ephemeris.SingleInstance");
         match CreateMutexW(None, true, PCWSTR(name.as_ptr())) {
             Ok(handle) => {
                 if GetLastError() == ERROR_ALREADY_EXISTS {
@@ -515,8 +543,8 @@ pub fn trim_working_set() {
 #[cfg(test)]
 mod tests {
     use super::{
-        autostart_enabled, autostart_enabled_in, hotkey_codes, open_clipboard, set_autostart,
-        set_autostart_in, set_clipboard_text, wide,
+        RUN_VALUE, autostart_enabled, autostart_enabled_in, hotkey_codes, open_clipboard,
+        set_autostart, set_autostart_in, set_clipboard_text, wide,
     };
     use windows::Win32::Foundation::HWND;
     use windows::core::PCWSTR;
@@ -652,30 +680,30 @@ mod tests {
     /// Hence a scratch key, removed first so it is reliably absent.
     #[test]
     fn autostart_creates_the_key_when_it_is_missing() {
-        const SCRATCH: &str = r"Software\TPMPlaner\autostart-create-test";
+        const SCRATCH: &str = r"Software\Ephemeris\autostart-create-test";
 
         delete_key(SCRATCH);
         assert!(
-            !autostart_enabled_in(SCRATCH),
+            !autostart_enabled_in(SCRATCH, RUN_VALUE),
             "the scratch key was still there after deleting it"
         );
 
-        set_autostart_in(SCRATCH, true);
+        set_autostart_in(SCRATCH, RUN_VALUE, true);
         assert!(
-            autostart_enabled_in(SCRATCH),
+            autostart_enabled_in(SCRATCH, RUN_VALUE),
             "the missing key was not created"
         );
 
-        set_autostart_in(SCRATCH, false);
+        set_autostart_in(SCRATCH, RUN_VALUE, false);
         assert!(
-            !autostart_enabled_in(SCRATCH),
+            !autostart_enabled_in(SCRATCH, RUN_VALUE),
             "the value was not removed again"
         );
 
         delete_key(SCRATCH);
         // Succeeds only while it is empty, which is the wanted behaviour: the
         // parent is not ours to remove once something else lives under it.
-        delete_key(r"Software\TPMPlaner");
+        delete_key(r"Software\Ephemeris");
     }
 
     /// Removes a key under `HKEY_CURRENT_USER`. A key that is not there is not
@@ -766,7 +794,7 @@ mod tests {
 
     /// Virtual key codes: 'K' is 0x4B, F5 is 0x74, '7' is 0x37.
     ///
-    /// Reading the specification is tested in `tpmplaner_core::hotkey`; what
+    /// Reading the specification is tested in `ephemeris_core::hotkey`; what
     /// is Windows' own — and what a wrong table would break silently, by
     /// registering some other key — is this mapping.
     #[test]
@@ -775,16 +803,16 @@ mod tests {
             MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN,
         };
 
-        let (m, k) = hotkey_codes(tpmplaner_core::hotkey::parse("Win+Alt+K").unwrap());
+        let (m, k) = hotkey_codes(ephemeris_core::hotkey::parse("Win+Alt+K").unwrap());
         assert_eq!(k, 0x4B);
         assert_eq!(m, MOD_WIN.0 | MOD_ALT.0);
 
-        let (m, k) = hotkey_codes(tpmplaner_core::hotkey::parse("Ctrl+Shift+F5").unwrap());
+        let (m, k) = hotkey_codes(ephemeris_core::hotkey::parse("Ctrl+Shift+F5").unwrap());
         assert_eq!(k, 0x74);
         assert_eq!(m, MOD_CONTROL.0 | MOD_SHIFT.0);
 
         assert_eq!(
-            hotkey_codes(tpmplaner_core::hotkey::parse("strg+umschalt+7").unwrap()).1,
+            hotkey_codes(ephemeris_core::hotkey::parse("strg+umschalt+7").unwrap()).1,
             0x37
         );
     }

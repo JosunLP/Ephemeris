@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! The slice of Core Foundation the macOS front end needs.
 //!
 //! Two things reach for it — the date formatter in [`super::locale`] and the

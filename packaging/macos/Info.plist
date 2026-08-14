@@ -4,13 +4,22 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>TPMPlaner</string>
+    <string>Ephemeris</string>
     <key>CFBundleDisplayName</key>
-    <string>TPMPlaner</string>
+    <string>Ephemeris</string>
     <key>CFBundleIdentifier</key>
-    <string>io.github.josunlp.tpmplaner</string>
+    <string>io.github.josunlp.ephemeris</string>
     <key>CFBundleExecutable</key>
-    <string>tpmplaner</string>
+    <string>ephemeris</string>
+
+    <!-- `Resources/Ephemeris.icns`, which the release workflow copies there
+         from `assets`. The extension is left off because that is the form
+         Launch Services has always read this key in. With `LSUIElement` true
+         there is no Dock tile to put it on: this is the icon Finder shows for
+         the bundle itself, and the one the "About" panel of any application
+         that inspects it uses. -->
+    <key>CFBundleIconFile</key>
+    <string>Ephemeris</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleInfoDictionaryVersion</key>

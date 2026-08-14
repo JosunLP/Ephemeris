@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <component type="desktop-application">
-  <id>io.github.josunlp.tpmplaner</id>
+  <id>io.github.josunlp.ephemeris</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
 
-  <name>TPMPlaner</name>
+  <name>Ephemeris</name>
   <summary>Today's calendar events and due tasks on your desktop</summary>
 
   <description>
@@ -35,14 +35,14 @@
     </p>
   </description>
 
-  <launchable type="desktop-id">io.github.josunlp.tpmplaner.desktop</launchable>
-  <url type="homepage">https://josunlp.github.io/TPMPlaner/</url>
-  <url type="bugtracker">https://github.com/JosunLP/TPMPlaner/issues</url>
-  <url type="help">https://josunlp.github.io/TPMPlaner/guide/getting-started</url>
-  <url type="vcs-browser">https://github.com/JosunLP/TPMPlaner</url>
+  <launchable type="desktop-id">io.github.josunlp.ephemeris.desktop</launchable>
+  <url type="homepage">https://josunlp.github.io/Ephemeris/</url>
+  <url type="bugtracker">https://github.com/JosunLP/Ephemeris/issues</url>
+  <url type="help">https://josunlp.github.io/Ephemeris/guide/getting-started</url>
+  <url type="vcs-browser">https://github.com/JosunLP/Ephemeris</url>
 
   <developer id="io.github.josunlp">
-    <name>TPMPlaner contributors</name>
+    <name>Ephemeris contributors</name>
   </developer>
 
   <content_rating type="oars-1.1"/>

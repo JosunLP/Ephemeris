@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! Direct2D renderer on a DirectComposition surface.
 //!
 //! How the chain is put together:
@@ -31,15 +31,15 @@ use crate::paint::canvas::{FONTS, Font};
 use crate::paint::widget as paint;
 use crate::win::canvas::{self, D2dCanvas, LayoutKey};
 use crate::win::platform;
-use tpmplaner_core::log;
-use tpmplaner_core::theme::{Appearance, Metrics, Palette};
+use ephemeris_core::log;
+use ephemeris_core::theme::{Appearance, Metrics, Palette};
 
 /// What a click means, the rectangle it landed in, and what one frame is drawn
 /// from. All of it lives in the core now — the window translates a click into a
 /// [`Hit`] without drawing anything, and every front end needs the identical
 /// set. Re-exported so the window still reaches them through the renderer it
 /// already imports.
-pub use tpmplaner_core::layout::{Frame, FrameResult, Hit, HitRegion, UndoView};
+pub use ephemeris_core::layout::{Frame, FrameResult, Hit, HitRegion, UndoView};
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -445,7 +445,7 @@ fn create_d3d_device() -> Result<ID3D11Device> {
 ///
 /// The tag may come straight out of `config.json`, so it is validated first:
 /// `CreateTextFormat` rejects an unknown locale name, and without this check a
-/// typo in the settings file would turn into "TPMPlaner could not start". An
+/// typo in the settings file would turn into "Ephemeris could not start". An
 /// empty name means "no particular locale", which is what the renderer used to
 /// get in effect.
 fn locale_name(tag: &str) -> Vec<u16> {

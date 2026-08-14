@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! The widget itself: everything that happens between an input event and a
 //! frame, for both macOS and Linux.
 //!
@@ -15,24 +15,24 @@
 //! also what makes it obvious how much of a front end is left to write.
 //!
 //! Coordinates: pointer positions arrive in device-independent pixels relative
-//! to the window's corner, which is what [`tpmplaner_core::layout`] computes
+//! to the window's corner, which is what [`ephemeris_core::layout`] computes
 //! in. Window geometry goes the other way and is in physical pixels, because
 //! that is what every window system places windows with.
 
 use crate::unix::autostart;
 use chrono::{DateTime, Duration as ChronoDuration, Local, Timelike};
+use ephemeris_core::anim::Animations;
+use ephemeris_core::config::{self, Config};
+use ephemeris_core::i18n::Locale;
+use ephemeris_core::layout::{Frame, Hit, HitRegion, Panel, UndoView, hit_point};
+use ephemeris_core::menu;
+use ephemeris_core::model::TaskKey;
+use ephemeris_core::sync::{self, Command, Shared, Status, SyncHandle};
+use ephemeris_core::theme::{Appearance, Metrics, Palette, SystemVisuals, ThemePref};
+use ephemeris_core::{demo, log};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
-use tpmplaner_core::anim::Animations;
-use tpmplaner_core::config::{self, Config};
-use tpmplaner_core::i18n::Locale;
-use tpmplaner_core::layout::{Frame, Hit, HitRegion, Panel, UndoView, hit_point};
-use tpmplaner_core::menu;
-use tpmplaner_core::model::TaskKey;
-use tpmplaner_core::sync::{self, Command, Shared, Status, SyncHandle};
-use tpmplaner_core::theme::{Appearance, Metrics, Palette, SystemVisuals, ThemePref};
-use tpmplaner_core::{demo, log};
 
 /// How far from the glass edge the grip still responds, in DIPs.
 const RESIZE_GRIP: f32 = 6.0;
@@ -217,10 +217,10 @@ impl App {
     ///
     /// `waker` is what the sync thread uses to nudge the event loop; every
     /// platform has a different one, which is the whole reason
-    /// [`tpmplaner_core::host::Waker`] is a trait.
+    /// [`ephemeris_core::host::Waker`] is a trait.
     pub fn new(
         visuals: SystemVisuals,
-        waker: Arc<dyn tpmplaner_core::host::Waker>,
+        waker: Arc<dyn ephemeris_core::host::Waker>,
     ) -> (Self, Config) {
         let (cfg, config_error) = Config::load();
         if let Some(e) = &config_error {
@@ -232,7 +232,7 @@ impl App {
         let loc = Locale::resolve(&cfg.language);
         // The sync thread and the emergency exit have no access to this
         // instance, so they reach for the global catalogue instead.
-        tpmplaner_core::i18n::set_global(loc.cat);
+        ephemeris_core::i18n::set_global(loc.cat);
         let palette = palette_for(&cfg, &appearance, visuals, false);
         log::info(&format!(
             "Start — locale {} ({}{}), theme {}{}, accent #{:06X}, sync every {} min",
@@ -502,7 +502,7 @@ impl App {
             Some(Hit::Tomorrow(idx)) => self.open_event(idx, true),
 
             Some(Hit::Task(_)) => {
-                tpmplaner_core::host::host().open_url("https://tasks.google.com/")
+                ephemeris_core::host::host().open_url("https://tasks.google.com/")
             }
 
             Some(Hit::StatusAction) => self.status_action(shell),
@@ -843,7 +843,7 @@ impl App {
         let link = list.get(idx).and_then(|e| e.html_link.clone());
         drop(guard);
         if let Some(link) = link {
-            tpmplaner_core::host::host().open_url(&link);
+            ephemeris_core::host::host().open_url(&link);
         }
     }
 
@@ -897,13 +897,13 @@ impl App {
             "Update {} available — opening the release page",
             update.version
         ));
-        tpmplaner_core::host::host().open_url(&update.url);
+        ephemeris_core::host::host().open_url(&update.url);
     }
 
     /// Today's agenda as plain text, for pasting into a message.
     fn copy_agenda(&mut self, shell: &mut dyn Shell) {
         let guard = sync::lock(&self.shared);
-        let text = tpmplaner_core::model::agenda_as_text(&guard.agenda, &self.loc);
+        let text = ephemeris_core::model::agenda_as_text(&guard.agenda, &self.loc);
         drop(guard);
         shell.set_clipboard(&text);
         log::info("Agenda copied to the clipboard");
@@ -1178,7 +1178,7 @@ impl App {
         self.metrics = metrics;
         self.palette = palette;
         self.anim.enabled = palette.animations;
-        tpmplaner_core::i18n::set_global(loc.cat);
+        ephemeris_core::i18n::set_global(loc.cat);
         self.loc = loc;
 
         {

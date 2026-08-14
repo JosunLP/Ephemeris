@@ -29,8 +29,8 @@
 set -uo pipefail
 
 SRC=$(cd "$(dirname "$0")/.." && pwd)
-WORK=${TMPDIR:-/tmp}/tpmplaner-macos-check
-export CARGO_TARGET_DIR=${TMPDIR:-/tmp}/tpmplaner-macos-target
+WORK=${TMPDIR:-/tmp}/ephemeris-macos-check
+export CARGO_TARGET_DIR=${TMPDIR:-/tmp}/ephemeris-macos-target
 
 rm -rf "$WORK"
 mkdir -p "$WORK"

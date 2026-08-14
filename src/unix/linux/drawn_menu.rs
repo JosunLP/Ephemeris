@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! The right-click menu's rows, measurements and drawing.
 //!
 //! Linux has no menus to ask for. X11 never had any, and Wayland deliberately
@@ -20,9 +20,9 @@
 //! to the top level, which is one state variable and behaves the same on both.
 
 use crate::paint::canvas::{Align, Canvas, Font};
-use tpmplaner_core::layout::Rect;
-use tpmplaner_core::menu::{Command, Entry, Item};
-use tpmplaner_core::theme::Palette;
+use ephemeris_core::layout::Rect;
+use ephemeris_core::menu::{Command, Entry, Item};
+use ephemeris_core::theme::Palette;
 
 /// Height of one row and of a separator, and the space around the text, in
 /// pixels.
@@ -289,7 +289,7 @@ pub fn place(pointer: (i32, i32), size: (f32, f32), screen: (i32, i32)) -> (i32,
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tpmplaner_core::menu::Command;
+    use ephemeris_core::menu::Command;
 
     fn item(label: &str, enabled: bool) -> Item {
         Item {

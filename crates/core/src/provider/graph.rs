@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! Microsoft Graph: Outlook calendars, Teams meetings and Microsoft To Do.
 //!
 //! There is no separate Teams calendar API. A Teams meeting is an ordinary

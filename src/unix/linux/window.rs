@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! The widget's window on X11.
 //!
 //! Every property of the Windows window has a standard here, which is why X11
@@ -40,12 +40,12 @@ use crate::unix::autostart;
 use crate::unix::linux::canvas::{Cairo, Look};
 use crate::unix::linux::ffi::*;
 use crate::unix::linux::{menu, visuals};
+use ephemeris_core::host::Waker;
+use ephemeris_core::log;
+use ephemeris_core::theme::SystemVisuals;
 use std::ffi::{CString, c_int, c_long, c_uint, c_ulong, c_void};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tpmplaner_core::host::Waker;
-use tpmplaner_core::log;
-use tpmplaner_core::theme::SystemVisuals;
 
 /// The atoms the widget needs, interned once.
 ///
@@ -560,7 +560,7 @@ fn set_window_properties(libs: &Libs, display: *mut Display, window: Window, ato
     // are written: the old property for anything that still reads it, and
     // `_NET_WM_NAME` as UTF-8, which is what every current window manager,
     // taskbar and screen reader looks at first.
-    let name = b"TPMPlaner";
+    let name = b"Ephemeris";
     change(XA_WM_NAME, XA_STRING, 8, name, name.len());
     change(atoms.net_wm_name, atoms.utf8_string, 8, name, name.len());
 
@@ -721,8 +721,8 @@ impl X11Shell {
         if configured.trim().is_empty() {
             return;
         }
-        for spec in tpmplaner_core::hotkey::candidates(configured) {
-            let Some(combo) = tpmplaner_core::hotkey::parse(spec) else {
+        for spec in ephemeris_core::hotkey::candidates(configured) {
+            let Some(combo) = ephemeris_core::hotkey::parse(spec) else {
                 log::warn(&format!("peek_hotkey '{spec}' is not a usable combination"));
                 continue;
             };
@@ -803,8 +803,8 @@ impl X11Shell {
     /// `"F12"`. Going through the name rather than a table means the widget
     /// follows the user's keyboard layout, which is what a shortcut written as
     /// a letter should do.
-    fn keycode(&self, key: tpmplaner_core::hotkey::Key) -> Option<c_uint> {
-        use tpmplaner_core::hotkey::Key;
+    fn keycode(&self, key: ephemeris_core::hotkey::Key) -> Option<c_uint> {
+        use ephemeris_core::hotkey::Key;
         let name = match key {
             Key::Letter(c) => (c as char).to_ascii_lowercase().to_string(),
             Key::Digit(d) => d.to_string(),
@@ -1018,8 +1018,8 @@ impl Shell for X11Shell {
 
     fn show_menu(
         &mut self,
-        entries: &[tpmplaner_core::menu::Entry],
-    ) -> Option<tpmplaner_core::menu::Command> {
+        entries: &[ephemeris_core::menu::Entry],
+    ) -> Option<ephemeris_core::menu::Command> {
         menu::show(self, entries)
     }
 

@@ -6,6 +6,44 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **The widget is called Ephemeris.** The former name had to go for trademark
+  reasons, and it was never only a label: it named the binary, the settings
+  directory, the log, the Windows registry values, the macOS bundle and launch
+  agent, the Flatpak application id, and the entropy the stored calendar
+  credentials were encrypted with. All of them have moved.
+
+  **Nothing has to be done about it.** The first start under the new name
+  carries an existing installation over: the settings directory and everything
+  in it, the autostart entry, and the saved calendar credentials — the Windows
+  DPAPI blobs, the macOS Keychain items and the Linux Secret Service items
+  alike. Accounts stay connected, and the old locations are cleaned up once
+  their contents have arrived. Nothing is ever overwritten, and anything that
+  could not be moved is left where it was with the reason in the log.
+
+  On Windows the installer additionally removes the previous installation:
+  program directory, start menu shortcut, autostart value and the entry in the
+  app list. The settings are the one thing it leaves alone, because the widget
+  itself is what moves those.
+
+  What changes for anyone scripting against it: the executable is `ephemeris`,
+  the environment variables are `EPHEMERIS_DEMO`, `EPHEMERIS_TEXT` and
+  `EPHEMERIS_REQUIRE_SYSTEM_LOCALE`, the Flatpak id is
+  `io.github.josunlp.ephemeris`, and the release assets are named
+  `ephemeris-<target>`.
+
+### Added
+
+- **The widget has an icon.** One drawn file, `assets/logo.svg`, and every
+  other form of it is rendered from that by `scripts/render-logo.py`: the
+  documentation's favicons and header mark, the PNG in the README, an `.ico`
+  the Windows build embeds in the executable — which is also what the Start
+  menu shortcut shows, since it names no icon of its own — and an `.icns` the
+  macOS release copies into the application bundle. The Flatpak installs the
+  SVG under the application ID, which is the piece `appstreamcli compose`
+  needed before it would export anything at all.
+
 ### Fixed
 
 - **Ticking a task off no longer takes another account's task with it.** The
@@ -80,16 +118,16 @@ All notable changes to this project are documented here. The format follows
   the lock forbids. One thing it deliberately does not prevent: a widget left
   off every monitor still comes back, because a lock that could strand it
   invisibly would be a trap rather than a convenience.
-- `tpmplaner --peek` brings the running widget forward, through the same socket
+- `ephemeris --peek` brings the running widget forward, through the same socket
   that already makes it single-instance. This is how the peek shortcut works on
   Wayland at all: the compositor owns every keybinding and will not let a
   client grab one — deliberately, and an improvement on X11 — so a line like
-  `bindsym $mod+k exec tpmplaner --peek` in the compositor's configuration is
+  `bindsym $mod+k exec ephemeris --peek` in the compositor's configuration is
   the shortcut. It works on X11 too, for anyone who would rather their desktop
   owned it.
 - Where there is no desktop — a container, a server over SSH, a
   continuous-integration runner — the agenda is printed rather than drawn, and
-  the same binary does both. `TPMPLANER_TEXT=1` asks for the printed form on a
+  the same binary does both. `EPHEMERIS_TEXT=1` asks for the printed form on a
   machine that does have a display, which makes it a usable command in its own
   right.
 - Starting with the session on macOS and Linux: a launch agent in
@@ -97,13 +135,13 @@ All notable changes to this project are documented here. The format follows
   `$XDG_CONFIG_HOME/autostart`. Both are plain files in the user's own home, so
   nothing is written outside the profile and removing the file is all it takes
   to undo — the promise the Windows installer already makes.
-- `tpmplaner_core::menu` decides what the right-click menu contains — which
+- `ephemeris_core::menu` decides what the right-click menu contains — which
   entries appear, which are ticked, which are greyed out — for all three front
   ends, with its own tests. A `HMENU`, an `NSMenu` and a panel drawn with Cairo
   differ in how a menu is *shown*, not in what it says, and a command added to
   the core now fails to compile in every front end until each says what it
   does.
-- `tpmplaner_core::hotkey` reads `peek_hotkey`. The spelling is the same
+- `ephemeris_core::hotkey` reads `peek_hotkey`. The spelling is the same
   everywhere and only the key *number* is not, so the parsing is shared and
   each platform maps a parsed combination to its own table. `Cmd`, `Win` and
   `Super` are all accepted for the same key, so one settings file works on
@@ -112,7 +150,7 @@ All notable changes to this project are documented here. The format follows
   the licence and the readme, and a SHA-256 beside it. No installer one-liner
   on either — inventing one that writes outside the package manager's view
   would make the widget a worse citizen than having none. The macOS archive
-  also carries a `TPMPlaner.app`; it is **not** notarised, which needs a paid
+  also carries a `Ephemeris.app`; it is **not** notarised, which needs a paid
   developer account, so Gatekeeper refuses it on first launch until the user
   right-clicks and chooses Open.
 - `icu4x` was measured against the C library's long-date gap on Linux, which
@@ -176,7 +214,7 @@ All notable changes to this project are documented here. The format follows
   disagree about it. The long date on Linux is the honest gap: POSIX has no
   long-date pattern, so the short one is widened, keeping the locale's field
   order and separators.
-- `tpmplaner_core::layout`: the arithmetic behind the drawing, moved out of the
+- `ephemeris_core::layout`: the arithmetic behind the drawing, moved out of the
   Windows renderer before a second one is written. Where a row starts, how wide
   the time column has to be, which rows are visible, what fades and by how
   much, where the now line goes, which rectangle a click landed in — the same
@@ -254,7 +292,7 @@ All notable changes to this project are documented here. The format follows
   and naming one of them was wrong on the other two.
 - Today's agenda as text — the *Copy agenda* entry — is built in the core, so
   the three front ends copy the same day rather than three near-identical ones.
-- `Frame`, `UndoView` and `FrameResult` moved to `tpmplaner_core::layout`
+- `Frame`, `UndoView` and `FrameResult` moved to `ephemeris_core::layout`
   beside the hit regions: every front end draws from exactly those and nothing
   else, and a field added for one of them would otherwise be a field the others
   silently do not draw.
@@ -387,7 +425,7 @@ All notable changes to this project are documented here. The format follows
 - The process exits with a failure status when it could not start, instead of
   reporting success after printing the reason. It never mattered while the only
   front end put the message in a message box nobody's shell was reading; it
-  matters now that one of them is a command, where `tpmplaner || …`, a systemd
+  matters now that one of them is a command, where `ephemeris || …`, a systemd
   unit and the smoke test all decide by the status. Another copy already owning
   the desktop stays a success, deliberately: nothing went wrong, this copy just
   has nothing to do.
@@ -414,7 +452,7 @@ All notable changes to this project are documented here. The format follows
   most worth hearing about: replacing a file another process holds open is a
   sharing violation on Windows, and every copy opens this file at start-up.
 - On macOS and Linux, the message printed when the widget cannot start no
-  longer panics if stderr has gone away. `tpmplaner 2>&1 | head -1` closes it,
+  longer panics if stderr has gone away. `ephemeris 2>&1 | head -1` closes it,
   and so does a supervisor, and the panic hook would then write a broken pipe
   into the log the user was about to attach — on the one path that only runs
   when something has already gone wrong.
@@ -627,8 +665,8 @@ First public release.
 - File log with rotation; panics are recorded before the process ends.
 - Settings are reloaded without a restart.
 
-[Unreleased]: https://github.com/JosunLP/TPMPlaner/compare/v1.1.0...HEAD
-[1.1.0]: https://github.com/JosunLP/TPMPlaner/releases/tag/v1.1.0
-[1.0.2]: https://github.com/JosunLP/TPMPlaner/releases/tag/v1.0.2
-[1.0.1]: https://github.com/JosunLP/TPMPlaner/releases/tag/v1.0.1
-[1.0.0]: https://github.com/JosunLP/TPMPlaner/releases/tag/v1.0.0
+[Unreleased]: https://github.com/JosunLP/Ephemeris/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/JosunLP/Ephemeris/releases/tag/v1.1.0
+[1.0.2]: https://github.com/JosunLP/Ephemeris/releases/tag/v1.0.2
+[1.0.1]: https://github.com/JosunLP/Ephemeris/releases/tag/v1.0.1
+[1.0.0]: https://github.com/JosunLP/Ephemeris/releases/tag/v1.0.0

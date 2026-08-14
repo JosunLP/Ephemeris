@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! What the widget looks like, and how it is drawn.
 //!
 //! One description of the interface, for every front end. [`widget::draw`]
@@ -8,7 +8,7 @@
 //! Graphics on macOS, Cairo on Wayland and X11.
 //!
 //! Nothing here calls an operating system API, so it lives beside the front
-//! ends rather than inside one. It is not in `tpmplaner-core` either, and the
+//! ends rather than inside one. It is not in `ephemeris-core` either, and the
 //! line is worth naming: the core answers *what to show* and *where it goes* —
 //! which rows are visible, how wide a column has to be, which rectangle a
 //! click landed in — and can be tested without a device. This answers *what it

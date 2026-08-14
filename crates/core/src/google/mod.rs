@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! The Google APIs: OAuth, Calendar and Tasks.
 //!
 //! Everything blocking, and only ever called from the sync thread. No async
@@ -64,7 +64,7 @@ pub fn agent() -> &'static ureq::Agent {
             // code.
             .http_status_as_error(false)
             .timeout_global(Some(Duration::from_secs(30)))
-            .user_agent("TPMPlaner/0.1 (Windows Desktop Gadget)")
+            .user_agent("Ephemeris/0.1 (Windows Desktop Gadget)")
             .build()
             .new_agent()
     })

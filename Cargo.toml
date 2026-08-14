@@ -2,17 +2,17 @@
 members = ["crates/core"]
 
 [package]
-name = "tpmplaner"
+name = "ephemeris"
 version = "1.1.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
 description = "A desktop widget showing today's calendar events and due tasks"
-repository = "https://github.com/JosunLP/TPMPlaner"
+repository = "https://github.com/JosunLP/Ephemeris"
 readme = "README.md"
 rust-version = "1.90"
 
 [dependencies]
-tpmplaner-core = { path = "crates/core" }
+ephemeris-core = { path = "crates/core" }
 base64 = "0.23.1"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std", "serde"] }
 quick-xml = "0.41.0"
@@ -82,3 +82,13 @@ windows = { version = "0.62.2", features = [
     "Win32_System_Threading",
 ] }
 windows-numerics = "0.3.1"
+
+# The icon has to be in the executable's resource section for Windows to find
+# it, and putting it there means driving the resource compiler: writing an
+# `.rc`, locating the `rc.exe` of whichever Windows SDK is installed, and
+# handing the linker the object that comes out. `winresource` is that, and
+# nothing else. It builds no code into the binary — it runs, writes a file and
+# is gone — and `cfg(windows)` here is the machine doing the building, so a
+# Linux or macOS build never fetches it. See `build.rs`.
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1.31"

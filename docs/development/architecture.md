@@ -3,7 +3,7 @@
 ## The split
 
 ```text
-crates/core/          tpmplaner-core   — portable, no operating system calls
+crates/core/          ephemeris-core   — portable, no operating system calls
   model.rs            events, tasks, filtering, sorting, conflict detection
   provider/           Google, Microsoft Graph, CalDAV, iCalendar
   sync.rs             schedule, backoff, parallel fetch, cache
@@ -15,7 +15,7 @@ crates/core/          tpmplaner-core   — portable, no operating system calls
   host.rs             the traits the platform must supply
   update.rs           release check
 
-src/                  tpmplaner       — the front ends
+src/                  ephemeris       — the front ends
   main.rs             platform-neutral: picks a front end, and nothing else
   paint/              what the widget looks like — every front end
     canvas.rs         what a renderer has to be able to draw

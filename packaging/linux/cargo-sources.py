@@ -37,7 +37,7 @@ REGISTRY = "registry+https://github.com/rust-lang/crates.io-index"
 
 # Where the module is unpacked inside the sandbox. `flatpak-builder` uses the
 # module's name, and the manifest sets `CARGO_HOME` to match.
-BUILD_DIR = "/run/build/tpmplaner"
+BUILD_DIR = "/run/build/ephemeris"
 
 CARGO_CONFIG = f"""\
 [source.crates-io]

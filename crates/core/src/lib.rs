@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
-//! The portable half of TPMPlaner.
+// Copyright (C) 2026 Ephemeris contributors
+//! The portable half of Ephemeris.
 //!
 //! Everything here compiles and behaves identically on Windows, macOS and
 //! Linux: the data model, the calendar back ends, the synchronisation

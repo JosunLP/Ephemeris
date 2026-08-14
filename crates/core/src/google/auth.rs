@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! OAuth 2.0 for installed applications: loopback redirect with PKCE.
 //!
 //! The old `urn:ietf:wg:oauth:2.0:oob` flow has been switched off by Google.
@@ -311,7 +311,7 @@ fn wait_for_code(listener: TcpListener, expected_state: &str) -> Result<String> 
             return Ok(code);
         }
         // Background noise such as a favicon request.
-        respond(&mut stream, cat, "TPMPlaner", cat.auth_waiting);
+        respond(&mut stream, cat, "Ephemeris", cat.auth_waiting);
     }
 
     Err(Error::NeedsLogin(i18n::global().err_timeout.into()))

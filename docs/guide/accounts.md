@@ -1,6 +1,6 @@
 # Connecting accounts
 
-TPMPlaner talks to three kinds of service. You can use several at once, and of
+Ephemeris talks to three kinds of service. You can use several at once, and of
 the same kind more than once — a work Google account and a private one, for
 instance. All configured accounts are queried **in parallel**, and one of them
 failing never hides the others.
@@ -69,7 +69,7 @@ Under **Credentials → Create credentials → OAuth client ID**, pick applicati
 type **Desktop app**, download the JSON and save it as:
 
 ```text
-%APPDATA%\TPMPlaner\client_secret.json
+%APPDATA%\Ephemeris\client_secret.json
 ```
 
 Click the refresh symbol in the widget. A browser opens for sign-in, and the
@@ -118,7 +118,7 @@ Under **API permissions**, add these delegated Microsoft Graph permissions:
 Copy the **Application (client) ID** from the overview page into:
 
 ```text
-%APPDATA%\TPMPlaner\microsoft_client.json
+%APPDATA%\Ephemeris\microsoft_client.json
 ```
 
 ```json
@@ -134,7 +134,7 @@ Add a `microsoft` account to `accounts`, refresh, and sign in.
 Any server speaking [RFC 4791](https://www.rfc-editor.org/rfc/rfc4791). Tested
 shapes include iCloud, Nextcloud, Fastmail, Synology and mailbox.org.
 
-Create `%APPDATA%\TPMPlaner\caldav-<id>.json`, where `<id>` matches the `id`
+Create `%APPDATA%\Ephemeris\caldav-<id>.json`, where `<id>` matches the `id`
 in your `accounts` entry:
 
 ```json

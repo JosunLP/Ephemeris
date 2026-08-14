@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! Stored credentials on macOS and Linux.
 //!
 //! A refresh token is standing access to a calendar account and has no business
@@ -40,8 +40,8 @@
 //! begins with, so the two forms can coexist across an upgrade in either
 //! direction.
 
+use ephemeris_core::log;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tpmplaner_core::log;
 
 /// Marks a stored blob as a pointer into the keyring rather than the secret.
 ///
@@ -49,10 +49,26 @@ use tpmplaner_core::log;
 /// tag were ever to change shape. A base64url refresh token cannot begin with
 /// this — it contains no colon and no capital-and-hyphen run — and neither can
 /// a DPAPI blob, which is why the two forms can be distinguished at rest.
-const REFERENCE_PREFIX: &[u8] = b"TPMPlaner-keyring-v1:";
+const REFERENCE_PREFIX: &[u8] = b"Ephemeris-keyring-v1:";
+
+/// The same marker, as written before the program was renamed.
+///
+/// Read but never written: a `token.bin` from the previous version begins with
+/// this, and without it every one of them would read as a secret rather than as
+/// a pointer — the widget would hand the *marker* to a calendar server as a
+/// password. Goes together with [`platform::lookup_legacy`], and can go once no
+/// installation predating the rename is plausible.
+const LEGACY_REFERENCE_PREFIX: &[u8] = b"TPMPlaner-keyring-v1:";
 
 /// What the keyring lists the widget's items under.
-const SERVICE: &str = "TPMPlaner";
+const SERVICE: &str = "Ephemeris";
+
+/// What it listed them under before the rename. See [`LEGACY_REFERENCE_PREFIX`].
+///
+/// Only the Keychain names items by a service; the Secret Service back end has
+/// its own equivalent in `platform::LEGACY_ATTRIBUTE`.
+#[cfg(target_os = "macos")]
+const LEGACY_SERVICE: &str = "TPMPlaner";
 
 /// So the "not encrypting" warning is written once rather than on every sync.
 static FALLBACK_REPORTED: AtomicBool = AtomicBool::new(false);
@@ -119,15 +135,11 @@ pub fn unprotect(cipher: &[u8], tag: &[u8]) -> Option<Vec<u8>> {
     let name = keyring_name(stored_tag).or_else(|| keyring_name(tag))?;
     match platform::lookup(&name) {
         Ok(Some(secret)) => Some(secret),
-        // The reference is there and the item is not: the user cleared their
-        // keyring, or this is a different machine. A failed sign-in that can
-        // be redone beats a confusing error.
-        Ok(None) => {
-            log::warn(&format!(
-                "No keyring entry for '{name}' — the account has to be connected again"
-            ));
-            None
-        }
+        // Nothing under the current name. Either this installation predates the
+        // rename — in which case the item is still there, filed under the old
+        // one — or the user cleared their keyring and a sign-in has to be
+        // redone.
+        Ok(None) => adopt_legacy_item(&name),
         // Either kind of failure ends the same way — the token cannot be read
         // this run — but they are worth telling apart in the log, because one
         // of them is worth trying again and the other is a machine that has no
@@ -149,6 +161,46 @@ pub fn unprotect(cipher: &[u8], tag: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
+/// Looks for the item under the name the keyring knew before the program was
+/// renamed, and moves it over.
+///
+/// Only reached when nothing is filed under the current name, so the ordinary
+/// run never pays for it. The secret is copied first and the old item cleared
+/// afterwards: a failure in between leaves it readable under one name or the
+/// other, whereas the reverse order could lose it outright. Clearing at all is
+/// hygiene rather than correctness — a credential nothing will ever read again
+/// has no business sitting in the user's keyring.
+fn adopt_legacy_item(name: &str) -> Option<Vec<u8>> {
+    let secret = match platform::lookup_legacy(name) {
+        Ok(Some(secret)) => secret,
+        // Genuinely not there, under either name.
+        Ok(None) => {
+            log::warn(&format!(
+                "No keyring entry for '{name}' — the account has to be connected again"
+            ));
+            return None;
+        }
+        // A keyring that said no answers for both names at once, and the
+        // caller has already reported the first refusal.
+        Err(_) => return None,
+    };
+    match platform::store(name, &secret) {
+        Ok(()) => {
+            platform::clear_legacy(name);
+            log::info(&format!(
+                "Moved the keyring entry for '{name}' to the new program name"
+            ));
+        }
+        // Usable this run, and tried again the next: the old item is still
+        // there precisely because this failed.
+        Err(_) => log::warn(&format!(
+            "Could not re-file the keyring entry for '{name}' under the new program \
+             name — it is still readable under the old one"
+        )),
+    }
+    Some(secret)
+}
+
 /// Reports once, then hands the caller its own bytes back.
 fn fall_back(plain: &[u8], reason: &str) -> Vec<u8> {
     if !FALLBACK_REPORTED.swap(true, Ordering::Relaxed) {
@@ -168,8 +220,13 @@ fn reference_for(tag: &[u8]) -> Vec<u8> {
 }
 
 /// The tag inside a reference, or `None` if this blob is not one.
+///
+/// Both markers count. A file written before the rename carries the old one,
+/// and the tag that follows it is unchanged — only the name in front of it
+/// moved.
 fn reference_tag(blob: &[u8]) -> Option<&[u8]> {
     blob.strip_prefix(REFERENCE_PREFIX)
+        .or_else(|| blob.strip_prefix(LEGACY_REFERENCE_PREFIX))
 }
 
 /// The keyring item name for a caller's tag.
@@ -240,6 +297,7 @@ mod platform {
         fn SecItemAdd(attributes: CFDictionaryRef, result: *mut CFTypeRef) -> OSStatus;
         fn SecItemCopyMatching(query: CFDictionaryRef, result: *mut CFTypeRef) -> OSStatus;
         fn SecItemUpdate(query: CFDictionaryRef, attributesToUpdate: CFDictionaryRef) -> OSStatus;
+        fn SecItemDelete(query: CFDictionaryRef) -> OSStatus;
 
         static kSecClass: CFStringRef;
         static kSecClassGenericPassword: CFStringRef;
@@ -255,8 +313,12 @@ mod platform {
 
     /// The service and account pair that identifies this widget's item for
     /// `name`.
-    fn identity(name: &str) -> Option<(cf::Owned, cf::Owned)> {
-        Some((cf::string(super::SERVICE)?, cf::string(name)?))
+    ///
+    /// The service is a parameter only so the same three calls can be made
+    /// against the name the keychain used before the program was renamed; every
+    /// caller but those passes [`super::SERVICE`].
+    fn identity(service: &str, name: &str) -> Option<(cf::Owned, cf::Owned)> {
+        Some((cf::string(service)?, cf::string(name)?))
     }
 
     /// A failure to build a Core Foundation object is an allocation failure and
@@ -267,7 +329,8 @@ mod platform {
     }
 
     pub fn store(name: &str, secret: &[u8]) -> Result<(), Refusal> {
-        let (service, account) = identity(name).ok_or_else(|| cannot_build("the item identity"))?;
+        let (service, account) =
+            identity(super::SERVICE, name).ok_or_else(|| cannot_build("the item identity"))?;
         let value = cf::data(secret).ok_or_else(|| cannot_build("the secret"))?;
 
         // `AfterFirstUnlock` rather than `WhenUnlocked`: the widget starts at
@@ -322,7 +385,38 @@ mod platform {
     }
 
     pub fn lookup(name: &str) -> Result<Option<Vec<u8>>, Refusal> {
-        let (service, account) = identity(name).ok_or_else(|| cannot_build("the item identity"))?;
+        lookup_in(super::SERVICE, name)
+    }
+
+    /// The same item as the keychain filed it before the program was renamed.
+    /// See [`super::adopt_legacy_item`].
+    pub fn lookup_legacy(name: &str) -> Result<Option<Vec<u8>>, Refusal> {
+        lookup_in(super::LEGACY_SERVICE, name)
+    }
+
+    /// Removes the item filed under the former name, once its secret has been
+    /// copied to the current one.
+    ///
+    /// Best-effort and silent: it is tidying, and "not found" — the state this
+    /// is trying to reach — is one of the outcomes.
+    pub fn clear_legacy(name: &str) {
+        let Some((service, account)) = identity(super::LEGACY_SERVICE, name) else {
+            return;
+        };
+        let query = unsafe {
+            cf::dictionary(
+                &[kSecClass, kSecAttrService, kSecAttrAccount],
+                &[kSecClassGenericPassword, service.as_raw(), account.as_raw()],
+            )
+        };
+        if let Some(query) = query {
+            let _ = unsafe { SecItemDelete(query.as_raw()) };
+        }
+    }
+
+    fn lookup_in(service: &str, name: &str) -> Result<Option<Vec<u8>>, Refusal> {
+        let (service, account) =
+            identity(service, name).ok_or_else(|| cannot_build("the item identity"))?;
         let query = unsafe {
             cf::dictionary(
                 &[
@@ -392,7 +486,10 @@ mod platform {
     /// The attribute the widget files its items under. `secret-tool` matches on
     /// attribute pairs rather than on a service and account, so this is the
     /// equivalent of the Keychain's service field.
-    const ATTRIBUTE: &str = "tpmplaner-credential";
+    const ATTRIBUTE: &str = "ephemeris-credential";
+    /// The attribute the same items were filed under before the program was
+    /// renamed. See [`super::adopt_legacy_item`].
+    const LEGACY_ATTRIBUTE: &str = "tpmplaner-credential";
 
     /// How long the tool may take before it is killed.
     ///
@@ -431,7 +528,15 @@ mod platform {
     ///
     /// The secret never becomes an argument: `ps` shows those to every account
     /// on the machine, which would defeat the whole exercise.
-    fn run(verb: &str, name: &str, secret: Option<&[u8]>) -> Result<Output, Refusal> {
+    /// The attribute is a parameter only so the same calls can be made against
+    /// the one the keyring used before the program was renamed; every caller
+    /// but those passes [`ATTRIBUTE`].
+    fn run(
+        attribute: &str,
+        verb: &str,
+        name: &str,
+        secret: Option<&[u8]>,
+    ) -> Result<Output, Refusal> {
         let mut command = Command::new(TOOL);
         command.arg(verb);
         if verb == "store" {
@@ -440,7 +545,7 @@ mod platform {
                 .arg(format!("{} ({name})", super::SERVICE));
         }
         command
-            .arg(ATTRIBUTE)
+            .arg(attribute)
             .arg(name)
             .stdin(if secret.is_some() {
                 Stdio::piped()
@@ -521,7 +626,7 @@ mod platform {
     }
 
     pub fn store(name: &str, secret: &[u8]) -> Result<(), Refusal> {
-        let output = run("store", name, Some(secret))?;
+        let output = run(ATTRIBUTE, "store", name, Some(secret))?;
         if output.status.success() {
             return Ok(());
         }
@@ -529,7 +634,27 @@ mod platform {
     }
 
     pub fn lookup(name: &str) -> Result<Option<Vec<u8>>, Refusal> {
-        let output = run("lookup", name, None)?;
+        lookup_under(ATTRIBUTE, name)
+    }
+
+    /// The same item as the keyring filed it before the program was renamed.
+    /// See [`super::adopt_legacy_item`].
+    pub fn lookup_legacy(name: &str) -> Result<Option<Vec<u8>>, Refusal> {
+        lookup_under(LEGACY_ATTRIBUTE, name)
+    }
+
+    /// Removes the item filed under the former attribute, once its secret has
+    /// been copied to the current one.
+    ///
+    /// Best-effort and silent: it is tidying, and `secret-tool clear` exits
+    /// non-zero for an item that is already gone — the state this is trying to
+    /// reach.
+    pub fn clear_legacy(name: &str) {
+        let _ = run(LEGACY_ATTRIBUTE, "clear", name, None);
+    }
+
+    fn lookup_under(attribute: &str, name: &str) -> Result<Option<Vec<u8>>, Refusal> {
+        let output = run(attribute, "lookup", name, None)?;
 
         if !output.status.success() {
             // `secret-tool lookup` exits non-zero for "no such item", which is
@@ -584,12 +709,27 @@ mod tests {
         for secret in [
             &b"1//09abcDEF-ghiJKL_mnoPQR"[..],
             &b""[..],
-            &b"TPMPlaner"[..],
+            &b"Ephemeris"[..],
             // A near miss: the right words, the wrong version.
-            &b"TPMPlaner-keyring-v2:google-token"[..],
+            &b"Ephemeris-keyring-v2:google-token"[..],
         ] {
             assert!(reference_tag(secret).is_none(), "{secret:?}");
         }
+    }
+
+    /// A `token.bin` written before the program was renamed carries the old
+    /// marker. Reading it as a secret rather than as a reference would send the
+    /// marker itself to a calendar server as a password.
+    #[test]
+    fn a_reference_written_under_the_former_name_is_still_a_reference() {
+        let mut legacy = LEGACY_REFERENCE_PREFIX.to_vec();
+        legacy.extend_from_slice(b"google-token");
+        assert_eq!(reference_tag(&legacy), Some(&b"google-token"[..]));
+
+        // Only that one prefix, and only at the front: the old name in the
+        // middle of a secret means nothing.
+        assert!(reference_tag(b"TPMPlaner-keyring-v2:google-token").is_none());
+        assert!(reference_tag(b"1//09TPMPlaner-keyring-v1:x").is_none());
     }
 
     #[test]

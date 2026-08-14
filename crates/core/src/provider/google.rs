@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! Google Calendar and Google Tasks behind the common provider interface.
 //!
 //! The request handling itself lives in [`crate::google`]; this module only

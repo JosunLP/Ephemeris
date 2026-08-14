@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! Starting the widget with the session.
 //!
 //! Windows writes a value under the Run key. Neither of these platforms has
@@ -22,12 +22,12 @@
 //! directory therefore has to be re-enabled, which is honest: the alternative
 //! is an entry that points at nothing and fails silently at every login.
 
+use ephemeris_core::log;
 use std::path::PathBuf;
-use tpmplaner_core::log;
 
 /// Reverse-DNS label for the launch agent, and the file name it lives under.
 #[cfg(target_os = "macos")]
-const AGENT_LABEL: &str = "io.github.josunlp.tpmplaner";
+const AGENT_LABEL: &str = "io.github.josunlp.ephemeris";
 
 /// Can this platform start the widget with the session at all?
 ///
@@ -56,8 +56,58 @@ fn entry_path() -> Option<PathBuf> {
             .map(PathBuf::from)
             .filter(|p| p.is_absolute())
             .or_else(|| Some(home()?.join(".config")))?;
+        Some(base.join("autostart/ephemeris.desktop"))
+    }
+}
+
+/// The same entry, as the widget wrote it under its former name.
+///
+/// Built from the old name rather than from [`entry_path`] so the two cannot
+/// drift apart: this one must keep describing what an installation predating
+/// the rename actually has on disk.
+fn legacy_entry_path() -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        Some(home()?.join("Library/LaunchAgents/io.github.josunlp.tpmplaner.plist"))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let base = std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+            .or_else(|| Some(home()?.join(".config")))?;
         Some(base.join("autostart/tpmplaner.desktop"))
     }
+}
+
+/// Moves an autostart entry written under the former name to the current one.
+///
+/// Rewritten rather than renamed, because the file's *contents* are stale too:
+/// it names the old executable, at the old install path, under the old
+/// `Name=`. Writing a fresh entry from [`entry_contents`] gets all three right
+/// at once, and it points at this very binary — the one that just started, and
+/// therefore the one the user wants at the next login.
+///
+/// Called once at start-up from [`crate::migrate`]; see there for why none of
+/// this is allowed to fail loudly.
+pub fn migrate_entry() {
+    let Some(old) = legacy_entry_path() else {
+        return;
+    };
+    if !old.exists() {
+        return;
+    }
+    // `launchctl unload` parses the plist at the path it is given, so this has
+    // to happen while the file is still there — the same ordering [`set`]
+    // observes when switching autostart off.
+    unregister(&old);
+    if let Err(e) = std::fs::remove_file(&old) {
+        // Left in place, it would start the old binary at the next login
+        // alongside this one. Worth a warning, not worth refusing to start.
+        log::warn(&format!("Could not remove {}: {e}", old.display()));
+    }
+    set(true);
+    log::info("Moved the autostart entry to the new program name");
 }
 
 fn home() -> Option<PathBuf> {
@@ -165,7 +215,7 @@ fn entry_contents(exe: &std::path::Path) -> String {
     format!(
         "[Desktop Entry]\n\
          Type=Application\n\
-         Name=TPMPlaner\n\
+         Name=Ephemeris\n\
          Comment=Today's calendar events and due tasks on your desktop\n\
          Exec={}\n\
          Terminal=false\n\
@@ -179,8 +229,8 @@ fn entry_contents(exe: &std::path::Path) -> String {
 #[cfg(not(target_os = "macos"))]
 fn exec_quoted(path: &str) -> String {
     // `%` introduces a field code, and an unrecognised one is dropped rather
-    // than reported: `/opt/My%20Apps/tpmplaner` is launched as
-    // `/opt/My0Apps/tpmplaner`, which does not exist, and the session says
+    // than reported: `/opt/My%20Apps/ephemeris` is launched as
+    // `/opt/My0Apps/ephemeris`, which does not exist, and the session says
     // nothing. A literal percent is written `%%`, quoted or not.
     let path = path.replace('%', "%%");
     const RESERVED: [char; 19] = [
@@ -264,10 +314,10 @@ mod tests {
     /// entry that does nothing at login and says nothing about it.
     #[test]
     fn the_launch_agent_is_in_the_format_launchd_expects() {
-        let text = entry_contents(std::path::Path::new("/opt/tpmplaner/tpmplaner"));
+        let text = entry_contents(std::path::Path::new("/opt/ephemeris/ephemeris"));
         assert!(text.starts_with("<?xml"), "{text}");
         assert!(
-            text.contains("<string>/opt/tpmplaner/tpmplaner</string>"),
+            text.contains("<string>/opt/ephemeris/ephemeris</string>"),
             "{text}"
         );
         assert!(text.contains("RunAtLoad"), "{text}");
@@ -280,9 +330,9 @@ mod tests {
     /// ampersand in it is legal — the second would break the XML.
     #[test]
     fn a_path_is_escaped_for_xml_and_nothing_else() {
-        let text = entry_contents(std::path::Path::new("/home/a b/My Apps/tpmplaner"));
+        let text = entry_contents(std::path::Path::new("/home/a b/My Apps/ephemeris"));
         assert!(
-            text.contains("<string>/home/a b/My Apps/tpmplaner</string>"),
+            text.contains("<string>/home/a b/My Apps/ephemeris</string>"),
             "{text}"
         );
         assert_eq!(xml_escaped("a & b < c"), "a &amp; b &lt; c");
@@ -297,10 +347,10 @@ mod tests {
     /// skipped in silence.
     #[test]
     fn the_desktop_entry_is_in_the_format_the_session_expects() {
-        let text = entry_contents(std::path::Path::new("/opt/tpmplaner/tpmplaner"));
+        let text = entry_contents(std::path::Path::new("/opt/ephemeris/ephemeris"));
         assert!(text.starts_with("[Desktop Entry]"), "{text}");
         assert!(text.contains("Type=Application"), "{text}");
-        assert!(text.contains("Exec=/opt/tpmplaner/tpmplaner\n"), "{text}");
+        assert!(text.contains("Exec=/opt/ephemeris/ephemeris\n"), "{text}");
     }
 
     /// `Exec` is a command line, not a path: the specification gives `"` and
@@ -308,9 +358,9 @@ mod tests {
     /// otherwise produce an entry that fails at login with nothing said.
     #[test]
     fn a_path_that_needs_quoting_gets_it() {
-        let text = entry_contents(std::path::Path::new("/home/a b/My Apps/tpmplaner"));
+        let text = entry_contents(std::path::Path::new("/home/a b/My Apps/ephemeris"));
         assert!(
-            text.contains("Exec=\"/home/a b/My Apps/tpmplaner\"\n"),
+            text.contains("Exec=\"/home/a b/My Apps/ephemeris\"\n"),
             "{text}"
         );
         // Two backslashes for a quote and four for a backslash: the general
@@ -318,7 +368,7 @@ mod tests {
         // applied, so each escape has to survive being read twice.
         assert_eq!(exec_quoted(r#"/home/a"b\c"#), r#""/home/a\\"b\\\\c""#);
         // A plain path is left exactly as it is.
-        assert_eq!(exec_quoted("/usr/bin/tpmplaner"), "/usr/bin/tpmplaner");
+        assert_eq!(exec_quoted("/usr/bin/ephemeris"), "/usr/bin/ephemeris");
         // `%` is a field code, so a literal one is doubled — quoting or not.
         assert_eq!(exec_quoted("/opt/My%20Apps/x"), "/opt/My%%20Apps/x");
         assert_eq!(
