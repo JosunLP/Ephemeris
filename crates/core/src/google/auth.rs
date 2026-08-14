@@ -16,7 +16,7 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufReader, Read, Write};
 use std::net::TcpListener;
 use std::time::{Duration, Instant};
 
@@ -255,8 +255,15 @@ fn wait_for_code(listener: TcpListener, expected_state: &str) -> Result<String> 
         stream.set_nonblocking(false)?;
         stream.set_read_timeout(Some(Duration::from_secs(10)))?;
 
-        let mut request_line = String::new();
-        BufReader::new(&stream).read_line(&mut request_line)?;
+        let request_line = {
+            let mut reader = BufReader::new(&stream);
+            match read_request_line(&mut reader, deadline) {
+                Some(line) => line,
+                // Nothing usable came in: a stalled client, a stray port scan.
+                // Drop it and wait for the redirect that matters.
+                None => continue,
+            }
+        };
 
         // "GET /?code=...&state=... HTTP/1.1"
         let target = request_line.split_whitespace().nth(1).unwrap_or("");
@@ -308,6 +315,48 @@ fn wait_for_code(listener: TcpListener, expected_state: &str) -> Result<String> 
     }
 
     Err(Error::NeedsLogin(i18n::global().err_timeout.into()))
+}
+
+/// Largest request line taken from the loopback callback.
+///
+/// The redirect Google sends is a few hundred bytes; past this the sender is
+/// either broken or feeding the buffer bytes it never means to terminate.
+const MAX_REQUEST_LINE: usize = 8 * 1024;
+
+/// Reads one request line, giving up on the read timeout, on `deadline`, or
+/// once [`MAX_REQUEST_LINE`] bytes arrived without a newline.
+///
+/// `set_read_timeout` only bounds a single `read`, so a client dribbling one
+/// byte at a time renews it forever and `read_line` would hold the sync thread
+/// for as long as the bytes keep coming. Hence the overall deadline between
+/// reads and the cap on what is buffered.
+///
+/// `None` means the connection yielded no line — the caller drops it and waits
+/// for the next request rather than failing the whole sign-in.
+fn read_request_line<R: Read>(reader: &mut R, deadline: Instant) -> Option<String> {
+    let mut line = Vec::new();
+    let mut byte = [0u8; 1];
+    while Instant::now() < deadline {
+        match reader.read(&mut byte) {
+            // The peer closed before finishing the line.
+            Ok(0) => return None,
+            Ok(_) => match byte[0] {
+                b'\n' => return String::from_utf8(line).ok(),
+                b'\r' => {}
+                b => {
+                    if line.len() >= MAX_REQUEST_LINE {
+                        return None;
+                    }
+                    line.push(b);
+                }
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            // A read timeout arrives as `WouldBlock` or `TimedOut` depending on
+            // the platform; either way this connection is done talking.
+            Err(_) => return None,
+        }
+    }
+    None
 }
 
 /// Random bytes for a sign-in secret, or the error that abandons the sign-in.
@@ -375,4 +424,75 @@ fn percent_decode(s: &str) -> String {
         }
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Hands out `data` a byte at a time, then reports the socket read timeout
+    /// — a client that opened the connection and went quiet mid-line.
+    struct Trickle {
+        data: &'static [u8],
+        pos: usize,
+    }
+
+    impl Read for Trickle {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if buf.is_empty() {
+                return Ok(0);
+            }
+            if self.pos >= self.data.len() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::WouldBlock,
+                    "timed out",
+                ));
+            }
+            buf[0] = self.data[self.pos];
+            self.pos += 1;
+            Ok(1)
+        }
+    }
+
+    fn deadline() -> Instant {
+        Instant::now() + Duration::from_secs(300)
+    }
+
+    #[test]
+    fn a_complete_request_line_is_returned_without_its_terminator() {
+        let mut reader = Trickle {
+            data: b"GET /?code=abc&state=xyz HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
+            pos: 0,
+        };
+        assert_eq!(
+            read_request_line(&mut reader, deadline()).as_deref(),
+            Some("GET /?code=abc&state=xyz HTTP/1.1")
+        );
+    }
+
+    #[test]
+    fn partial_input_without_a_newline_gives_up_instead_of_blocking() {
+        let mut reader = Trickle {
+            data: b"GET /?code=abc",
+            pos: 0,
+        };
+        assert_eq!(read_request_line(&mut reader, deadline()), None);
+    }
+
+    #[test]
+    fn a_line_that_never_ends_is_capped() {
+        let mut reader = std::io::repeat(b'A');
+        assert_eq!(read_request_line(&mut reader, deadline()), None);
+    }
+
+    #[test]
+    fn an_expired_deadline_reads_nothing() {
+        let mut reader = Trickle {
+            data: b"GET / HTTP/1.1\r\n",
+            pos: 0,
+        };
+        let past = Instant::now() - Duration::from_secs(1);
+        assert_eq!(read_request_line(&mut reader, past), None);
+        assert_eq!(reader.pos, 0);
+    }
 }
