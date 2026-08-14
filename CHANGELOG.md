@@ -69,6 +69,12 @@ All notable changes to this project are documented here. The format follows
   list has gone out of step with its own `Cargo.lock` — a Flatpak build has no
   network to discover that with.
 
+- **The Flatpak listing has screenshots**, one on a dark desktop and one on a
+  light one, which is what Flathub's linter wanted before it would accept a
+  submission. `scripts/screenshots.sh` takes them: the widget in demo mode on
+  a virtual X server, so they can be remade whenever the look changes, on a
+  machine with no desktop, and with no account anywhere near them.
+
 ### Fixed
 
 - **The agenda is no longer invisible until you move the mouse.** On Linux and

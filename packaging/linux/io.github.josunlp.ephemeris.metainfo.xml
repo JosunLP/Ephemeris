@@ -45,6 +45,26 @@
     <name>Ephemeris contributors</name>
   </developer>
 
+  <!--
+    Taken by `scripts/screenshots.sh`, which runs the widget in demo mode on a
+    virtual X server, so they can be remade whenever the look changes and no
+    account appears in them. Flathub mirrors what these URLs point at to
+    dl.flathub.org during the build and rewrites them there; they cannot be
+    served from GitHub in the built repository, which is what
+    `flatpak-builder-lint repo` checks, but this is the file the mirroring
+    reads.
+  -->
+  <screenshots>
+    <screenshot type="default">
+      <caption>Today's schedule and the tasks due, with the meeting running now at the top</caption>
+      <image type="source" width="1600" height="900">https://raw.githubusercontent.com/JosunLP/Ephemeris/main/docs/public/screenshots/desktop-dark.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>The same agenda on a light desktop — the palette follows the system appearance</caption>
+      <image type="source" width="1600" height="900">https://raw.githubusercontent.com/JosunLP/Ephemeris/main/docs/public/screenshots/desktop-light.png</image>
+    </screenshot>
+  </screenshots>
+
   <content_rating type="oars-1.1"/>
 
   <recommends>

@@ -275,10 +275,18 @@ non-variadic type never sets it.
   rather than from the working tree is the point: there is one manifest to
   edit, and nothing that can drift away from what was submitted.
 
-  What Flathub still wants is at least one screenshot. That is a linter error
-  rather than a build failure, so the build itself now completes, but the
-  submission does not pass without it — and screenshots have to be mirrored to
-  `dl.flathub.org` rather than served from anywhere else.
+  The screenshots the linter wanted are in the metainfo as well, one on a dark
+  desktop and one on a light one. `scripts/screenshots.sh` takes them: the
+  widget in demo mode on a virtual X server, so they can be remade whenever
+  the look changes, on a machine with no desktop, without an account appearing
+  in them. The metainfo points at the copies in `docs/public/screenshots`;
+  Flathub mirrors those to `dl.flathub.org` during the build and rewrites the
+  URLs in the exported catalogue, which is the form
+  `flatpak-builder-lint repo` insists on.
+
+  What is left is the submission itself: opening the pull request against
+  `flathub/flathub` with the generated manifest, and answering whatever the
+  reviewers raise.
 - **The Windows window on `Shell`**, so all four front ends share the
   behaviour as well as the drawing. Less pressing than the renderer was: a
   Win32 message pump and a `poll` loop really are different things, and what a
