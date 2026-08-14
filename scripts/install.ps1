@@ -58,15 +58,25 @@ try {
         # under the new one. Without this the documented one-liner fails for
         # everyone in between.
         #
-        # Only on a 404. A network failure that fell through here would report
-        # a name the user never asked for and hide what actually went wrong.
-        $status = 0
-        if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
-        if ($status -ne 404) { throw }
-        $assetName = "tpmplaner-$arch.exe"
-        $downloaded = Join-Path $temp $assetName
-        Write-Note "This release still publishes $assetName"
-        Invoke-WebRequest -Uri "$base/$assetName" -OutFile $downloaded -UseBasicParsing
+        # Any failure is retried under the former name rather than a 404 in
+        # particular, because a missing asset does not reliably look like one:
+        # `releases/latest/download/...` redirects to the release before it
+        # answers, and Windows PowerShell 5.1 reports the 404 that follows as
+        # a closed connection with no response object to read a status from.
+        # The first error is kept and rethrown if the former name is not there
+        # either, so a machine with no network still gets told what actually
+        # went wrong, about the file it actually asked for.
+        $firstError = $_
+        $legacyName = "tpmplaner-$arch.exe"
+        $legacyPath = Join-Path $temp $legacyName
+        try {
+            Invoke-WebRequest -Uri "$base/$legacyName" -OutFile $legacyPath -UseBasicParsing
+        } catch {
+            throw $firstError
+        }
+        Write-Note "This release still publishes $legacyName"
+        $assetName = $legacyName
+        $downloaded = $legacyPath
     }
 
     # Verify before anything is written to the install directory. A truncated
