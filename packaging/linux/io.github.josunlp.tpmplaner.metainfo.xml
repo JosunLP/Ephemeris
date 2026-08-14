@@ -52,6 +52,36 @@
   </recommends>
 
   <releases>
+    <release version="1.1.0" date="2026-08-14">
+      <description>
+        <p>The first release that runs on this desktop at all.</p>
+        <ul>
+          <li>
+            Native X11 and Wayland windows. On a compositor with
+            wlr-layer-shell the widget sits above the wallpaper and below
+            every ordinary window; on GNOME, which has neither, it says so
+            rather than quietly becoming a normal window.
+          </li>
+          <li>
+            Fifteen more interface languages, twenty in total, each with its
+            own plural rules — Arabic and Hebrew among them, laid out
+            right to left.
+          </li>
+          <li>
+            Optional colours, fonts, density and surface style on top of the
+            system defaults, shareable as a single theme file.
+          </li>
+          <li>
+            The right-click menu can lock the widget's position and size, so
+            reaching past it for something on the desktop no longer moves it.
+          </li>
+          <li>
+            Credentials go to the Secret Service, and starting with the
+            session is an XDG autostart file in your own home.
+          </li>
+        </ul>
+      </description>
+    </release>
     <release version="1.0.2" date="2026-08-11"/>
   </releases>
 </component>

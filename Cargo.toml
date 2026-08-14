@@ -3,7 +3,7 @@ members = ["crates/core"]
 
 [package]
 name = "tpmplaner"
-version = "1.0.2"
+version = "1.1.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
 description = "A desktop widget showing today's calendar events and due tasks"

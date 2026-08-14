@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-08-14
+
 ### Added
 
 - **The widget runs on macOS and Linux.** A real window on both, with the
@@ -302,10 +304,10 @@ All notable changes to this project are documented here. The format follows
   part could not be confirmed against a live account; the log says whenever it
   fires, and if that line never appears it can go.
 - The agenda cache is replaced by rename rather than truncated and rewritten in
-  place, so nothing can read it half written. Two copies of the program can now
-  overlap — the Unix single-instance check is still a stub, and a timer firing
-  over a slow sync is enough — and the loser of that race used to leave a
-  truncated file behind. It parsed as no cache at all, which is safe but throws
+  place, so nothing can read it half written. Two writes can overlap — the text
+  front end takes no single-instance lock, since it prints once and exits, and
+  within one copy a timer firing over a slow sync is enough — and the loser of
+  that race used to leave a truncated file behind. It parsed as no cache at all, which is safe but throws
   away the day the cache exists to carry across a restart.
 - Waiting for the first sync no longer spins a core if the sync thread stops.
   A dropped channel returns from `recv_timeout` immediately rather than
@@ -614,7 +616,8 @@ First public release.
 - File log with rotation; panics are recorded before the process ends.
 - Settings are reloaded without a restart.
 
-[Unreleased]: https://github.com/JosunLP/TPMPlaner/compare/v1.0.2...HEAD
+[Unreleased]: https://github.com/JosunLP/TPMPlaner/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/JosunLP/TPMPlaner/releases/tag/v1.1.0
 [1.0.2]: https://github.com/JosunLP/TPMPlaner/releases/tag/v1.0.2
 [1.0.1]: https://github.com/JosunLP/TPMPlaner/releases/tag/v1.0.1
 [1.0.0]: https://github.com/JosunLP/TPMPlaner/releases/tag/v1.0.0
