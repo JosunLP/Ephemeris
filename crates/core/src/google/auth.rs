@@ -333,7 +333,11 @@ const MAX_REQUEST_LINE: usize = 8 * 1024;
 ///
 /// `None` means the connection yielded no line — the caller drops it and waits
 /// for the next request rather than failing the whole sign-in.
-fn read_request_line<R: Read>(reader: &mut R, deadline: Instant) -> Option<String> {
+///
+/// Shared with [`crate::provider::oauth`], which listens on the same kind of
+/// loopback socket for the same kind of redirect and needs the same patience
+/// with everything else that connects to it.
+pub(crate) fn read_request_line<R: Read>(reader: &mut R, deadline: Instant) -> Option<String> {
     let mut line = Vec::new();
     let mut byte = [0u8; 1];
     while Instant::now() < deadline {

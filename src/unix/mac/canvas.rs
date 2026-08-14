@@ -37,7 +37,13 @@ struct OwnedFont(CTFontRef);
 
 impl Drop for OwnedFont {
     fn drop(&mut self) {
-        unsafe { cf::CFRelease(self.0 as cf::CFTypeRef) };
+        // Checked, because `CTFontCreateUIFontForLanguage` can come back null
+        // on a machine whose font configuration has no system UI face, and
+        // `CFRelease(NULL)` is fatal rather than a no-op. `Cg::drop` checks the
+        // ellipsis lines for the same reason.
+        if !self.0.is_null() {
+            unsafe { cf::CFRelease(self.0 as cf::CFTypeRef) };
+        }
     }
 }
 
@@ -558,7 +564,11 @@ impl Line {
     fn new(s: &str, font: CTFontRef, rtl: bool) -> Option<Self> {
         let attributed = attributed(s, font, rtl)?;
         let raw = unsafe { CTLineCreateWithAttributedString(attributed.as_raw()) };
-        (!raw.is_null()).then_some(Self(raw))
+        // `then` rather than `then_some`, for the reason `cf::Owned::new`
+        // gives: `then_some` takes a value, so the `Line` would be built
+        // around the null this is here to catch and dropped a moment later
+        // into `CFRelease(NULL)`, which Core Foundation treats as fatal.
+        (!raw.is_null()).then(|| Self(raw))
     }
 
     fn raw(&self) -> CTLineRef {
@@ -611,6 +621,12 @@ impl Drop for Line {
 /// A `CFAttributedString` carrying the font, the base writing direction and a
 /// note to take the colour from the context.
 fn attributed(s: &str, font: CTFontRef, rtl: bool) -> Option<cf::Owned> {
+    // The dictionary is built with `kCFTypeDictionaryValueCallBacks`, so a null
+    // font would be handed to `CFRetain(NULL)` rather than merely producing an
+    // unstyled line. Nothing to draw with is a skipped draw.
+    if font.is_null() {
+        return None;
+    }
     let text = cf::string(s)?;
     let style = paragraph_style(rtl)?;
     let keys = [
@@ -662,7 +678,11 @@ fn make_font(family: Option<&str>, size: f64, heavy: bool) -> OwnedFont {
             CTFontCreateUIFontForLanguage(kCTFontUIFontSystem, size, std::ptr::null())
         });
 
-    if !heavy {
+    // A machine whose font configuration has no system UI face answers null
+    // here. Nothing below may be handed one — `CFRelease` and
+    // `CTFontCreateCopyWithSymbolicTraits` both take it badly — and
+    // `attributed` refuses it, so the roles drawn with it simply do not draw.
+    if !heavy || base.is_null() {
         return OwnedFont(base);
     }
     // A bold copy, or the regular one where the family has no bold face —

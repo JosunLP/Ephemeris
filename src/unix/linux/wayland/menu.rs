@@ -81,6 +81,10 @@ fn measure(shell: &mut WaylandShell, rows: &[Row]) -> Option<(i32, i32)> {
 }
 
 /// The four objects a popup is made of, and the buffer it draws into.
+/// A pointer position that is on no row: negative on both axes, which the
+/// bounds test in [`Popup::run`] already reads as "off the popup entirely".
+const OFF_POPUP: (f64, f64) = (-1.0, -1.0);
+
 struct Popup {
     surface: *mut wl_proxy,
     xdg_surface: *mut wl_proxy,
@@ -211,7 +215,10 @@ impl Popup {
     ) -> Option<Picked> {
         let mut hover: Option<usize> = None;
         let mut dirty = true;
-        let mut at = (0.0f64, 0.0f64);
+        // Nowhere on the popup until the pointer has actually been reported on
+        // it, so a click before any `enter` dismisses rather than picks.
+        let mut at = OFF_POPUP;
+        let mut on_surface = false;
 
         loop {
             if dirty && self.configured {
@@ -229,6 +236,10 @@ impl Popup {
             if !shell.pump(Duration::from_millis(50)) {
                 return None;
             }
+            // The widget's own `handle_events` is not running, and a menu can
+            // stay open indefinitely. An unanswered ping is a client the
+            // compositor reports as not responding and may kill.
+            super::window::answer_ping(shell);
 
             let (popup_done, configured) = super::window::take_popup_state();
             if configured {
@@ -242,7 +253,17 @@ impl Popup {
 
             for event in super::window::take_pointer_events() {
                 match event {
-                    PointerEvent::Enter(serial, surface, x, y) if surface == self.surface => {
+                    PointerEvent::Enter(serial, surface, x, y) => {
+                        // Under a popup grab the compositor still delivers
+                        // pointer events for this client's *other* surfaces —
+                        // the widget behind the menu. Those coordinates are in
+                        // that surface's space and would highlight, and pick, a
+                        // row nowhere near the pointer.
+                        on_surface = surface == self.surface;
+                        if !on_surface {
+                            at = OFF_POPUP;
+                            continue;
+                        }
                         shell.note_serial(serial);
                         at = (x, y);
                         let next = drawn_menu::row_at(rows, y as f32);
@@ -251,12 +272,17 @@ impl Popup {
                             dirty = true;
                         }
                     }
-                    PointerEvent::Leave(surface)
-                        if surface == self.surface && hover.take().is_some() =>
-                    {
-                        dirty = true;
+                    PointerEvent::Leave(surface) if surface == self.surface => {
+                        on_surface = false;
+                        // So a click that follows is read as one off the menu,
+                        // which is what it is, rather than as one on the row
+                        // the pointer last passed over.
+                        at = OFF_POPUP;
+                        if hover.take().is_some() {
+                            dirty = true;
+                        }
                     }
-                    PointerEvent::Motion(x, y) => {
+                    PointerEvent::Motion(x, y) if on_surface => {
                         at = (x, y);
                         let next = drawn_menu::row_at(rows, y as f32);
                         if next != hover {

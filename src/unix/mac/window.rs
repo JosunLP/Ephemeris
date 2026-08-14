@@ -66,6 +66,18 @@ thread_local! {
     /// land at a better moment. So it is latched here instead and delivered by
     /// the next callback that gets through.
     static PENDING_WAKE: Cell<bool> = const { Cell::new(false) };
+
+    /// The minute timer fired while the state was out.
+    ///
+    /// The other non-self-healing callback, and worse than `onWake:` because it
+    /// takes itself with it: the timer is one-shot and the only thing that
+    /// arms the next one is `onMinute:` itself. Dropped once — a context menu
+    /// left open across a minute boundary is enough — and there is no minute
+    /// timer left at all: the clock stops, `reload_config_if_changed` and
+    /// `rescue_offscreen` stop, and because `next_sync_at` is only compared in
+    /// `App::on_minute`, so does syncing, for the life of the process. So it is
+    /// latched here and delivered by the next callback that gets through.
+    static PENDING_MINUTE: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Runs `f` with the widget, if it is not already in use further up the stack.
@@ -424,7 +436,10 @@ extern "C" fn draw_rect(_this: Id, _sel: Sel, _dirty: NSRect) {
             return;
         }
 
-        if std::mem::take(&mut st.shell.rebuild) || std::mem::take(&mut st.app.needs_rebuild) {
+        // `|`, not `||`: an appearance change sets both, and short-circuiting
+        // would leave the app's flag standing for the frame after this one to
+        // rebuild all nine fonts again for nothing.
+        if std::mem::take(&mut st.shell.rebuild) | std::mem::take(&mut st.app.needs_rebuild) {
             st.canvas = Cg::new(st.app.metrics, &st.app.appearance, st.app.loc.rtl);
         }
 
@@ -487,12 +502,15 @@ extern "C" fn mouse_event(this: Id, selector: Sel, event: Id) {
         }
     });
     // The menu's nested loop is the likeliest place for a sync to have
-    // finished while the widget was out of its slot.
+    // finished — or for the minute timer to have fired — while the widget was
+    // out of its slot.
     deliver_wake();
+    deliver_minute();
 }
 
 extern "C" fn on_anim(_this: Id, _sel: Sel, _timer: Id) {
     deliver_wake();
+    deliver_minute();
     with_state(|st| {
         let (app, shell) = (&mut st.app, &mut st.shell);
         app.pump(shell);
@@ -507,12 +525,9 @@ extern "C" fn on_undo(_this: Id, _sel: Sel, _timer: Id) {
 }
 
 extern "C" fn on_minute(_this: Id, _sel: Sel, _timer: Id) {
+    PENDING_MINUTE.with(|p| p.set(true));
     deliver_wake();
-    with_state(|st| {
-        let (app, shell) = (&mut st.app, &mut st.shell);
-        app.on_minute(shell);
-        shell.arm_minute_timer();
-    });
+    deliver_minute();
 }
 
 /// The peek is over: back down to the desktop level.
@@ -526,6 +541,7 @@ extern "C" fn on_peek(_this: Id, _sel: Sel, _timer: Id) {
 extern "C" fn on_wake(_this: Id, _sel: Sel, _arg: Id) {
     PENDING_WAKE.with(|p| p.set(true));
     deliver_wake();
+    deliver_minute();
 }
 
 /// Hands a finished sync to the widget, or leaves it latched for the next
@@ -540,6 +556,23 @@ fn deliver_wake() {
     });
     if delivered.is_some() {
         PENDING_WAKE.with(|p| p.set(false));
+    }
+}
+
+/// Runs the minute's work and arms the next timer, or leaves it latched for
+/// the next callback if the state is out. Must not be called from inside
+/// [`with_state`]. See [`PENDING_MINUTE`] for why this one may not be dropped.
+fn deliver_minute() {
+    if !PENDING_MINUTE.with(|p| p.get()) {
+        return;
+    }
+    let delivered = with_state(|st| {
+        let (app, shell) = (&mut st.app, &mut st.shell);
+        app.on_minute(shell);
+        shell.arm_minute_timer();
+    });
+    if delivered.is_some() {
+        PENDING_MINUTE.with(|p| p.set(false));
     }
 }
 

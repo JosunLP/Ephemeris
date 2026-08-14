@@ -317,7 +317,14 @@ pub fn run() -> Result<()> {
             ph,
             SWP_NOACTIVATE | SWP_NOOWNERZORDER,
         );
-        st.renderer = Some(Renderer::new(
+        // Not `?`: the window already carries a pointer to `state` in its
+        // `GWLP_USERDATA`, and returning here drops that box while the window
+        // itself lives on. `fatal` then puts up a message box, whose modal
+        // pump delivers the broadcast messages — `WM_SETTINGCHANGE`,
+        // `WM_THEMECHANGED` — to a window procedure that would read freed
+        // memory. So the window goes first, on the one path that gets here:
+        // neither Direct3D nor WARP nor DirectComposition being available.
+        let renderer = Renderer::new(
             hwnd,
             pw.max(1) as u32,
             ph.max(1) as u32,
@@ -327,7 +334,14 @@ pub fn run() -> Result<()> {
             st.loc.rtl,
             &st.appearance,
             &st.loc.tag,
-        )?);
+        );
+        st.renderer = Some(match renderer {
+            Ok(renderer) => renderer,
+            Err(e) => {
+                let _ = DestroyWindow(hwnd);
+                return Err(e);
+            }
+        });
 
         // Demo mode deliberately runs no sync thread — otherwise the missing
         // Google credentials would immediately bury the sample data under an

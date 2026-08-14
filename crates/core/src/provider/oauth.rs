@@ -16,7 +16,7 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufReader, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -274,10 +274,17 @@ impl Session {
                 .set_read_timeout(Some(Duration::from_secs(10)))
                 .map_err(io_err)?;
 
-            let mut request_line = String::new();
-            BufReader::new(&stream)
-                .read_line(&mut request_line)
-                .map_err(io_err)?;
+            // Not `read_line`, and not `?`: a connection that is accepted and
+            // then says nothing — a browser's speculative preconnect to the
+            // loopback port is the ordinary case, a port scan the other — would
+            // time out and abandon the whole sign-in while the real redirect
+            // was still waiting in the accept queue. No line means this
+            // connection had nothing to say; the next one may.
+            let mut reader = BufReader::new(&stream);
+            let Some(request_line) = crate::google::auth::read_request_line(&mut reader, deadline)
+            else {
+                continue;
+            };
 
             // "GET /?code=...&state=... HTTP/1.1"
             let target = request_line.split_whitespace().nth(1).unwrap_or("");

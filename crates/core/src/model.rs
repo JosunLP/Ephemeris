@@ -274,7 +274,7 @@ pub fn link_task_time_blocks(events: &mut [Event], tasks: &[Task]) {
             .or_insert(Some(task));
     }
 
-    for event in events {
+    for event in events.iter_mut() {
         let key = title_key(&event.title);
         let matched = match by_title.get(&(event.account_id.as_str(), key)) {
             Some(Some(task)) => Some(*task),
@@ -282,6 +282,39 @@ pub fn link_task_time_blocks(events: &mut [Event], tasks: &[Task]) {
         };
         event.task_id = matched.map(|t| t.id.clone());
         event.task_list_id = matched.map(|t| t.tasklist_id.clone());
+    }
+
+    // The same question from the other side. A task's time block is one
+    // calendar entry, so a task that two of them claim is a task whose block
+    // cannot be told from an ordinary meeting that happens to carry the same
+    // title — and `complete_task` removes *every* entry linked to the task, so
+    // guessing wrong there takes a real appointment off the day. Neither is
+    // linked, for the same reason two tasks sharing a title link nothing.
+    // The full identity, not the id alone: an id only means something to the
+    // list that issued it, and the same string is a different task in another
+    // list or another account. That is what `TaskKey` is about, and counting
+    // by the id alone would call three unrelated entries one ambiguous task.
+    let claimed = |event: &Event| {
+        Some((
+            event.account_id.clone(),
+            event.task_list_id.clone()?,
+            event.task_id.clone()?,
+        ))
+    };
+    let mut claims: HashMap<(String, String, String), usize> = HashMap::new();
+    for event in events.iter() {
+        if let Some(key) = claimed(event) {
+            *claims.entry(key).or_insert(0) += 1;
+        }
+    }
+    if claims.values().all(|&count| count < 2) {
+        return;
+    }
+    for event in events.iter_mut() {
+        if claimed(event).is_some_and(|key| claims.get(&key) > Some(&1)) {
+            event.task_id = None;
+            event.task_list_id = None;
+        }
     }
 }
 
@@ -828,6 +861,29 @@ mod tests {
         link_task_time_blocks(&mut agenda.events, &agenda.tasks.clone());
         assert!(agenda.complete_task(agenda.tasks[0].key()).is_empty());
         assert_eq!(agenda.events.len(), 1);
+    }
+
+    /// The guess is refused from both sides. Two tasks with one title link
+    /// nothing, and so do two calendar entries: a task's block is one entry, so
+    /// the second is a meeting that happens to be called the same thing — and
+    /// completion removes every linked entry, which would take it off the day.
+    #[test]
+    fn two_entries_with_one_title_are_linked_to_neither() {
+        let mut agenda = Agenda {
+            events: vec![
+                on_account("google", timed("Standup", (9, 0), (9, 15))),
+                on_account("google", timed("Standup", (16, 0), (16, 30))),
+            ],
+            tasks: vec![task_on("google", "Standup")],
+            ..Default::default()
+        };
+        link_task_time_blocks(&mut agenda.events, &agenda.tasks.clone());
+        assert!(
+            agenda.events.iter().all(|e| e.task_id.is_none()),
+            "neither entry may be claimed as the block"
+        );
+        assert!(agenda.complete_task(agenda.tasks[0].key()).is_empty());
+        assert_eq!(agenda.events.len(), 2, "the meeting stays on the day");
     }
 
     /// Ids are namespaced by whoever handed them out, so the same string turns

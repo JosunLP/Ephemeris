@@ -56,6 +56,14 @@ fi
 work="$(mktemp -d)"
 trap 'rm -rf "$work"; pkill -x ephemeris 2>/dev/null || true' EXIT
 
+# The settings this script writes are its own, and they say `"accounts": []`.
+# Written into the real configuration directory they would take the
+# maintainer's accounts, calendar selections, geometry and theme with them, and
+# nothing here would put them back. The widget reads `XDG_CONFIG_HOME` for both
+# its settings and its data, so pointing it at the scratch directory makes the
+# whole run self-contained and the trap above clean it up.
+export XDG_CONFIG_HOME="$work/config"
+
 binary="${EPHEMERIS_BINARY:-$root/target/debug/ephemeris}"
 # The panel, in the screen's pixels. The window is placed by the settings
 # below; `Metrics::with_shadow` leaves 14 device-independent pixels around the
@@ -110,7 +118,7 @@ for name, (start, end) in {
         handle.write(png(WIDTH, HEIGHT, gradient(WIDTH, HEIGHT, start, end)))
 PY
 
-config="${XDG_CONFIG_HOME:-$HOME/.config}/ephemeris"
+config="$XDG_CONFIG_HOME/ephemeris"
 mkdir -p "$config" "$out"
 
 shoot() {

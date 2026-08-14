@@ -319,8 +319,19 @@ pub fn minutes_of_day(dt: DateTime<Local>) -> f32 {
 pub fn end_minutes(ev: &Event, start_min: f32) -> f32 {
     match ev.end {
         Some(e) => {
+            // The date decides, not the clock. A time-of-day that went
+            // backwards catches the overnight case (22:00 → 09:00) but not the
+            // one that runs longer than a day (Tue 09:00 → Wed 17:00), whose
+            // end reads as 17:00 *today* and draws the bar stopping this
+            // afternoon. Anything ending on a later date runs to the end of
+            // the day as far as the rail is concerned.
             let v = e.hour() as f32 * 60.0 + e.minute() as f32;
-            if v < start_min { DAY_MINUTES } else { v }
+            let later_day = ev.start.is_some_and(|s| e.date_naive() > s.date_naive());
+            if later_day || v < start_min {
+                DAY_MINUTES
+            } else {
+                v
+            }
         }
         None => start_min + 60.0,
     }

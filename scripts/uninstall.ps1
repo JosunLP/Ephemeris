@@ -65,9 +65,13 @@ Write-Step 'Removing program files'
 if (Test-Path $installDir) {
     $self = $MyInvocation.MyCommand.Path
     if ($self -and $self.StartsWith($installDir, [StringComparison]::OrdinalIgnoreCase)) {
+        # The path is quoted for the child's parser, so a single quote in it —
+        # an account named O'Brien is enough — has to be doubled or the child
+        # command is a parse error, silently, behind -WindowStyle Hidden.
+        $quoted = $installDir -replace "'", "''"
         Start-Process powershell -WindowStyle Hidden -ArgumentList @(
             '-NoProfile', '-Command',
-            "Start-Sleep -Seconds 2; Remove-Item -LiteralPath '$installDir' -Recurse -Force -ErrorAction SilentlyContinue"
+            "Start-Sleep -Seconds 2; Remove-Item -LiteralPath '$quoted' -Recurse -Force -ErrorAction SilentlyContinue"
         )
         Write-Note 'Program directory will be removed in a moment.'
     } else {

@@ -4,34 +4,7 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-### Changed
-
-- **The widget is called Ephemeris.** The former name had to go for trademark
-  reasons, and it was never only a label: it named the binary, the settings
-  directory, the log, the Windows registry values, the macOS bundle and launch
-  agent, the Flatpak application id, and the entropy the stored calendar
-  credentials were encrypted with. All of them have moved.
-
-  **Nothing has to be done about it.** The first start under the new name
-  carries an existing installation over: the settings directory and everything
-  in it, the autostart entry, and the saved calendar credentials — the Windows
-  DPAPI blobs, the macOS Keychain items and the Linux Secret Service items
-  alike. Accounts stay connected, and the old locations are cleaned up once
-  their contents have arrived. Nothing is ever overwritten, and anything that
-  could not be moved is left where it was with the reason in the log.
-
-  On Windows the installer additionally removes the previous installation:
-  program directory, start menu shortcut, autostart value and the entry in the
-  app list. The settings are the one thing it leaves alone, because the widget
-  itself is what moves those.
-
-  What changes for anyone scripting against it: the executable is `ephemeris`,
-  the environment variables are `EPHEMERIS_DEMO`, `EPHEMERIS_TEXT` and
-  `EPHEMERIS_REQUIRE_SYSTEM_LOCALE`, the Flatpak id is
-  `io.github.josunlp.ephemeris`, and the release assets are named
-  `ephemeris-<target>`.
+## [1.1.0] - 2026-08-14
 
 ### Added
 
@@ -74,30 +47,6 @@ All notable changes to this project are documented here. The format follows
   submission. `scripts/screenshots.sh` takes them: the widget in demo mode on
   a virtual X server, so they can be remade whenever the look changes, on a
   machine with no desktop, and with no account anywhere near them.
-
-### Fixed
-
-- **The agenda is no longer invisible until you move the mouse.** On Linux and
-  macOS the widget fades its content in when it starts with cached data to
-  show — and a fade only advances while the animation timer runs, which
-  nothing had started at that point, because the window did not exist yet.
-  The result was a widget drawing its header, the meeting running now and its
-  footer around an empty middle, until the first sync came back or the pointer
-  happened to cross it. In demo mode, where there is no sync at all, it stayed
-  that way.
-
-- **Ticking a task off no longer takes another account's task with it.** The
-  completion removed the task — and the calendar entries that were its time
-  block — by task id alone, and an id only means something to the provider that
-  issued it: the same string is a different task in another account, and in
-  another list of the same account. Everything on the way now works from the
-  full identity of account, list and task that a click already carries, the
-  calendar entry records which list its task came from, and the undo pill finds
-  its row the same way.
-
-## [1.1.0] - 2026-08-14
-
-### Added
 
 - **The widget runs on macOS and Linux.** A real window on both, with the
   behaviour the widget is defined by: below every normal window but above the
@@ -326,6 +275,31 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- **The widget is called Ephemeris.** The former name had to go for trademark
+  reasons, and it was never only a label: it named the binary, the settings
+  directory, the log, the Windows registry values, the macOS bundle and launch
+  agent, the Flatpak application id, and the entropy the stored calendar
+  credentials were encrypted with. All of them have moved.
+
+  **Nothing has to be done about it.** The first start under the new name
+  carries an existing installation over: the settings directory and everything
+  in it, the autostart entry, and the saved calendar credentials — the Windows
+  DPAPI blobs, the macOS Keychain items and the Linux Secret Service items
+  alike. Accounts stay connected, and the old locations are cleaned up once
+  their contents have arrived. Nothing is ever overwritten, and anything that
+  could not be moved is left where it was with the reason in the log.
+
+  On Windows the installer additionally removes the previous installation:
+  program directory, start menu shortcut, autostart value and the entry in the
+  app list. The settings are the one thing it leaves alone, because the widget
+  itself is what moves those.
+
+  What changes for anyone scripting against it: the executable is `ephemeris`,
+  the environment variables are `EPHEMERIS_DEMO`, `EPHEMERIS_TEXT` and
+  `EPHEMERIS_REQUIRE_SYSTEM_LOCALE`, the Flatpak id is
+  `io.github.josunlp.ephemeris`, and the release assets are named
+  `ephemeris-<target>`.
+
 - The autostart entry in the context menu is *Start at login* rather than
   *Start with Windows*, in all twenty languages. The same entry is a registry
   value on Windows, a login item on macOS and an XDG autostart file on Linux,
@@ -377,6 +351,24 @@ All notable changes to this project are documented here. The format follows
   indistinguishable from a setting that had no effect.
 
 ### Fixed
+
+- **The agenda is no longer invisible until you move the mouse.** On Linux and
+  macOS the widget fades its content in when it starts with cached data to
+  show — and a fade only advances while the animation timer runs, which
+  nothing had started at that point, because the window did not exist yet.
+  The result was a widget drawing its header, the meeting running now and its
+  footer around an empty middle, until the first sync came back or the pointer
+  happened to cross it. In demo mode, where there is no sync at all, it stayed
+  that way.
+
+- **Ticking a task off no longer takes another account's task with it.** The
+  completion removed the task — and the calendar entries that were its time
+  block — by task id alone, and an id only means something to the provider that
+  issued it: the same string is a different task in another account, and in
+  another list of the same account. Everything on the way now works from the
+  full identity of account, list and task that a click already carries, the
+  calendar entry records which list its task came from, and the undo pill finds
+  its row the same way.
 
 - Ticking a task off now clears its time block from *Schedule* as well. A task
   given a start time in Google Calendar arrives twice — as a calendar entry
@@ -705,7 +697,6 @@ First public release.
 - File log with rotation; panics are recorded before the process ends.
 - Settings are reloaded without a restart.
 
-[Unreleased]: https://github.com/JosunLP/Ephemeris/compare/v1.1.0...HEAD
 [1.1.0]: https://github.com/JosunLP/Ephemeris/releases/tag/v1.1.0
 [1.0.2]: https://github.com/JosunLP/Ephemeris/releases/tag/v1.0.2
 [1.0.1]: https://github.com/JosunLP/Ephemeris/releases/tag/v1.0.1

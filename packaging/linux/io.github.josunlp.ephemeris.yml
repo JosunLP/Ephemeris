@@ -61,14 +61,12 @@ finish-args:
   # unencrypted, which is a worse trade than asking for the permission.
   - --talk-name=org.freedesktop.secrets
 
-  # Light and dark, and the accent colour, through the settings portal. The
-  # portal is reached through the sandbox by default; naming it here is what
-  # lets `gdbus monitor` watch it for changes.
-  - --talk-name=org.freedesktop.portal.Desktop
-
+  # Light and dark and the accent colour come from the settings portal, and
   # "Open log", "Open data folder" and clicking an event all hand a path or a
-  # URL to the desktop rather than opening anything themselves.
-  - --talk-name=org.freedesktop.portal.OpenURI
+  # URL to the OpenURI portal. Neither is named here: every portal is reachable
+  # from the sandbox already, and `flatpak-builder-lint` rejects a manifest
+  # that asks for one anyway (`finish-args-portal-talk-name`), which would
+  # fail the Flathub submission before it is built.
 
 modules:
   - name: ephemeris

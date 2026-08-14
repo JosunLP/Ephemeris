@@ -233,9 +233,9 @@ fn exec_quoted(path: &str) -> String {
     // `/opt/My0Apps/ephemeris`, which does not exist, and the session says
     // nothing. A literal percent is written `%%`, quoted or not.
     let path = path.replace('%', "%%");
-    const RESERVED: [char; 19] = [
-        ' ', '\t', '\n', '"', '\'', '\\', '>', '<', '~', '|', '&', ';', '$', '*', '?', '#', '(',
-        ')', '`',
+    const RESERVED: [char; 20] = [
+        ' ', '\t', '\n', '\r', '"', '\'', '\\', '>', '<', '~', '|', '&', ';', '$', '*', '?', '#',
+        '(', ')', '`',
     ];
     if !path.contains(RESERVED) {
         return path;
@@ -251,6 +251,13 @@ fn exec_quoted(path: &str) -> String {
             '"' => escaped.push_str("\\\\\""),
             '$' => escaped.push_str("\\\\$"),
             '`' => escaped.push_str("\\\\`"),
+            // A key's value is one line. Written literally, these three end the
+            // `Exec=` line part-way through the path and leave the remainder as
+            // a stray line the parser rejects — silently, at every login. The
+            // general string-value rule spells them, so they go in spelled.
+            '\n' => escaped.push_str(r"\n"),
+            '\t' => escaped.push_str(r"\t"),
+            '\r' => escaped.push_str(r"\r"),
             _ => escaped.push(ch),
         }
     }
@@ -376,5 +383,11 @@ mod tests {
             "\"/opt/My %%Apps/x\"",
             "quoting must not lose the doubling"
         );
+        // A key's value is one line, so the characters that would end it early
+        // are spelled rather than written — an `Exec=` cut in half is an entry
+        // the session skips without a word.
+        assert_eq!(exec_quoted("/home/a\nb/x"), r#""/home/a\nb/x""#);
+        assert_eq!(exec_quoted("/home/a\tb/x"), r#""/home/a\tb/x""#);
+        assert!(!exec_quoted("/home/a\r\nb/x").contains(['\n', '\r']));
     }
 }

@@ -498,7 +498,10 @@ fn draw(app: &mut App, shell: &mut X11Shell, canvas: &mut Cairo) {
         appearance: app.appearance.clone(),
         rtl: app.loc.rtl,
     };
-    if std::mem::take(&mut shell.rebuild) || std::mem::take(&mut app.needs_rebuild) {
+    // `|`, not `||`: both flags have to be cleared whichever of them is set,
+    // or a frame that rebuilt for the shell's reason leaves the app's flag
+    // standing and rebuilds a second time for nothing.
+    if std::mem::take(&mut shell.rebuild) | std::mem::take(&mut app.needs_rebuild) {
         let rect = shell.window_rect();
         if let Some(fresh) = Cairo::for_window(
             shell.libs.clone(),

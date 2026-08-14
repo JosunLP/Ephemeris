@@ -661,6 +661,12 @@ pub fn run() -> Result<(), String> {
     unsafe { (wl.wl_display_roundtrip)(display) };
 
     super::report_hotkey(&cfg.peek_hotkey);
+    // The desktop's light/dark and accent settings are watched here for the
+    // same reason as on X11: without it `appearance_changed` is never true and
+    // the widget keeps its start-up palette until it is restarted. The watcher
+    // writes to the same pipe as the sync thread and raises its own flag
+    // first, so the loop tells the two apart without a second descriptor.
+    visuals::watch(wake_write);
     // The reveal starts at zero when there is cached data to fade in, and only
     // moves while the animation timer runs. This is the first moment there is
     // a shell to start it on.
@@ -917,12 +923,16 @@ impl WaylandShell {
             c"Ephemeris".as_ptr(),
         );
         // The application identifier a desktop matches against its `.desktop`
-        // file, which is what gives the window the right icon and groups it
-        // with the autostart entry.
+        // file, which is what gives the window the right icon. It has to be
+        // the name of the file that is actually installed —
+        // `io.github.josunlp.ephemeris.desktop`, from `packaging/linux` and
+        // from the Flatpak — and under Flatpak it has to be the application id
+        // as well. A bare `ephemeris` matches nothing on GNOME, which is the
+        // desktop that falls back to this ordinary toplevel in the first place.
         self.connection.send1(
             self.xdg_toplevel,
             xdg_toplevel::SET_APP_ID,
-            c"ephemeris".as_ptr(),
+            c"io.github.josunlp.ephemeris".as_ptr(),
         );
         self.connection.send2(
             self.xdg_toplevel,
@@ -1029,7 +1039,7 @@ impl WaylandShell {
 
     /// Keeps the look the drawn menu and the buffers are built from in step
     /// with the widget.
-    fn sync_look(&mut self, app: &App) {
+    fn sync_look(&mut self, app: &mut App) {
         let fresh = Look {
             metrics: app.metrics,
             palette: app.palette,
@@ -1037,6 +1047,14 @@ impl WaylandShell {
             rtl: app.loc.rtl,
         };
         self.look = fresh;
+        // The fonts and the base direction are baked into the `Cairo` inside
+        // each buffer when it is wrapped, so a settings change that alters
+        // either has to force a rebuild — `ensure_buffers` otherwise only ever
+        // notices a change of size or of output scale, and a switch to Arabic
+        // or to a different font family would keep being laid out with the old
+        // one until something resized the window. The X11 `draw` takes the
+        // same flag for the same reason.
+        self.rebuild |= std::mem::take(&mut app.needs_rebuild);
     }
 
     /// The pointer's position on the output, which is what a drag and a menu
@@ -1130,6 +1148,11 @@ fn event_loop(app: &mut App, shell: &mut WaylandShell, wake: c_int) {
     let wl = shell.connection.wl.clone();
     let display = shell.connection.display;
     let wayland_fd = unsafe { (wl.wl_display_get_fd)(display) };
+    // The socket another copy writes `--peek` to, polled here for the same
+    // reason the X11 loop polls it — and rather more here, because a Wayland
+    // compositor will not let a client grab a key, so a keybinding running
+    // `ephemeris --peek` is the *only* way the peek shortcut works.
+    let control_fd = super::super::control_fd().unwrap_or(-1);
 
     loop {
         if shell.quit {
@@ -1173,7 +1196,7 @@ fn event_loop(app: &mut App, shell: &mut WaylandShell, wake: c_int) {
             .next_deadline(app.peek_deadline())
             .map(|d| d.saturating_duration_since(Instant::now()))
             .unwrap_or(Duration::from_secs(60));
-        let readable = wait(wayland_fd, wake, timeout);
+        let readable = wait(wayland_fd, wake, control_fd, timeout);
 
         unsafe {
             if readable {
@@ -1191,6 +1214,11 @@ fn event_loop(app: &mut App, shell: &mut WaylandShell, wake: c_int) {
             log::warn("The Wayland connection was lost — closing.");
             shell.quit = true;
             return;
+        }
+
+        if super::super::take_control_requests() {
+            app.begin_peek(shell);
+            shell.dirty = true;
         }
 
         if drain(wake) {
@@ -1222,6 +1250,22 @@ fn event_loop(app: &mut App, shell: &mut WaylandShell, wake: c_int) {
             app.end_peek(shell);
             shell.dirty = true;
         }
+    }
+}
+
+/// Answers `xdg_wm_base.ping`, if one is outstanding.
+///
+/// [`handle_events`] does this for the widget's own loop, but that loop is not
+/// running while a context menu is: `menu::Popup::run` pumps the connection
+/// itself and can sit there for as long as the menu is open. A client that
+/// leaves a ping unanswered is marked unresponsive and may be killed, so the
+/// menu's loop answers it too.
+pub fn answer_ping(shell: &WaylandShell) {
+    let serial = EVENTS.with(|e| e.borrow_mut().ping.take());
+    if let Some(serial) = serial {
+        shell
+            .connection
+            .send1(shell.connection.xdg_wm_base, xdg_wm_base::PONG, serial);
     }
 }
 
@@ -1420,7 +1464,7 @@ impl WaylandShell {
                 (wl.wl_display_cancel_read)(display);
                 return false;
             }
-            let readable = wait(fd, -1, timeout);
+            let readable = wait(fd, -1, -1, timeout);
             if readable {
                 if (wl.wl_display_read_events)(display) < 0 {
                     return false;
@@ -1978,7 +2022,9 @@ extern "C" fn on_source_action(_data: Data, _source: *mut wl_proxy, _action: u32
 
 /// Sleeps until either descriptor has something or the timeout runs out.
 /// True if the Wayland connection is the one with something to say.
-fn wait(wayland: c_int, wake: c_int, timeout: Duration) -> bool {
+fn wait(wayland: c_int, wake: c_int, control: c_int, timeout: Duration) -> bool {
+    // A negative descriptor is ignored by `poll`, which is what carries the
+    // case of a control socket that could not be bound.
     let mut fds = [
         libc::pollfd {
             fd: wayland,
@@ -1990,9 +2036,17 @@ fn wait(wayland: c_int, wake: c_int, timeout: Duration) -> bool {
             events: libc::POLLIN,
             revents: 0,
         },
+        libc::pollfd {
+            fd: control,
+            events: libc::POLLIN,
+            revents: 0,
+        },
     ];
     let ms = timeout.as_millis().min(60_000) as c_int;
-    let ready = unsafe { libc::poll(fds.as_mut_ptr(), 2, ms) };
+    let ready = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, ms) };
+    // Only the Wayland descriptor's readiness is reported: the caller has
+    // announced its intention to read that socket and has to either read it or
+    // cancel, and the other two are drained further down the loop.
     ready > 0 && fds[0].revents & libc::POLLIN != 0
 }
 

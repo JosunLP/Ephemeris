@@ -55,8 +55,14 @@ jobs:
       # it came from. Cheap to verify, expensive to discover afterwards.
       - name: Verify tag matches Cargo.toml
         shell: pwsh
+        # Through the environment rather than expanded into the script text:
+        # the value comes from a `workflow_dispatch` input, and a quote in it
+        # would otherwise end the string and run as PowerShell in this job. It
+        # is only ever compared against a version string.
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          $tag = "${{ inputs.tag || github.ref_name }}" -replace '^v', ''
+          $tag = $env:TAG -replace '^v', ''
           $manifest = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
           $version = ($manifest.packages | Where-Object name -eq ephemeris).version
           if ($tag -ne $version) {
