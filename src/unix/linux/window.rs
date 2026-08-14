@@ -306,6 +306,10 @@ pub fn run() -> Result<(), String> {
         (libs.XFlush)(display);
     }
     widget.rescue_offscreen(&mut shell);
+    // The reveal starts at zero when there is cached data to fade in, and only
+    // moves while the animation timer runs. This is the first moment there is
+    // a shell to start it on.
+    widget.start(&mut shell);
     super::report_session();
     visuals::watch(wake_write);
 

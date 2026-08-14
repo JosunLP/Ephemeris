@@ -407,6 +407,21 @@ impl App {
 
     // --- Animation ----------------------------------------------------------
 
+    /// The window exists and the first frame is about to be drawn.
+    ///
+    /// [`Self::new`] starts the reveal from zero whenever there is cached data
+    /// to fade in — which is every start after the first. A `Spring` only
+    /// moves while the animation timer runs, and nothing had started it at
+    /// that point, because the shell did not exist yet. Without this the
+    /// reveal sits at zero, and since it multiplies into every alpha inside
+    /// the scrolled region, the widget draws its header, its hero card and
+    /// its footer around an empty middle until something else happens to kick
+    /// the timer — the first sync finishing, or a pointer crossing the widget.
+    /// In demo mode there is no sync thread at all, so nothing ever does.
+    pub fn start(&mut self, shell: &mut dyn Shell) {
+        self.kick(shell);
+    }
+
     /// Starts the animation timer if needed and takes a step immediately, so
     /// the response does not feel delayed by up to 16 ms.
     pub fn kick(&mut self, shell: &mut dyn Shell) {

@@ -71,6 +71,15 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- **The agenda is no longer invisible until you move the mouse.** On Linux and
+  macOS the widget fades its content in when it starts with cached data to
+  show — and a fade only advances while the animation timer runs, which
+  nothing had started at that point, because the window did not exist yet.
+  The result was a widget drawing its header, the meeting running now and its
+  footer around an empty middle, until the first sync came back or the pointer
+  happened to cross it. In demo mode, where there is no sync at all, it stayed
+  that way.
+
 - **Ticking a task off no longer takes another account's task with it.** The
   completion removed the task — and the calendar entries that were its time
   block — by task id alone, and an id only means something to the provider that

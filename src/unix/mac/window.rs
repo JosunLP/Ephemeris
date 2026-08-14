@@ -229,6 +229,10 @@ pub fn run() -> Result<(), String> {
         let rect = widget.target_geometry(&cfg, &shell);
         shell.set_window_rect(rect);
         widget.rescue_offscreen(&mut shell);
+        // The reveal starts at zero when there is cached data to fade in, and
+        // only moves while the animation timer runs. This is the first moment
+        // there is a shell to start it on.
+        widget.start(&mut shell);
         hotkey::install(&cfg.peek_hotkey);
         visuals::watch(delegate);
 

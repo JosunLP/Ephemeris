@@ -661,6 +661,10 @@ pub fn run() -> Result<(), String> {
     unsafe { (wl.wl_display_roundtrip)(display) };
 
     super::report_hotkey(&cfg.peek_hotkey);
+    // The reveal starts at zero when there is cached data to fade in, and only
+    // moves while the animation timer runs. This is the first moment there is
+    // a shell to start it on.
+    widget.start(&mut shell);
     event_loop(&mut widget, &mut shell, wake_read);
 
     widget.commit_pending_on_exit();
