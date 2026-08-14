@@ -234,11 +234,25 @@ fn persist_refresh_token(refresh: &str) {
 /// Browsers like to follow up with `/favicon.ico`, so this loops until a
 /// request carrying `code=` or `error=` arrives.
 fn wait_for_code(listener: TcpListener, expected_state: &str) -> Result<String> {
-    listener.set_nonblocking(false)?;
+    // Non-blocking so the deadline is actually a deadline. `accept` has no
+    // timeout of its own, so the ordinary cancel — the user closes the consent
+    // tab and Google never redirects to the loopback — would otherwise park
+    // this call, and with it the sync thread, for the life of the process.
+    listener.set_nonblocking(true)?;
     let deadline = Instant::now() + Duration::from_secs(300);
 
     while Instant::now() < deadline {
-        let (mut stream, _) = listener.accept()?;
+        let (mut stream, _) = match listener.accept() {
+            Ok(accepted) => accepted,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(100));
+                continue;
+            }
+            Err(e) => return Err(e.into()),
+        };
+        // BSD and macOS hand the accepted socket the listener's non-blocking
+        // flag; Linux does not.
+        stream.set_nonblocking(false)?;
         stream.set_read_timeout(Some(Duration::from_secs(10)))?;
 
         let mut request_line = String::new();

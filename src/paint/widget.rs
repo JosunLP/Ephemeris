@@ -94,6 +94,7 @@ pub fn draw<C: Canvas>(
 
     // Everything between is clipped so scrolled rows cannot run into the
     // header, the footer or the frame.
+    let scrolled_from = hits.len();
     p.push_clip(panel.content_clip(content_top, content_bottom));
 
     // Reveal: slide up slightly from below while fading in.
@@ -107,6 +108,12 @@ pub fn draw<C: Canvas>(
 
     p.fade = 1.0;
     p.c.pop_clip();
+    // The clip applies to the drawing; the hit rectangles were written without
+    // it. A row scrolled up behind the header is invisible and still catches
+    // clicks — and because the later region wins, it beats the refresh button
+    // and the highlighted event that were pushed before it. Trimming them to
+    // the same band is what makes what you click what you see.
+    clip_hits(hits, scrolled_from, content_top, content_bottom);
 
     let content_height =
         layout::content_height(cy, frame.anim.scroll.value, slide, content_top, &metrics);
@@ -374,10 +381,13 @@ impl<C: Canvas> Painter<'_, C> {
             .arc(cx, cy, r, from, to, color, alpha * self.fade, 1.6);
 
         // The head sits at the end of the arc, pointing along the tangent.
+        // Both parts are measured from the arc's endpoint: taking the tip from
+        // the circle's centre instead put it a quarter turn away, and the head
+        // came out as a triangle slashed across the inside of the circle.
         let (sin, cos) = to.sin_cos();
-        let tip = (cx - sin * r * 0.95, cy + cos * r * 0.95);
         let base = (cx + cos * r, cy + sin * r);
         let wing = r * 0.5;
+        let tip = (base.0 - sin * r * 0.8, base.1 + cos * r * 0.8);
         self.c.polygon(
             &[
                 tip,
@@ -1473,6 +1483,25 @@ impl<C: Canvas> Painter<'_, C> {
         let r = self.mrect(r);
         self.c.text(s, font, align, r, color, a);
     }
+}
+
+/// Trims the hit regions from `from` onwards to the scrolling band, dropping
+/// the ones that fell out of it entirely.
+///
+/// Only the vertical extent moves: the rows span the full width of the panel
+/// and the clip never takes anything off their sides.
+fn clip_hits(hits: &mut Vec<HitRegion>, from: usize, top: f32, bottom: f32) {
+    let mut kept = from;
+    for i in from..hits.len() {
+        let mut region = hits[i];
+        region.rect.top = region.rect.top.max(top);
+        region.rect.bottom = region.rect.bottom.min(bottom);
+        if region.rect.bottom > region.rect.top {
+            hits[kept] = region;
+            kept += 1;
+        }
+    }
+    hits.truncate(kept);
 }
 
 fn rect(left: f32, top: f32, right: f32, bottom: f32) -> Rect {

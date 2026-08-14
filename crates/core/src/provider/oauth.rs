@@ -248,11 +248,28 @@ impl Session {
     /// request carrying `code=` or `error=` arrives.
     fn wait_for_code(&self, listener: TcpListener, expected_state: &str) -> Result<String> {
         let cat = crate::i18n::global();
-        listener.set_nonblocking(false).map_err(io_err)?;
+        // Non-blocking so the deadline is actually a deadline. `accept` has no
+        // timeout of its own, and a blocking one is only interrupted by a
+        // connection — so the ordinary cancel (the user closes the consent tab,
+        // and the provider never redirects to the loopback) would park this
+        // call forever, and with it the sync thread, for the life of the
+        // process: no further sync, no queued completion, no quit.
+        listener.set_nonblocking(true).map_err(io_err)?;
         let deadline = Instant::now() + Duration::from_secs(300);
 
         while Instant::now() < deadline {
-            let (mut stream, _) = listener.accept().map_err(io_err)?;
+            let (mut stream, _) = match listener.accept() {
+                Ok(accepted) => accepted,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(100));
+                    continue;
+                }
+                Err(e) => return Err(io_err(e)),
+            };
+            // BSD and macOS hand the accepted socket the listener's
+            // non-blocking flag; Linux does not. Setting it either way is what
+            // makes the read below behave the same on all three.
+            stream.set_nonblocking(false).map_err(io_err)?;
             stream
                 .set_read_timeout(Some(Duration::from_secs(10)))
                 .map_err(io_err)?;

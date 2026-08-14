@@ -353,10 +353,14 @@ fn worker(shared: Arc<Mutex<Shared>>, waker: Arc<dyn Waker>, rx: Receiver<Comman
                             // user that was one item, however many APIs it
                             // came out of.
                             let blocks = guard.agenda.complete_task(key);
-                            let today = guard
-                                .agenda
-                                .day
-                                .unwrap_or_else(|| Local::now().date_naive());
+                            // The wall clock, not `agenda.day` — that one is
+                            // the day of the *last sync*, and `drop_completed`
+                            // stamps the set with the wall clock. Ticking a
+                            // task off at 00:03 after a 23:55 sync would file
+                            // it under yesterday, and the next sync would then
+                            // decide the day had rolled over and empty the set
+                            // — bringing the block straight back.
+                            let today = Local::now().date_naive();
                             for block in &blocks {
                                 completed.remember(today, &block.account_id, &block.title);
                             }

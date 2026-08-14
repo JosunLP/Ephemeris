@@ -372,17 +372,25 @@ pub fn sort_events(events: &mut [Event]) {
 ///
 /// All-day events do not count: they overlap everything by definition and
 /// would be worthless as a warning.
-pub fn mark_overlaps(events: &[Event]) -> Vec<bool> {
+///
+/// The second half of the result is the number of clashing *pairs*, counted
+/// here because this is the loop that already knows them. Dividing the number
+/// of flagged events by two — which is what the badge used to do — under-counts
+/// exactly the case most worth flagging: three meetings in the same slot are
+/// three pairs, not one.
+pub fn mark_overlaps(events: &[Event]) -> (Vec<bool>, usize) {
     let mut flags = vec![false; events.len()];
+    let mut pairs = 0;
     for i in 0..events.len() {
         for j in (i + 1)..events.len() {
             if overlaps(&events[i], &events[j]) {
                 flags[i] = true;
                 flags[j] = true;
+                pairs += 1;
             }
         }
     }
-    flags
+    (flags, pairs)
 }
 
 fn overlaps(a: &Event, b: &Event) -> bool {
@@ -607,7 +615,7 @@ mod tests {
     fn back_to_back_events_are_not_a_conflict() {
         // 09:00-10:00 and 10:00-11:00 merely touch.
         let events = vec![timed("a", (9, 0), (10, 0)), timed("b", (10, 0), (11, 0))];
-        assert_eq!(mark_overlaps(&events), vec![false, false]);
+        assert_eq!(mark_overlaps(&events).0, vec![false, false]);
     }
 
     #[test]
@@ -617,7 +625,7 @@ mod tests {
             timed("b", (9, 30), (10, 30)),
             timed("c", (14, 0), (15, 0)),
         ];
-        assert_eq!(mark_overlaps(&events), vec![true, true, false]);
+        assert_eq!(mark_overlaps(&events).0, vec![true, true, false]);
     }
 
     #[test]
@@ -626,7 +634,7 @@ mod tests {
             timed("long", (9, 0), (12, 0)),
             timed("short", (10, 0), (10, 15)),
         ];
-        assert_eq!(mark_overlaps(&events), vec![true, true]);
+        assert_eq!(mark_overlaps(&events).0, vec![true, true]);
     }
 
     #[test]
@@ -636,7 +644,7 @@ mod tests {
         all_day.start = None;
         all_day.end = None;
         let events = vec![all_day, timed("meeting", (9, 0), (10, 0))];
-        assert_eq!(mark_overlaps(&events), vec![false, false]);
+        assert_eq!(mark_overlaps(&events).0, vec![false, false]);
     }
 
     #[test]

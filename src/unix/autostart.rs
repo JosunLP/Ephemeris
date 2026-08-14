@@ -178,10 +178,32 @@ fn entry_contents(exe: &std::path::Path) -> String {
 /// specification asks for.
 #[cfg(not(target_os = "macos"))]
 fn exec_quoted(path: &str) -> String {
-    if !path.contains([' ', '\t', '"', '\\', '\'', '$', '`']) {
-        return path.to_owned();
+    // `%` introduces a field code, and an unrecognised one is dropped rather
+    // than reported: `/opt/My%20Apps/tpmplaner` is launched as
+    // `/opt/My0Apps/tpmplaner`, which does not exist, and the session says
+    // nothing. A literal percent is written `%%`, quoted or not.
+    let path = path.replace('%', "%%");
+    const RESERVED: [char; 19] = [
+        ' ', '\t', '\n', '"', '\'', '\\', '>', '<', '~', '|', '&', ';', '$', '*', '?', '#', '(',
+        ')', '`',
+    ];
+    if !path.contains(RESERVED) {
+        return path;
     }
-    let escaped = path.replace('\\', "\\\\").replace('"', "\\\"");
+    // Inside quotes `"`, `` ` ``, `$` and `\` have to be escaped with a
+    // backslash — and the general string-value rule, which unescapes `\\` to
+    // `\`, has already run by then. So each of them takes two backslashes, and
+    // a literal backslash takes four.
+    let mut escaped = String::with_capacity(path.len() + 2);
+    for ch in path.chars() {
+        match ch {
+            '\\' => escaped.push_str(r"\\\\"),
+            '"' => escaped.push_str("\\\\\""),
+            '$' => escaped.push_str("\\\\$"),
+            '`' => escaped.push_str("\\\\`"),
+            _ => escaped.push(ch),
+        }
+    }
     format!("\"{escaped}\"")
 }
 
@@ -291,8 +313,18 @@ mod tests {
             text.contains("Exec=\"/home/a b/My Apps/tpmplaner\"\n"),
             "{text}"
         );
-        assert_eq!(exec_quoted(r#"/home/a"b\c"#), r#""/home/a\"b\\c""#);
+        // Two backslashes for a quote and four for a backslash: the general
+        // string-value rule unescapes `\\` to `\` before the quoting rule is
+        // applied, so each escape has to survive being read twice.
+        assert_eq!(exec_quoted(r#"/home/a"b\c"#), r#""/home/a\\"b\\\\c""#);
         // A plain path is left exactly as it is.
         assert_eq!(exec_quoted("/usr/bin/tpmplaner"), "/usr/bin/tpmplaner");
+        // `%` is a field code, so a literal one is doubled — quoting or not.
+        assert_eq!(exec_quoted("/opt/My%20Apps/x"), "/opt/My%%20Apps/x");
+        assert_eq!(
+            exec_quoted("/opt/My %Apps/x"),
+            "\"/opt/My %%Apps/x\"",
+            "quoting must not lose the doubling"
+        );
     }
 }

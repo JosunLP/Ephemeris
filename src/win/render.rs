@@ -361,6 +361,7 @@ impl Renderer {
                 round_stroke: &self.round_stroke,
                 brushes: &self.brushes,
                 layouts: &self.layouts,
+                rtl,
             };
             paint::draw(
                 &mut canvas,
@@ -494,9 +495,11 @@ fn text_format(
             size,
             PCWSTR(locale.as_ptr()),
         )?;
-        // With a right-to-left reading direction DirectWrite swaps the meaning
-        // of LEADING and TRAILING itself — "leading" is then the right edge.
-        // So the layout code stays as it is and never swaps alignments.
+        // With a right-to-left reading direction DirectWrite reorders the runs
+        // of a bidirectional line, which is what this is for. It also swaps the
+        // meaning of LEADING and TRAILING — "leading" is then the right edge —
+        // and `super::canvas::alignment` swaps them back, because the widget
+        // has already resolved reading order into a physical side.
         if rtl {
             format.SetReadingDirection(DWRITE_READING_DIRECTION_RIGHT_TO_LEFT)?;
         }

@@ -332,7 +332,7 @@ pub struct CGAffineTransform {
 /// `kCGDesktopIconWindowLevelKey`. One above it is the level the widget sits
 /// at: below every ordinary window, above the desktop and its icons, and still
 /// clickable.
-pub const kCGDesktopIconWindowLevelKey: i32 = 4;
+pub const kCGDesktopIconWindowLevelKey: i32 = 18;
 
 /// `kCGGradientDrawsBeforeStartLocation | kCGGradientDrawsAfterEndLocation`,
 /// which is Core Graphics' clamp: the end colours continue past the ends
@@ -495,7 +495,10 @@ unsafe extern "C" {
 }
 
 /// `kCTLineTruncationEnd` — the ellipsis goes at the end of the line.
-pub const kCTLineTruncationEnd: u32 = 2;
+///
+/// `CTLineTruncationType` is `Start = 0, End = 1, Middle = 2`; 2 would put the
+/// ellipsis in the middle of every truncated row.
+pub const kCTLineTruncationEnd: u32 = 1;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]

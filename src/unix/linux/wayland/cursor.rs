@@ -72,6 +72,11 @@ pub struct Cursors {
     images: [*mut WlCursorImage; 5],
     buffers: [*mut wl_proxy; 5],
     shown: usize,
+    /// The density the images were loaded at. The hotspot comes out of the
+    /// theme in image pixels while `wl_pointer.set_cursor` wants it in the
+    /// cursor surface's own — logical — coordinates, so it has to be divided
+    /// back down by this.
+    scale: i32,
 }
 
 impl Default for Cursors {
@@ -82,6 +87,7 @@ impl Default for Cursors {
             images: [std::ptr::null_mut(); 5],
             buffers: [std::ptr::null_mut(); 5],
             shown: usize::MAX,
+            scale: 1,
         }
     }
 }
@@ -126,6 +132,7 @@ impl Cursors {
         if shm.is_null() || compositor.is_null() {
             return;
         }
+        self.scale = scale.max(1);
 
         let name = std::env::var("XCURSOR_THEME")
             .ok()
@@ -254,8 +261,10 @@ impl Cursors {
                 0,
             );
             // The hotspot is in the cursor surface's own coordinates, which
-            // are logical pixels — so it is the *unscaled* value even though
-            // the image was loaded at the display's density.
+            // are logical pixels, while the theme reports it in the image's
+            // own — and the image was loaded at the display's density. Without
+            // the division the arrow sits half a cursor down and to the right
+            // of the point that actually receives the click.
             (wl.wl_proxy_marshal_flags)(
                 pointer,
                 wl_pointer::SET_CURSOR,
@@ -264,8 +273,8 @@ impl Cursors {
                 0,
                 serial,
                 self.surface,
-                hotspot_x,
-                hotspot_y,
+                hotspot_x / self.scale,
+                hotspot_y / self.scale,
             );
         }
     }

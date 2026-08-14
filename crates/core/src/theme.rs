@@ -755,6 +755,39 @@ impl Palette {
                 &mut self.text_faint,
                 2.2,
             );
+            // The marks that mean something have to survive the move as well.
+            // `follow_panel_lightness` re-derives the accent but leaves these
+            // at the values of the palette that was switched away from, and
+            // `warn` is the footer's "your configuration is broken" colour —
+            // the one message that must not be the one that disappears. A
+            // light panel under the dark palette left it at roughly 1.5:1.
+            let was = self.accent;
+            fix("the now marker on the custom panel", &mut self.accent, 3.0);
+            fix("overdue on the custom panel", &mut self.overdue, 3.0);
+            fix(
+                "the conflict mark on the custom panel",
+                &mut self.conflict,
+                3.0,
+            );
+            fix(
+                "the warning colour on the custom panel",
+                &mut self.warn,
+                3.0,
+            );
+            fix(
+                "the success colour on the custom panel",
+                &mut self.ok_green,
+                3.0,
+            );
+            if self.accent != was {
+                // The soft accent is a blend of the accent with the panel, so
+                // it goes stale the moment the accent moves.
+                self.accent_soft = mix(
+                    self.accent,
+                    self.panel_mid,
+                    if self.dark { 0.72 } else { 0.80 },
+                );
+            }
         }
     }
 
@@ -906,8 +939,13 @@ impl Palette {
 fn readable_accent(rgb: u32, light_theme: bool) -> u32 {
     let (h, s, l) = rgb_to_hsl(rgb);
     // Lift very pale, near grey accents a little, or the "now" and "active"
-    // states disappear visually.
-    let s = s.max(0.35);
+    // states disappear visually — but only where there is a hue to lift.
+    // `rgb_to_hsl` reports hue 0 for anything neutral, so saturating a black,
+    // white or grey accent unconditionally would invent a colour the user
+    // never chose: `"accent": "#FFFFFF"` came out dusty pink, and
+    // `distinct_from` then pushed `overdue` off to amber because it believed
+    // the accent was red.
+    let s = if s > 0.02 { s.max(0.35) } else { s };
     let l = if light_theme {
         l.clamp(0.30, 0.46)
     } else {

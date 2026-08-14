@@ -52,6 +52,11 @@ pub struct D2dCanvas<'a> {
     pub round_stroke: &'a ID2D1StrokeStyle,
     pub brushes: &'a RefCell<HashMap<u32, ID2D1SolidColorBrush>>,
     pub layouts: &'a RefCell<HashMap<LayoutKey, IDWriteTextLayout>>,
+    /// The reading direction the formats were built with. Needed because
+    /// DirectWrite's alignment is logical while [`Align`] is physical — see
+    /// [`alignment`]. Constant for the life of a renderer, so the layout cache
+    /// does not have to key on it.
+    pub rtl: bool,
 }
 
 /// What makes one text layout different from another.
@@ -116,7 +121,7 @@ impl D2dCanvas<'_> {
         // Alignment is per layout rather than per format: the same role is
         // used at both ends of a row, and a format per combination would be
         // twice as many for no gain.
-        unsafe { layout.SetTextAlignment(alignment(align)).ok()? };
+        unsafe { layout.SetTextAlignment(alignment(align, self.rtl)).ok()? };
         self.layouts.borrow_mut().insert(key, layout.clone());
         // The relative times ("in 25 min") produce new keys every minute, so
         // this cannot be allowed to grow without bound.
@@ -348,7 +353,10 @@ impl Canvas for D2dCanvas<'_> {
 
     fn text_block(&mut self, s: &str, r: Rect, color: u32, alpha: f32) {
         let (w, h) = (r.width().max(1.0), r.height().max(1.0));
-        let Some(layout) = self.layout(s, Font::Tooltip, Align::Left, w, h) else {
+        // The wrapped block starts at the edge the reading starts from, which
+        // is the physical right in a mirrored layout.
+        let start = if self.rtl { Align::Right } else { Align::Left };
+        let Some(layout) = self.layout(s, Font::Tooltip, start, w, h) else {
             return;
         };
         let Some(brush) = self.brush(color, alpha) else {
@@ -397,11 +405,30 @@ fn metrics(layout: &IDWriteTextLayout) -> Option<DWRITE_TEXT_METRICS> {
     Some(out)
 }
 
-fn alignment(align: Align) -> DWRITE_TEXT_ALIGNMENT {
+/// The physical alignment as DirectWrite's *logical* one.
+///
+/// [`Align`] is physical by the time it gets here — `Painter` has already
+/// swapped leading for trailing where the layout is mirrored. DirectWrite's
+/// `LEADING`/`TRAILING` are relative to the format's reading direction, which
+/// [`super::render`] sets to right-to-left for a mirrored locale, so the two
+/// have to be swapped back here. Without that the swap happens twice and every
+/// line lands against the wrong edge of its box.
+fn alignment(align: Align, rtl: bool) -> DWRITE_TEXT_ALIGNMENT {
+    let (start, end) = if rtl {
+        (
+            DWRITE_TEXT_ALIGNMENT_TRAILING,
+            DWRITE_TEXT_ALIGNMENT_LEADING,
+        )
+    } else {
+        (
+            DWRITE_TEXT_ALIGNMENT_LEADING,
+            DWRITE_TEXT_ALIGNMENT_TRAILING,
+        )
+    };
     match align {
-        Align::Left => DWRITE_TEXT_ALIGNMENT_LEADING,
+        Align::Left => start,
         Align::Center => DWRITE_TEXT_ALIGNMENT_CENTER,
-        Align::Right => DWRITE_TEXT_ALIGNMENT_TRAILING,
+        Align::Right => end,
     }
 }
 

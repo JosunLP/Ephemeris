@@ -310,11 +310,17 @@ pub fn minutes_of_day(dt: DateTime<Local>) -> f32 {
 ///
 /// With no end time an hour is assumed; if the event runs past midnight the raw
 /// time would point backwards, so it is clamped to the end of the day.
+///
+/// Strictly backwards: an entry whose end equals its start does not point
+/// anywhere, and calendars are full of them. Treating those as running to
+/// midnight stretched [`RailSpan`] over the whole day and drew a bar from the
+/// entry to the right-hand edge; the minimum width in [`rail_segment`] is what
+/// keeps a zero-length entry visible instead.
 pub fn end_minutes(ev: &Event, start_min: f32) -> f32 {
     match ev.end {
         Some(e) => {
             let v = e.hour() as f32 * 60.0 + e.minute() as f32;
-            if v <= start_min { DAY_MINUTES } else { v }
+            if v < start_min { DAY_MINUTES } else { v }
         }
         None => start_min + 60.0,
     }
@@ -517,8 +523,7 @@ impl EventList {
     /// `show_past` is the setting; the running event stays visible either way,
     /// because otherwise the most important one is the one that vanishes.
     pub fn build(agenda: &Agenda, now: DateTime<Local>, show_past: bool) -> Self {
-        let overlapping = crate::model::mark_overlaps(&agenda.events);
-        let conflicts = overlapping.iter().filter(|&&f| f).count() / 2;
+        let (overlapping, conflicts) = crate::model::mark_overlaps(&agenda.events);
 
         let rows: Vec<EventRow> = agenda
             .events

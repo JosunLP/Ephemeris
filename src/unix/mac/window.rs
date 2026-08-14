@@ -41,7 +41,7 @@ use crate::unix::autostart;
 use crate::unix::mac::canvas::Cg;
 use crate::unix::mac::objc::*;
 use crate::unix::mac::{hotkey, menu, visuals};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -53,6 +53,19 @@ thread_local! {
     /// The running widget. See the module note on why this is taken rather
     /// than borrowed.
     static STATE: RefCell<Option<Box<MacState>>> = const { RefCell::new(None) };
+
+    /// A sync finished while the state was out.
+    ///
+    /// [`with_state`] drops a callback that arrives re-entrantly, which is the
+    /// right answer for a redraw or a pointer move — the next event makes those
+    /// good. It is the wrong answer for `onWake:`: `App::on_sync_done` is the
+    /// only edge that stops the spinner, clears the failure count and schedules
+    /// the next sync, and nothing else ever calls it. Dropped during the nested
+    /// loop of a context menu, the spinner would keep turning — and with it the
+    /// sixty-a-second animation timer — until the sync after next happened to
+    /// land at a better moment. So it is latched here instead and delivered by
+    /// the next callback that gets through.
+    static PENDING_WAKE: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Runs `f` with the widget, if it is not already in use further up the stack.
@@ -469,9 +482,13 @@ extern "C" fn mouse_event(this: Id, selector: Sel, event: Id) {
             app.show_menu(shell);
         }
     });
+    // The menu's nested loop is the likeliest place for a sync to have
+    // finished while the widget was out of its slot.
+    deliver_wake();
 }
 
 extern "C" fn on_anim(_this: Id, _sel: Sel, _timer: Id) {
+    deliver_wake();
     with_state(|st| {
         let (app, shell) = (&mut st.app, &mut st.shell);
         app.pump(shell);
@@ -486,6 +503,7 @@ extern "C" fn on_undo(_this: Id, _sel: Sel, _timer: Id) {
 }
 
 extern "C" fn on_minute(_this: Id, _sel: Sel, _timer: Id) {
+    deliver_wake();
     with_state(|st| {
         let (app, shell) = (&mut st.app, &mut st.shell);
         app.on_minute(shell);
@@ -502,10 +520,23 @@ extern "C" fn on_peek(_this: Id, _sel: Sel, _timer: Id) {
 }
 
 extern "C" fn on_wake(_this: Id, _sel: Sel, _arg: Id) {
-    with_state(|st| {
+    PENDING_WAKE.with(|p| p.set(true));
+    deliver_wake();
+}
+
+/// Hands a finished sync to the widget, or leaves it latched for the next
+/// callback if the state is out. Must not be called from inside [`with_state`].
+fn deliver_wake() {
+    if !PENDING_WAKE.with(|p| p.get()) {
+        return;
+    }
+    let delivered = with_state(|st| {
         let (app, shell) = (&mut st.app, &mut st.shell);
         app.on_sync_done(shell);
     });
+    if delivered.is_some() {
+        PENDING_WAKE.with(|p| p.set(false));
+    }
 }
 
 extern "C" fn on_appearance(_this: Id, _sel: Sel, _note: Id) {
@@ -589,7 +620,15 @@ impl Shell for MacShell {
             rect.height.max(1) as f64,
         );
         unsafe {
-            send2::<NSRect, i8, ()>(self.window, c"setFrame:display:", frame, 1);
+            // `display:` is NO on purpose. Every caller reaches this from
+            // inside `with_state` — the resize drag, the off-screen rescue, a
+            // reloaded configuration — and a synchronous display pass re-enters
+            // `drawRect:` while the widget is out of its slot: the draw is
+            // dropped, and AppKit has already erased the view against the
+            // window's clear colour. Marking it dirty instead paints on the
+            // next turn of the run loop, when the state is back.
+            send2::<NSRect, i8, ()>(self.window, c"setFrame:display:", frame, 0);
+            send1::<i8, ()>(self.view, c"setNeedsDisplay:", 1);
         }
     }
 

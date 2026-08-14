@@ -579,6 +579,13 @@ pub mod wl_shm {
 
 pub mod wl_shm_pool {
     pub const CREATE_BUFFER: u32 = 0;
+    /// The mapping is released once every buffer made from the pool is gone,
+    /// so this is safe to send while a buffer is still on screen.
+    pub const DESTROY: u32 = 1;
+}
+
+pub mod wl_buffer {
+    pub const DESTROY: u32 = 0;
 }
 
 pub mod wl_seat {

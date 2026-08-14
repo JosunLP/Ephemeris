@@ -274,6 +274,9 @@ impl Connection {
 /// continuously — but would halve the frame rate of the reveal animation for
 /// a saving not worth having.
 struct Buffers {
+    /// Kept so the pool and the buffers can be given back when this set is
+    /// replaced, which happens on every resize and every rebuild.
+    wl: Rc<Wl>,
     fd: c_int,
     memory: *mut u8,
     length: usize,
@@ -360,6 +363,7 @@ impl Buffers {
         }
 
         let mut me = Self {
+            wl: wl.clone(),
             fd,
             memory,
             length,
@@ -432,14 +436,47 @@ impl Drop for Buffers {
         for slot in &mut self.slots {
             slot.canvas = None;
         }
+        // The compositor keeps its own mapping of the memfd for as long as the
+        // pool object lives, so unmapping our side is only half of it. A set of
+        // buffers is replaced on every resize, scale change and theme rebuild
+        // — three seconds of dragging the resize corner would otherwise pin
+        // hundreds of megabytes in the compositor for the life of the process.
+        //
+        // Destroying the buffers first also takes their listeners with them,
+        // which is what stops a late `release` for a discarded buffer from
+        // clearing `busy` on the slot that replaced it: the listener carries a
+        // slot index, and libwayland discards events for a destroyed proxy.
         unsafe {
+            for slot in &mut self.slots {
+                if slot.buffer.is_null() {
+                    continue;
+                }
+                (self.wl.wl_proxy_marshal_flags)(
+                    slot.buffer,
+                    wl_buffer::DESTROY,
+                    std::ptr::null(),
+                    self.wl.version(slot.buffer),
+                    0,
+                );
+                (self.wl.wl_proxy_destroy)(slot.buffer);
+                slot.buffer = std::ptr::null_mut();
+            }
+            if !self.pool.is_null() {
+                // The pool's mapping is released once the buffers made from it
+                // are gone, so this is safe even while one is still on screen.
+                (self.wl.wl_proxy_marshal_flags)(
+                    self.pool,
+                    wl_shm_pool::DESTROY,
+                    std::ptr::null(),
+                    self.wl.version(self.pool),
+                    0,
+                );
+                (self.wl.wl_proxy_destroy)(self.pool);
+                self.pool = std::ptr::null_mut();
+            }
             libc::munmap(self.memory as *mut c_void, self.length);
             libc::close(self.fd);
         }
-        // The proxies belong to the connection and are released with it; the
-        // pool and buffers are left for the disconnect, which is a few
-        // milliseconds later and cannot outlive the process.
-        let _ = self.pool;
     }
 }
 
@@ -651,7 +688,11 @@ fn bind_globals(connection: &mut Connection) {
             "wl_shm" => (Global::Shm, wl.wl_shm_interface, 1),
             "wl_seat" => (Global::Seat, wl.wl_seat_interface, 1),
             "wl_output" => (Global::Output, wl.wl_output_interface, 2),
-            "zwlr_layer_shell_v1" => (Global::LayerShell, &LAYER_SHELL_INTERFACE, 1),
+            // Version 2 is the lowest that carries `set_layer`, and the layer
+            // surface inherits the shell's version — bound at 1, the peek could
+            // never raise the widget off the bottom layer, which is the whole
+            // of what the peek shortcut does under Wayland.
+            "zwlr_layer_shell_v1" => (Global::LayerShell, &LAYER_SHELL_INTERFACE, 2),
             "xdg_wm_base" => (Global::XdgWmBase, &XDG_WM_BASE_INTERFACE, 1),
             "wl_data_device_manager" => (
                 Global::DataDeviceManager,
@@ -910,12 +951,17 @@ impl WaylandShell {
             log::error("The widget could not allocate its drawing buffers");
         }
         // The compositor has to be told the buffer is denser than the surface,
-        // or a high-density display shows it at a quarter of the size.
-        if self.output_scale > 1 && self.connection.wl.version(self.surface) >= 3 {
+        // or a high-density display shows it at a quarter of the size. Sent
+        // whenever the buffers are rebuilt rather than only when the scale is
+        // above one: the surface keeps whatever it was last told, so a move
+        // from 200 % back to 100 % would leave it at 2 while the buffers are
+        // allocated at 1 — half size, and a fatal `invalid_size` the moment
+        // the width is odd.
+        if self.connection.wl.version(self.surface) >= 3 {
             self.connection.send1(
                 self.surface,
                 wl_surface::SET_BUFFER_SCALE,
-                self.output_scale,
+                self.output_scale.max(1),
             );
         }
     }
@@ -1094,11 +1140,29 @@ fn event_loop(app: &mut App, shell: &mut WaylandShell, wake: c_int) {
         // anything else: announce the intention to read, flush, sleep, then
         // either read or cancel. Skipping it races — another thread or a
         // nested dispatch could consume the socket in between.
+        // Every one of these is checked, as `WaylandShell::pump` checks them:
+        // once the compositor is gone the socket is permanently at end of
+        // file, so `poll` returns at once, the reads fail, and a loop that
+        // discarded the results would spin at full speed and never quit.
+        let mut lost = false;
         unsafe {
             while (wl.wl_display_prepare_read)(display) != 0 {
-                (wl.wl_display_dispatch_pending)(display);
+                if (wl.wl_display_dispatch_pending)(display) < 0 {
+                    lost = true;
+                    break;
+                }
             }
-            (wl.wl_display_flush)(display);
+            if !lost
+                && (wl.wl_display_flush)(display) < 0
+                && std::io::Error::last_os_error().raw_os_error() != Some(libc::EAGAIN)
+            {
+                (wl.wl_display_cancel_read)(display);
+                lost = true;
+            }
+        }
+        if lost {
+            shell.quit = true;
+            return;
         }
 
         let timeout = shell
@@ -1109,11 +1173,20 @@ fn event_loop(app: &mut App, shell: &mut WaylandShell, wake: c_int) {
 
         unsafe {
             if readable {
-                (wl.wl_display_read_events)(display);
+                if (wl.wl_display_read_events)(display) < 0 {
+                    lost = true;
+                }
             } else {
                 (wl.wl_display_cancel_read)(display);
             }
-            (wl.wl_display_dispatch_pending)(display);
+            if !lost && (wl.wl_display_dispatch_pending)(display) < 0 {
+                lost = true;
+            }
+        }
+        if lost {
+            log::warn("The Wayland connection was lost — closing.");
+            shell.quit = true;
+            return;
         }
 
         if drain(wake) {
@@ -1975,6 +2048,10 @@ pub(super) fn take_xdg_configure() -> Option<u32> {
 /// row to row, and waiting for the release between two of those costs nothing
 /// anybody can see.
 pub(super) struct SingleBuffer {
+    /// Kept so the pool and the buffer can be given back: one of these is made
+    /// per context menu, and the compositor holds its own mapping of the memfd
+    /// for as long as the pool lives.
+    wl: Rc<Wl>,
     fd: c_int,
     memory: *mut u8,
     length: usize,
@@ -2066,6 +2143,7 @@ impl SingleBuffer {
             unsafe { Cairo::for_pixels(libs, mapped as *mut u8, (width, height), stride, look) }?;
         canvas.set_scale(scale as f64);
         Some(Self {
+            wl: wl.clone(),
             fd,
             memory: mapped as *mut u8,
             length,
@@ -2089,9 +2167,30 @@ impl Drop for SingleBuffer {
         // The canvas points into the mapping, so it goes first.
         self.canvas = None;
         unsafe {
+            if !self.buffer.is_null() {
+                (self.wl.wl_proxy_marshal_flags)(
+                    self.buffer,
+                    wl_buffer::DESTROY,
+                    std::ptr::null(),
+                    self.wl.version(self.buffer),
+                    0,
+                );
+                (self.wl.wl_proxy_destroy)(self.buffer);
+                self.buffer = std::ptr::null_mut();
+            }
+            if !self.pool.is_null() {
+                (self.wl.wl_proxy_marshal_flags)(
+                    self.pool,
+                    wl_shm_pool::DESTROY,
+                    std::ptr::null(),
+                    self.wl.version(self.pool),
+                    0,
+                );
+                (self.wl.wl_proxy_destroy)(self.pool);
+                self.pool = std::ptr::null_mut();
+            }
             libc::munmap(self.memory as *mut c_void, self.length);
             libc::close(self.fd);
         }
-        let _ = (self.pool, self.buffer);
     }
 }
