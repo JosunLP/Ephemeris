@@ -82,9 +82,16 @@ pub fn set(on: bool) {
     };
 
     if !on {
+        // Before the file goes: `launchctl unload` parses the plist at the
+        // path it is given, so unregistering after the deletion would fail on
+        // a path that is no longer there — silently, because launchctl's own
+        // output is discarded.
+        if path.exists() {
+            unregister(&path);
+        }
         // Missing is the desired state, so "not found" is a success.
         match std::fs::remove_file(&path) {
-            Ok(()) => unregister(&path),
+            Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => log::warn(&format!("Could not remove {}: {e}", path.display())),
         }

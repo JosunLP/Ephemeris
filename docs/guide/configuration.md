@@ -246,6 +246,22 @@ falls back to the system one, and the log names it.
 | `client_secret.json` | Your Google OAuth client |
 | `microsoft_client.json` | Your Azure application id |
 | `caldav-<id>.json` | CalDAV server and user name |
-| `token-<id>.bin` | Encrypted credentials, bound to your Windows account |
+| `token-<id>.bin` | Your credentials, or a reference to them — see below |
 | `cache.json` | Last synced day, so something shows at start-up |
 | `tpmplaner.log` | Log, rotated at 256 KB |
+
+What `token-<id>.bin` holds depends on where it was written, because the three
+systems do not offer the same thing:
+
+- **Windows**: the credentials themselves, encrypted and bound to your Windows
+  account. Another account cannot read them, and neither can the same file
+  copied to another machine.
+- **macOS and Linux**: only a reference. The credentials go into the Keychain
+  or the Secret Service under your login, so the file is worth nothing on its
+  own — and a locked keyring means the widget asks you to unlock it rather than
+  writing a copy beside it.
+- **A session with no keyring at all** — a container, a headless machine —
+  leaves the widget nowhere to store a secret, so the token bytes go into the
+  file **unencrypted**. It says so in the log once, and the file's own
+  permissions are then all that protects it. Prefer connecting an account from
+  a normal desktop session.

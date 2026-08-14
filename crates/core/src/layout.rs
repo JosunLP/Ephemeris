@@ -26,7 +26,7 @@
 //! right, which is what keeps one set of arithmetic serving both directions.
 
 use crate::i18n::Locale;
-use crate::model::{Agenda, Event, Task};
+use crate::model::{Agenda, Event, Task, TaskKey};
 use crate::theme::Metrics;
 use chrono::{DateTime, Local, NaiveDate, Timelike};
 
@@ -101,11 +101,15 @@ impl Rect {
 pub enum Hit {
     Refresh,
     /// The circle before a task -> tick it off.
-    TaskCheck(usize),
+    ///
+    /// The task rows name a task rather than a row number: the list they were
+    /// painted from can be gone by the time the click lands. See
+    /// [`crate::model::TaskKey`].
+    TaskCheck(TaskKey),
     /// A task row -> open it in the web interface.
-    Task(usize),
+    Task(TaskKey),
     /// The row of a task whose completion can still be undone.
-    Undo(usize),
+    Undo(TaskKey),
     /// An event row -> open it in the calendar.
     Event(usize),
     /// The highlighted event in the header area.

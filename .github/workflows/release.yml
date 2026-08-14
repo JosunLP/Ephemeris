@@ -121,8 +121,13 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
       - name: Verify tag matches Cargo.toml
+        # Through the environment rather than into the script text: a
+        # `workflow_dispatch` input expanded inline would be shell code in this
+        # job. It is only ever compared against a version string.
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          tag="${{ inputs.tag || github.ref_name }}"
+          tag="$TAG"
           tag="${tag#v}"
           version=$(cargo metadata --no-deps --format-version 1 |
             python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "tpmplaner"))')

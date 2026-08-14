@@ -75,8 +75,8 @@ fn run_level(shell: &mut X11Shell, rows: &[Row]) -> Option<Picked> {
 
     // A pointer grab is what makes a click beside the menu close it: without
     // one that click goes to whatever is underneath and the menu stays.
-    unsafe {
-        (libs.XGrabPointer)(
+    let grab = unsafe {
+        let status = (libs.XGrabPointer)(
             shell.display,
             window,
             0,
@@ -88,6 +88,21 @@ fn run_level(shell: &mut X11Shell, rows: &[Row]) -> Option<Picked> {
             CurrentTime,
         );
         (libs.XFlush)(shell.display);
+        status
+    };
+    // Refused when another client already holds the pointer — a dragging
+    // window manager, another menu. Opening anyway would be worse than not
+    // opening: the click beside the menu never reaches this window, so the
+    // dismissal below never runs and `XNextEvent` blocks on a window the user
+    // has no way to get rid of.
+    if grab != GrabSuccess {
+        log::warn("Another program holds the pointer — the menu was not opened");
+        drop(canvas);
+        unsafe {
+            (libs.XDestroyWindow)(shell.display, window);
+            (libs.XFlush)(shell.display);
+        }
+        return None;
     }
 
     let mut hover: Option<usize> = None;

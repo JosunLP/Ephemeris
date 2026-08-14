@@ -641,11 +641,34 @@ fn as_bytes<T>(values: &[T]) -> &[u8] {
     }
 }
 
-/// Xlib's default handler exits the process. Ignoring is right here: every
-/// request this program makes is either advisory (a hint the window manager
-/// may not know) or already checked, and an error on one of them is not a
-/// reason to take the widget down.
-extern "C" fn ignore_x_error(_display: *mut Display, _event: *mut c_void) -> c_int {
+/// The lock states a key grab has to be repeated for.
+///
+/// X11 counts Caps Lock and Num Lock as part of the modifier state, so a grab
+/// for the plain combination stops matching the moment either is on. The same
+/// four go into the ungrab, which is why they are named here rather than
+/// written out twice.
+const LOCK_VARIANTS: [c_uint; 4] = [0, LockMask, Mod2Mask, LockMask | Mod2Mask];
+
+/// The code of the last error Xlib reported, for the one caller that needs it.
+///
+/// A global because Xlib's error handler is global: it is a plain C function
+/// pointer with nowhere to hang a context. [`X11Shell::grab_hotkey`] clears
+/// this, makes its request, waits for the server and reads it back.
+static LAST_X_ERROR: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// Xlib's default handler exits the process. Not taking the widget down is
+/// right here: every request this program makes is either advisory (a hint the
+/// window manager may not know) or already checked, and an error on one of them
+/// is not a reason to vanish.
+///
+/// The code is kept rather than dropped, because some requests report failure
+/// only this way — `XGrabKey` has no return value, and a combination another
+/// program holds arrives here as `BadAccess` some time after the call.
+extern "C" fn ignore_x_error(_display: *mut Display, event: *mut c_void) -> c_int {
+    if !event.is_null() {
+        let code = unsafe { (*(event as *const XErrorEvent)).error_code };
+        LAST_X_ERROR.store(code, std::sync::atomic::Ordering::Relaxed);
+    }
     0
 }
 
@@ -721,7 +744,15 @@ impl X11Shell {
                 mask |= Mod4Mask;
             }
 
-            for extra in [0, LockMask, Mod2Mask, LockMask | Mod2Mask] {
+            // `XGrabKey` returns nothing worth reading: the request is
+            // asynchronous, and a combination another program already holds
+            // comes back afterwards as a `BadAccess` error to the handler. So
+            // each variant is waited for on its own and the handler's record
+            // read back — otherwise the widget would announce a shortcut it
+            // does not have, and the fallback candidates would never be tried.
+            let mut granted: Vec<c_uint> = Vec::new();
+            for extra in LOCK_VARIANTS {
+                LAST_X_ERROR.store(0, std::sync::atomic::Ordering::Relaxed);
                 unsafe {
                     (self.libs.XGrabKey)(
                         self.display,
@@ -732,9 +763,27 @@ impl X11Shell {
                         GrabModeAsync,
                         GrabModeAsync,
                     );
+                    (self.libs.XSync)(self.display, 0);
                 }
+                if LAST_X_ERROR.swap(0, std::sync::atomic::Ordering::Relaxed) == BadAccess {
+                    break;
+                }
+                granted.push(mask | extra);
             }
-            unsafe { (self.libs.XSync)(self.display, 0) };
+            // All of them or none: a shortcut registered for the plain
+            // modifiers but not for Caps Lock is one that stops working halfway
+            // through a session, and the variants that did succeed would keep
+            // the next candidate from being granted.
+            if granted.len() < LOCK_VARIANTS.len() {
+                for m in granted {
+                    unsafe { (self.libs.XUngrabKey)(self.display, keycode as c_int, m, self.root) };
+                }
+                unsafe { (self.libs.XSync)(self.display, 0) };
+                log::warn(&format!(
+                    "peek_hotkey '{spec}' is held by another program on this display"
+                ));
+                continue;
+            }
             self.hotkey = Some((keycode, mask));
             if spec == configured.trim() {
                 log::info(&format!("Peek hotkey: {spec}"));
@@ -1006,7 +1055,7 @@ impl Shell for X11Shell {
     fn quit(&mut self) {
         self.quit = true;
         if let Some((keycode, mask)) = self.hotkey.take() {
-            for extra in [0, LockMask, Mod2Mask, LockMask | Mod2Mask] {
+            for extra in LOCK_VARIANTS {
                 unsafe {
                     (self.libs.XUngrabKey)(self.display, keycode as c_int, mask | extra, self.root)
                 };

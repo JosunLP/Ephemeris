@@ -172,11 +172,23 @@ pub fn take_control_requests() -> bool {
         let mut peek = false;
         while let Ok((stream, _)) = listener.accept() {
             stream.set_nonblocking(false).ok();
-            let mut message = String::new();
+            // Bounded in time as well as in bytes. This runs inside the event
+            // loop, the address is reachable by any process in the namespace,
+            // and a peer that connects and then says nothing — a `--peek` copy
+            // killed between `connect` and `write_all` is enough — would
+            // otherwise stop the widget drawing for as long as it held the
+            // connection open. A word down a local socket does not take 50 ms.
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_millis(50)))
+                .ok();
+            // Bytes rather than a `String`: on a timeout `read_to_string`
+            // discards what it had, and a message split across two writes
+            // would then be lost rather than merely late.
+            let mut message = Vec::new();
             // Bounded: whatever connected is not necessarily this program,
             // and an unbounded read from a stranger is a way to be held open.
-            let _ = stream.take(64).read_to_string(&mut message);
-            if message.trim() == PEEK {
+            let _ = stream.take(64).read_to_end(&mut message);
+            if String::from_utf8_lossy(&message).trim() == PEEK {
                 peek = true;
             }
         }

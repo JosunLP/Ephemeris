@@ -37,6 +37,7 @@ use tpmplaner_core::i18n::Locale;
 use tpmplaner_core::layout::{Panel, hit_point};
 use tpmplaner_core::log;
 use tpmplaner_core::menu;
+use tpmplaner_core::model::TaskKey;
 use tpmplaner_core::sync::{self, Command, Shared, Status, SyncHandle};
 use tpmplaner_core::theme::{Appearance, Metrics, Palette, SystemVisuals, ThemePref};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
@@ -775,7 +776,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 // --- Undo -------------------------------------------------------------------
 
 /// Records the tick provisionally and starts the grace period.
-fn begin_pending(st: &mut State, idx: usize) {
+fn begin_pending(st: &mut State, key: TaskKey) {
     // Only one task waits at a time: a second completion confirms the first
     // immediately.
     commit_pending(st);
@@ -783,7 +784,11 @@ fn begin_pending(st: &mut State, idx: usize) {
     let seconds = sync::lock(&st.shared).config.undo_seconds;
     let ids = {
         let mut guard = sync::lock(&st.shared);
-        guard.agenda.tasks.get_mut(idx).map(|t| {
+        // By task, not by row: a sync between the frame that drew the row and
+        // this click may have moved it, and nothing must be ticked off except
+        // what was clicked. Gone from the list is a click on a row that is no
+        // longer there, and does nothing.
+        guard.agenda.task_mut(key).map(|t| {
             // Acknowledge visually at once, so the click feels immediate.
             t.completing = true;
             (t.account_id.clone(), t.tasklist_id.clone(), t.id.clone())
@@ -1393,7 +1398,7 @@ fn on_left_down(st: &mut State, lparam: LPARAM) {
         // Sits on top of the row for as long as the grace period runs.
         Some(Hit::Undo(_)) => cancel_pending(st),
 
-        Some(Hit::TaskCheck(idx)) => begin_pending(st, idx),
+        Some(Hit::TaskCheck(key)) => begin_pending(st, key),
 
         Some(Hit::Event(idx)) | Some(Hit::Hero(idx)) => open_event(st, idx, false),
         Some(Hit::Tomorrow(idx)) => open_event(st, idx, true),

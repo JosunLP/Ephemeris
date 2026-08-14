@@ -29,6 +29,7 @@ use tpmplaner_core::config::{self, Config};
 use tpmplaner_core::i18n::Locale;
 use tpmplaner_core::layout::{Frame, Hit, HitRegion, Panel, UndoView, hit_point};
 use tpmplaner_core::menu;
+use tpmplaner_core::model::TaskKey;
 use tpmplaner_core::sync::{self, Command, Shared, Status, SyncHandle};
 use tpmplaner_core::theme::{Appearance, Metrics, Palette, SystemVisuals, ThemePref};
 use tpmplaner_core::{demo, log};
@@ -495,7 +496,7 @@ impl App {
             // Sits on top of the row for as long as the grace period runs.
             Some(Hit::Undo(_)) => self.cancel_pending(shell),
 
-            Some(Hit::TaskCheck(idx)) => self.begin_pending(shell, idx),
+            Some(Hit::TaskCheck(key)) => self.begin_pending(shell, key),
 
             Some(Hit::Event(idx)) | Some(Hit::Hero(idx)) => self.open_event(idx, false),
             Some(Hit::Tomorrow(idx)) => self.open_event(idx, true),
@@ -751,7 +752,7 @@ impl App {
     // --- Undo ---------------------------------------------------------------
 
     /// Records the tick provisionally and starts the grace period.
-    fn begin_pending(&mut self, shell: &mut dyn Shell, idx: usize) {
+    fn begin_pending(&mut self, shell: &mut dyn Shell, key: TaskKey) {
         // Only one task waits at a time: a second completion confirms the
         // first immediately.
         self.commit_pending(shell);
@@ -759,7 +760,11 @@ impl App {
         let seconds = self.config().undo_seconds;
         let ids = {
             let mut guard = sync::lock(&self.shared);
-            guard.agenda.tasks.get_mut(idx).map(|t| {
+            // By task, not by row: a sync between the frame that drew the row
+            // and this click may have moved it, and nothing must be ticked off
+            // except what was clicked. Gone from the list is a click on a row
+            // that is no longer there, and does nothing.
+            guard.agenda.task_mut(key).map(|t| {
                 // Acknowledge visually at once, so the click feels immediate.
                 t.completing = true;
                 (t.account_id.clone(), t.tasklist_id.clone(), t.id.clone())

@@ -992,10 +992,14 @@ impl<C: Canvas> Painter<'_, C> {
             // While the tick is pending: fade out at once, so the click feels
             // immediate instead of waiting on the API.
             let dim = row_state.dim();
-            let check_hovered = frame.hover == Some(Hit::TaskCheck(idx));
+            // The row is identified by the task on it, not by its position:
+            // the click that follows this frame is tested against a list that
+            // may already have been replaced.
+            let key = task.key();
+            let check_hovered = frame.hover == Some(Hit::TaskCheck(key));
             let row_hovered = check_hovered
-                || frame.hover == Some(Hit::Task(idx))
-                || frame.hover == Some(Hit::Undo(idx));
+                || frame.hover == Some(Hit::Task(key))
+                || frame.hover == Some(Hit::Undo(key));
 
             if row_hovered {
                 self.fill_round(row, 5.0, p.hover, p.hover_alpha * frame.anim.hover.value);
@@ -1082,16 +1086,16 @@ impl<C: Canvas> Painter<'_, C> {
             // from anywhere on it.
             hits.push(HitRegion {
                 rect: row,
-                hit: Hit::Task(idx),
+                hit: Hit::Task(key),
             });
             hits.push(HitRegion {
                 rect: geo.check_hit,
-                hit: Hit::TaskCheck(idx),
+                hit: Hit::TaskCheck(key),
             });
             if undo.is_some() {
                 hits.push(HitRegion {
                     rect: row,
-                    hit: Hit::Undo(idx),
+                    hit: Hit::Undo(key),
                 });
             }
 

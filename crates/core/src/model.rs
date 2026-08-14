@@ -103,9 +103,36 @@ pub struct Task {
     pub completing: bool,
 }
 
+/// Which task a hit region belongs to.
+///
+/// A position in [`Agenda::tasks`] would be smaller still and is what this
+/// replaces, because a position is not an identity: the rectangles a click is
+/// tested against were measured while painting, and the sync thread can put a
+/// different list in place before the click arrives. `get(idx)` then answers
+/// perfectly happily — with another task, which the widget would tick off on
+/// the user's behalf.
+///
+/// A hash rather than the id itself so that [`crate::layout::Hit`] stays
+/// `Copy`: every frame compares one against what is hovered, and a `String` in
+/// there would put an allocation and a lifetime through all of that for no
+/// gain. The account and the list are hashed alongside the task id because
+/// each provider hands out ids in its own namespace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TaskKey(u64);
+
 impl Task {
     pub fn is_overdue(&self, today: NaiveDate) -> bool {
         matches!(self.due, Some(d) if d < today)
+    }
+
+    /// This task's identity, for a hit region to carry.
+    pub fn key(&self) -> TaskKey {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.account_id.hash(&mut hasher);
+        self.tasklist_id.hash(&mut hasher);
+        self.id.hash(&mut hasher);
+        TaskKey(hasher.finish())
     }
 }
 
@@ -140,6 +167,13 @@ impl Agenda {
             return false;
         };
         self.tasks.iter().any(|t| t.completing && t.id == id)
+    }
+
+    /// The task a hit region names, or `None` when it is no longer on the list
+    /// — a sync that arrived between the frame and the click, or the same task
+    /// ticked off twice.
+    pub fn task_mut(&mut self, key: TaskKey) -> Option<&mut Task> {
+        self.tasks.iter_mut().find(|t| t.key() == key)
     }
 
     /// Takes a completed task off the display, together with the calendar
@@ -695,6 +729,46 @@ mod tests {
         assert!(agenda.tasks.is_empty());
         assert!(agenda.events.is_empty(), "the schedule row stayed behind");
         assert!(agenda.tomorrow.is_empty());
+    }
+
+    /// The click that ticks a task off is tested against rectangles measured
+    /// while painting, and the sync thread can put a different list in place in
+    /// between. A row number would then name whatever moved into that place —
+    /// so the hit region carries the task instead.
+    #[test]
+    fn a_ticked_task_is_found_by_its_own_identity_and_not_by_its_position() {
+        // The list the row was painted from: the second task was clicked.
+        let painted = [
+            task_on("google", "Renew the passport"),
+            task_on("google", "Book the flight"),
+        ];
+        let key = painted[1].key();
+
+        // What the sync thread put there instead: the first task gone, so the
+        // clicked row is now at index 0.
+        let mut agenda = Agenda {
+            tasks: vec![task_on("google", "Book the flight")],
+            ..Default::default()
+        };
+        assert_eq!(
+            agenda.task_mut(key).map(|t| t.title.clone()).as_deref(),
+            Some("Book the flight")
+        );
+
+        // The same title on another account is a different task.
+        let mut elsewhere = Agenda {
+            tasks: vec![task_on("private", "Book the flight")],
+            ..Default::default()
+        };
+        assert!(elsewhere.task_mut(key).is_none());
+
+        // And a task that has left the list at all is nobody, rather than
+        // whoever took its place.
+        let mut gone = Agenda {
+            tasks: vec![task_on("google", "Renew the passport")],
+            ..Default::default()
+        };
+        assert!(gone.task_mut(key).is_none());
     }
 
     #[test]

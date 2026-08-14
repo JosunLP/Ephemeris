@@ -195,6 +195,25 @@ pub struct XSelectionEvent {
     pub time: Time,
 }
 
+/// What the error handler is handed. The field order is `Xlib.h`'s, and the
+/// resource id comes *before* the serial — the opposite way round from the
+/// event structures above.
+///
+/// Needed because the requests that matter here have no return value to check:
+/// `XGrabKey` reports a combination another client already holds as a
+/// `BadAccess` error, delivered to the handler after the fact.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct XErrorEvent {
+    pub type_: c_int,
+    pub display: *mut Display,
+    pub resourceid: c_ulong,
+    pub serial: c_ulong,
+    pub error_code: u8,
+    pub request_code: u8,
+    pub minor_code: u8,
+}
+
 // --- Xlib constants ---------------------------------------------------------
 
 pub const KeyPress: c_int = 2;
@@ -229,6 +248,12 @@ pub const XA_CARDINAL: Atom = 6;
 pub const XA_STRING: Atom = 31;
 
 pub const GrabModeAsync: c_int = 1;
+/// What `XGrabPointer` returns when the grab was actually granted. Every other
+/// value means another client holds one.
+pub const GrabSuccess: c_int = 0;
+/// The error code `XGrabKey` produces for a combination another client has
+/// already grabbed.
+pub const BadAccess: u8 = 10;
 pub const CurrentTime: Time = 0;
 pub const NoSymbol: KeySym = 0;
 
