@@ -145,8 +145,21 @@ $base = if ($Version -eq 'latest') {
     "https://github.com/$Repo/releases/download/$Version"
 }
 $sumFile = Join-Path ([IO.Path]::GetTempPath()) "smoke-$arch.sha256"
-Invoke-WebRequest -Uri "$base/ephemeris-$arch.exe.sha256" -OutFile $sumFile -UseBasicParsing
-$published = ((Get-Content $sumFile -Raw) -split '\s+')[0].ToLower()
+# Both names, for the same reason the installer tries both: a release published
+# before the rename carries its assets under the former one, and this check has
+# to look up whichever the release actually has -- otherwise it reports a
+# checksum mismatch for a release that is perfectly intact, which is the exact
+# failure this whole job exists to catch.
+$published = $null
+foreach ($candidate in @("ephemeris-$arch.exe", "tpmplaner-$arch.exe")) {
+    try {
+        Invoke-WebRequest -Uri "$base/$candidate.sha256" -OutFile $sumFile -UseBasicParsing
+        $published = ((Get-Content $sumFile -Raw) -split '\s+')[0].ToLower()
+        break
+    } catch {
+        Write-Host "    no $candidate.sha256 in this release"
+    }
+}
 
 Check 'the published checksum is a sha256' { $published -match '^[0-9a-f]{64}$' }
 Check 'the installed binary matches the published checksum' {

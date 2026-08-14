@@ -185,17 +185,17 @@ fn set_autostart_in(subkey: &str, value: &str, enabled: bool) {
         if opened.is_err() {
             return;
         }
-        let name = wide(RUN_VALUE);
+        let name = wide(value);
 
         if enabled {
             // Quote the path, or Windows splits it at spaces such as in
             // "C:\Program Files\...".
             let exe = std::env::current_exe().unwrap_or_default();
             let quoted = format!("\"{}\"", exe.to_string_lossy());
-            let value = wide(&quoted);
+            let data = wide(&quoted);
             let bytes = std::slice::from_raw_parts(
-                value.as_ptr() as *const u8,
-                value.len() * std::mem::size_of::<u16>(),
+                data.as_ptr() as *const u8,
+                data.len() * std::mem::size_of::<u16>(),
             );
             let _ = RegSetValueExW(key, PCWSTR(name.as_ptr()), None, REG_SZ, Some(bytes));
         } else {

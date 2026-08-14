@@ -50,7 +50,24 @@ New-Item -ItemType Directory -Force -Path $temp | Out-Null
 try {
     $downloaded = Join-Path $temp $assetName
     Write-Step "Downloading $assetName"
-    Invoke-WebRequest -Uri "$base/$assetName" -OutFile $downloaded -UseBasicParsing
+    try {
+        Invoke-WebRequest -Uri "$base/$assetName" -OutFile $downloaded -UseBasicParsing
+    } catch {
+        # A release published before the rename carries its assets under the
+        # former name, and `latest` is one of those until the first release
+        # under the new one. Without this the documented one-liner fails for
+        # everyone in between.
+        #
+        # Only on a 404. A network failure that fell through here would report
+        # a name the user never asked for and hide what actually went wrong.
+        $status = 0
+        if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
+        if ($status -ne 404) { throw }
+        $assetName = "tpmplaner-$arch.exe"
+        $downloaded = Join-Path $temp $assetName
+        Write-Note "This release still publishes $assetName"
+        Invoke-WebRequest -Uri "$base/$assetName" -OutFile $downloaded -UseBasicParsing
+    }
 
     # Verify before anything is written to the install directory. A truncated
     # download or a swapped asset must never reach disk as an executable.
