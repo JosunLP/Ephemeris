@@ -9,12 +9,23 @@ run the script, and commit both.
 ```bash
 pip install cairosvg
 python3 scripts/render-logo.py
-python3 scripts/render-logo.py --check   # verify, don't write
+python3 scripts/render-logo.py --check    # re-render and compare, don't write
+python3 scripts/render-logo.py --verify   # no renderer needed; what CI runs
 ```
 
 The outputs are committed because the documentation workflow runs
 `vitepress build` and nothing else — there is no CairoSVG on that runner, and a
 reader cloning the repository should see the README with its logo.
+
+Committed output can go stale, so CI checks it — with `--verify` rather than
+`--check`. `--check` re-renders, and PNG bytes depend on the CairoSVG version
+and the Cairo underneath it, so a runner that installs either fresh would
+eventually fail on an upgrade instead of on a stale file. `--verify` needs
+nothing but the standard library and asks only what cannot go flaky: that
+`docs/public/logo.svg` is byte-identical to the drawn file, and that every
+generated file is present and structurally what the script writes — each PNG's
+`IHDR`, the `.ico` directory, the `.icns` chunk lengths. Use `--check` yourself
+after editing the SVG; it is the one that compares the actual pixels.
 
 | File                             | Size    | Used by                        |
 | -------------------------------- | ------- | ------------------------------ |

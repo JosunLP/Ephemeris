@@ -53,6 +53,21 @@ jobs:
       - name: Flatpak crate sources are in step with Cargo.lock
         run: python3 packaging/linux/cargo-sources.py --check
 
+      # The same argument for the logo. `assets/logo.svg` is the only drawn
+      # file and everything else is generated from it by
+      # `scripts/render-logo.py` — including `assets/logo.ico`, which `build.rs`
+      # embeds into the Windows executable, so a stale one is a build input
+      # that disagrees with its source rather than only a wrong picture.
+      #
+      # `--verify` rather than `--check`: the latter re-renders and compares
+      # bytes, and those depend on the CairoSVG and Cairo versions the runner
+      # happens to have, so it would eventually fail on an upgrade rather than
+      # on a stale file. This needs no renderer and checks what cannot go
+      # flaky — that the copied SVG is byte-identical, and that every generated
+      # container is present and structurally what the script writes.
+      - name: Generated logo files are in step with the SVG
+        run: python3 scripts/render-logo.py --verify
+
   # The portable core must build and pass its tests on the non-Windows
   # systems too. This is what keeps the boundary honest: a stray platform call
   # in `ephemeris-core` fails here rather than on somebody's laptop months

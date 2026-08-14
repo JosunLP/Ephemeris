@@ -44,6 +44,19 @@ All notable changes to this project are documented here. The format follows
   SVG under the application ID, which is the piece `appstreamcli compose`
   needed before it would export anything at all.
 
+- **Continuous integration now checks the generated logo files against the
+  SVG.** They are committed — the documentation runner has no CairoSVG — so
+  editing the drawing and forgetting to re-run the script used to ship a stale
+  icon, and for `assets/logo.ico` that is a build input rather than a picture:
+  `build.rs` embeds it into the Windows executable. The new
+  `scripts/render-logo.py --verify` needs no renderer, which is the point:
+  re-rendering would compare PNG bytes that depend on the CairoSVG and Cairo
+  versions the runner happens to have, and a check that goes red on an
+  unrelated upgrade is one people learn to ignore. It asks instead what cannot
+  go flaky — that `docs/public/logo.svg` is byte-identical to the drawn file,
+  and that every generated file is present and structurally what the script
+  writes, down to the `.ico` directory and the `.icns` chunk lengths.
+
 ### Fixed
 
 - **Ticking a task off no longer takes another account's task with it.** The

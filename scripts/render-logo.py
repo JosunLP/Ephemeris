@@ -15,8 +15,18 @@ and nothing else, and neither it nor a reader cloning the repository has
 CairoSVG. `--check` re-renders into memory and compares, which is what you want
 after editing the SVG to confirm the committed PNGs are still in step.
 
-Needs CairoSVG (`pip install cairosvg`), which is not a dependency of anything
-else here; the script is run by hand when the logo changes.
+`--verify` is the half of that a machine can be held to. It needs no renderer,
+so continuous integration can run it on any runner, and it cannot go red for a
+reason other than a stale file: it compares `docs/public/logo.svg` against the
+drawn file byte for byte, and then reads the generated containers rather than
+re-making them — every PNG's `IHDR`, the `.ico` directory, the `.icns` chunk
+lengths. What it deliberately does not do is re-render, because PNG bytes
+depend on the CairoSVG and Cairo versions underneath and a check that fails on
+an unrelated upgrade is one people learn to ignore.
+
+Needs CairoSVG (`pip install cairosvg`) to write or to `--check`, which is not
+a dependency of anything else here; the script is run by hand when the logo
+changes. `--verify` needs nothing but the standard library.
 """
 
 from __future__ import annotations
@@ -27,6 +37,7 @@ import pathlib
 import shutil
 import struct
 import sys
+import xml.etree.ElementTree as ElementTree
 import zlib
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -250,12 +261,199 @@ def icns(rendered: dict[int, bytes]) -> bytes:
     return b"icns" + struct.pack(">I", len(body) + 8) + body
 
 
+def png_header(blob: bytes, what: str) -> tuple[int, int]:
+    """`(width, height)` of a PNG, checking it is the shape this script writes.
+
+    Raises `ValueError` naming `what` for anything else, which is the point:
+    a truncated or half-written file is the failure this is looking for, and
+    `IHDR` is in the first twenty-five bytes of a correct one.
+    """
+    if blob[:8] != b"\x89PNG\r\n\x1a\n" or blob[12:16] != b"IHDR":
+        raise ValueError(f"{what} is not a PNG")
+    if len(blob) < 33:
+        raise ValueError(f"{what} stops inside its header")
+    width = int.from_bytes(blob[16:20], "big")
+    height = int.from_bytes(blob[20:24], "big")
+    depth, colour, interlace = blob[24], blob[25], blob[28]
+    if (depth, colour, interlace) != (8, 6, 0):
+        raise ValueError(
+            f"{what} is not 8-bit RGBA, non-interlaced — depth {depth},"
+            f" colour type {colour}, interlace {interlace}"
+        )
+    if blob[-12:-4] != b"\x00\x00\x00\x00IEND":
+        raise ValueError(f"{what} has no IEND — the file is truncated")
+    return width, height
+
+
+def check_ico(blob: bytes) -> list[str]:
+    """Everything about `logo.ico` that can be judged without rendering.
+
+    The directory is what Windows reads first, and `build.rs` links this file
+    into the executable, so a container that disagrees with `ICO_SIZES` is a
+    build input that no longer matches its source.
+    """
+    problems = []
+    reserved, kind, count = struct.unpack("<HHH", blob[:6])
+    if (reserved, kind) != (0, 1):
+        problems.append(f"logo.ico: header says reserved {reserved}, type {kind}")
+    if count != len(ICO_SIZES):
+        problems.append(
+            f"logo.ico: holds {count} images, the script writes {len(ICO_SIZES)}"
+        )
+        return problems
+
+    for index, size in enumerate(ICO_SIZES):
+        at = 6 + 16 * index
+        width, height, colours, pad, planes, bpp, length, offset = struct.unpack(
+            "<BBBBHHII", blob[at:at + 16]
+        )
+        name = f"logo.ico[{size}]"
+        # 256 is written as zero: the field is one byte wide.
+        if (width, height) != (size % 256, size % 256):
+            problems.append(f"{name}: directory says {width}x{height}")
+        if (colours, pad, planes, bpp) != (0, 0, 1, 32):
+            problems.append(f"{name}: expected a 32-bit entry with no palette")
+        if offset + length > len(blob):
+            problems.append(f"{name}: runs past the end of the file")
+            continue
+
+        image = blob[offset:offset + length]
+        if size == 256:
+            try:
+                if png_header(image, name) != (size, size):
+                    problems.append(f"{name}: the PNG is not {size}x{size}")
+            except ValueError as error:
+                problems.append(str(error))
+        else:
+            (header, dib_width, dib_height, dib_planes, dib_bpp) = struct.unpack(
+                "<Iii HH", image[:16]
+            )
+            expected = 40 + size * size * 4 + (size + 31) // 32 * 4 * size
+            if header != 40:
+                problems.append(f"{name}: header is {header} bytes, not 40")
+            if (dib_width, dib_height) != (size, size * 2):
+                problems.append(
+                    f"{name}: DIB is {dib_width}x{dib_height},"
+                    f" expected {size}x{size * 2}"
+                )
+            if (dib_planes, dib_bpp) != (1, 32):
+                problems.append(f"{name}: DIB is not 32-bit")
+            if length != expected:
+                problems.append(
+                    f"{name}: image is {length} bytes, expected {expected}"
+                )
+    return problems
+
+
+def check_icns(blob: bytes) -> list[str]:
+    """The same for `logo.icns`: the magic, the total length, every chunk.
+
+    The length in the header covers the whole file, and each chunk carries its
+    own — so a container that was written half way through, or one the script
+    no longer produces, shows up here as a length that does not add up.
+    """
+    problems = []
+    if blob[:4] != b"icns":
+        return ["logo.icns: does not start with `icns`"]
+    total = struct.unpack(">I", blob[4:8])[0]
+    if total != len(blob):
+        problems.append(
+            f"logo.icns: header claims {total} bytes, the file is {len(blob)}"
+        )
+
+    at, seen = 8, []
+    while at + 8 <= len(blob):
+        code = blob[at:at + 4]
+        length = struct.unpack(">I", blob[at + 4:at + 8])[0]
+        if length < 8 or at + length > len(blob):
+            problems.append(f"logo.icns: chunk {code!r} has length {length}")
+            break
+        seen.append((code, blob[at + 8:at + length]))
+        at += length
+
+    if [code for code, _ in seen] != [code for code, _ in ICNS_TYPES]:
+        problems.append(
+            "logo.icns: the chunk types are not the ones the script writes"
+        )
+        return problems
+
+    for (code, size), (_, payload) in zip(ICNS_TYPES, seen):
+        name = f"logo.icns[{code.decode()}]"
+        try:
+            if png_header(payload, name) != (size, size):
+                problems.append(f"{name}: the PNG is not {size}x{size}")
+        except ValueError as error:
+            problems.append(str(error))
+    return problems
+
+
+def verify() -> list[str]:
+    """What can be said about the generated files without a renderer.
+
+    Three things, and between them they catch the mistake that actually
+    happens — the SVG was edited and the script was not run. The copy is
+    byte-for-byte, so a changed drawing is caught outright. The rest is
+    structural: a file that is missing, truncated, or the wrong size for what
+    it claims to be.
+    """
+    problems: list[str] = []
+
+    if not SOURCE.exists():
+        return [f"{SOURCE.relative_to(ROOT)} is missing"]
+    source = SOURCE.read_bytes()
+    try:
+        root = ElementTree.fromstring(source)
+    except ElementTree.ParseError as error:
+        problems.append(f"assets/logo.svg does not parse: {error}")
+    else:
+        if not root.tag.endswith("svg"):
+            problems.append(f"assets/logo.svg has root element <{root.tag}>")
+        elif root.get("viewBox") is None:
+            problems.append("assets/logo.svg has no viewBox, so it cannot scale")
+
+    for destination in COPIES:
+        where = destination.relative_to(ROOT)
+        if not destination.exists():
+            problems.append(f"{where} is missing")
+        elif destination.read_bytes() != source:
+            problems.append(f"{where} is not a copy of assets/logo.svg")
+
+    for size, destination in RENDERS:
+        where = destination.relative_to(ROOT)
+        if not destination.exists():
+            problems.append(f"{where} is missing")
+            continue
+        try:
+            if png_header(destination.read_bytes(), str(where)) != (size, size):
+                problems.append(f"{where} is not {size}x{size}")
+        except ValueError as error:
+            problems.append(str(error))
+
+    for name, check in (("logo.ico", check_ico), ("logo.icns", check_icns)):
+        path = ROOT / "assets" / name
+        if not path.exists():
+            problems.append(f"assets/{name} is missing")
+            continue
+        blob = path.read_bytes()
+        if len(blob) < 8:
+            problems.append(f"assets/{name} is empty")
+            continue
+        problems += check(blob)
+
+    return problems
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--check",
         action="store_true",
         help="verify the committed files match the SVG instead of writing them",
+    )
+    parser.add_argument(
+        "--verify",
+        action="store_true",
+        help="check the generated files structurally, without a renderer",
     )
     parser.add_argument(
         "--squircle",
@@ -266,6 +464,18 @@ def main() -> int:
 
     if args.squircle:
         print(squircle())
+        return 0
+
+    if args.verify:
+        problems = verify()
+        if problems:
+            print("generated from assets/logo.svg, and wrong:", file=sys.stderr)
+            for problem in problems:
+                print(f"  {problem}", file=sys.stderr)
+            print("run: python3 scripts/render-logo.py", file=sys.stderr)
+            return 1
+        count = len(COPIES) + len(RENDERS) + 2
+        print(f"{count} generated files, all consistent with assets/logo.svg")
         return 0
 
     try:

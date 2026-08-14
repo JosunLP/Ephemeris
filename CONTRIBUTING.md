@@ -65,6 +65,14 @@ cargo test --workspace
 
 All three run in CI and all three have to pass.
 
+Two generated files are checked there as well, and both need nothing but
+Python, so run them too if you touched what they are generated from:
+
+```bash
+python3 packaging/linux/cargo-sources.py --check   # after Cargo.lock changes
+python3 scripts/render-logo.py --verify            # after assets/logo.svg changes
+```
+
 ## What good looks like here
 
 - **Comments explain why, not what.** The code already says what it does. The
