@@ -371,7 +371,7 @@ impl App {
         let guard = sync::lock(&shared);
 
         let undo = self.pending.as_ref().map(|p| UndoView {
-            task_id: p.task_id.as_str(),
+            key: TaskKey::new(&p.account_id, &p.tasklist_id, &p.task_id),
             remaining: 1.0
                 - (p.started.elapsed().as_secs_f32() / p.window.as_secs_f32()).clamp(0.0, 1.0),
         });
@@ -812,7 +812,8 @@ impl App {
         let Some(p) = self.pending.take() else { return };
         shell.set_undo_timer(false);
         let mut guard = sync::lock(&self.shared);
-        if let Some(t) = guard.agenda.tasks.iter_mut().find(|t| t.id == p.task_id) {
+        let key = TaskKey::new(&p.account_id, &p.tasklist_id, &p.task_id);
+        if let Some(t) = guard.agenda.task_mut(key) {
             t.completing = false;
         }
         drop(guard);

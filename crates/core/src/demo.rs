@@ -31,6 +31,7 @@ pub fn agenda() -> Agenda {
         calendar_id: "demo".into(),
         account_id: "demo".into(),
         task_id: None,
+        task_list_id: None,
     };
 
     // Tomorrow at a fixed time, not relative to now: otherwise the entries
@@ -54,6 +55,7 @@ pub fn agenda() -> Agenda {
             calendar_id: "demo".into(),
             account_id: "demo".into(),
             task_id: None,
+            task_list_id: None,
         };
 
     let task = |title: &str, due_offset: i64, depth: u8| Task {
@@ -84,6 +86,7 @@ pub fn agenda() -> Agenda {
                 calendar_id: "demo-company".into(),
                 account_id: "demo".into(),
                 task_id: None,
+                task_list_id: None,
             },
             // Already over, so drawn dimmed.
             event("Daily Standup", -260, -245, 0x4C_8DF6, None),

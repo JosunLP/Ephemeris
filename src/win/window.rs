@@ -841,7 +841,8 @@ fn cancel_pending(st: &mut State) {
     let Some(p) = st.pending.take() else { return };
     stop_undo_timer(st);
     let mut guard = sync::lock(&st.shared);
-    if let Some(t) = guard.agenda.tasks.iter_mut().find(|t| t.id == p.task_id) {
+    let key = TaskKey::new(&p.account_id, &p.tasklist_id, &p.task_id);
+    if let Some(t) = guard.agenda.task_mut(key) {
         t.completing = false;
     }
     drop(guard);
@@ -1657,7 +1658,7 @@ fn redraw(st: &mut State) {
     let guard = sync::lock(&shared);
 
     let undo = st.pending.as_ref().map(|p| UndoView {
-        task_id: p.task_id.as_str(),
+        key: TaskKey::new(&p.account_id, &p.tasklist_id, &p.task_id),
         remaining: 1.0
             - (p.started.elapsed().as_secs_f32() / p.window.as_secs_f32()).clamp(0.0, 1.0),
     });

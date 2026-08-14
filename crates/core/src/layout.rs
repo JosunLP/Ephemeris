@@ -154,8 +154,10 @@ pub fn hit_point(panel: &Panel, rtl: bool, x: f32, y: f32) -> (f32, f32) {
 
 /// A task that has been ticked off but not yet sent, and can still be undone.
 #[derive(Debug, Clone, Copy)]
-pub struct UndoView<'a> {
-    pub task_id: &'a str,
+pub struct UndoView {
+    /// Which task is waiting, as an identity: a bare id names a different
+    /// task in another account or list, and the row would take its pill.
+    pub key: TaskKey,
     /// 1.0 right after the click, 0.0 when it is sent.
     pub remaining: f32,
 }
@@ -175,7 +177,7 @@ pub struct Frame<'a> {
     pub sync_minutes: u32,
     pub opacity: f32,
     pub show_past_events: bool,
-    pub undo: Option<UndoView<'a>>,
+    pub undo: Option<UndoView>,
     /// A syntax error in `config.json`; outranks the sync status line.
     pub config_error: Option<&'a str>,
     /// Version of a newer release, if the daily check found one.
@@ -811,6 +813,7 @@ mod tests {
             calendar_id: "w".into(),
             account_id: String::new(),
             task_id: None,
+            task_list_id: None,
         }
     }
 
@@ -973,6 +976,7 @@ mod tests {
 
         // Ticked off a moment ago: the card must not still announce it.
         agenda.events[0].task_id = Some("t1".into());
+        agenda.events[0].task_list_id = Some("l".into());
         let mut t = task("t1", None);
         t.completing = true;
         agenda.tasks = vec![t];
@@ -1020,6 +1024,7 @@ mod tests {
     fn a_ticked_off_time_block_fades_like_its_task_and_shows_no_countdown() {
         let mut ev = timed("focus", (14, 0), (15, 0));
         ev.task_id = Some("t1".into());
+        ev.task_list_id = Some("l".into());
         let mut t = task("t1", None);
         t.completing = true;
         let agenda = Agenda {

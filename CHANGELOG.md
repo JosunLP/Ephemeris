@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Ticking a task off no longer takes another account's task with it.** The
+  completion removed the task — and the calendar entries that were its time
+  block — by task id alone, and an id only means something to the provider that
+  issued it: the same string is a different task in another account, and in
+  another list of the same account. Everything on the way now works from the
+  full identity of account, list and task that a click already carries, the
+  calendar entry records which list its task came from, and the undo pill finds
+  its row the same way.
+
 ## [1.1.0] - 2026-08-14
 
 ### Added

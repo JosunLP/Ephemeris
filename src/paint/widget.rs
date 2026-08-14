@@ -988,7 +988,7 @@ impl<C: Canvas> Painter<'_, C> {
             let task = &tasks[idx];
             let row = layout::row_rect(panel, y, m.task_row_h);
             let is_overdue = row_state.overdue;
-            let undo = frame.undo.filter(|u| u.task_id == task.id);
+            let undo = frame.undo.filter(|u| u.key == task.key());
             // While the tick is pending: fade out at once, so the click feels
             // immediate instead of waiting on the API.
             let dim = row_state.dim();

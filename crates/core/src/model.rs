@@ -47,9 +47,28 @@ pub struct Event {
     /// hands it over.
     #[serde(default)]
     pub task_id: Option<String>,
+    /// The list [`Event::task_id`] was read from. Set with it and empty
+    /// without it.
+    ///
+    /// Together with [`Event::account_id`] it completes the [`TaskKey`] the
+    /// link stands for: an id on its own belongs to whichever provider issued
+    /// it, and a second list may be using the same one. A cache written before
+    /// this existed loads without it, and the entry simply goes unmatched
+    /// until the next sync links it again.
+    #[serde(default)]
+    pub task_list_id: Option<String>,
 }
 
 impl Event {
+    /// The task this entry is the time block of, as an identity rather than a
+    /// bare id. `None` when nothing was linked, and when a cache written
+    /// before [`Event::task_list_id`] existed left half a link behind.
+    pub fn task_key(&self) -> Option<TaskKey> {
+        let id = self.task_id.as_deref()?;
+        let list = self.task_list_id.as_deref()?;
+        Some(TaskKey::new(&self.account_id, list, id))
+    }
+
     /// Is the event running right now?
     pub fn is_now(&self, now: DateTime<Local>) -> bool {
         match (self.start, self.end) {
@@ -120,6 +139,21 @@ pub struct Task {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TaskKey(u64);
 
+impl TaskKey {
+    /// The identity of the task these three ids name.
+    ///
+    /// For the completion path, which carries the ids around rather than the
+    /// task itself and has to arrive at the same key [`Task::key`] produces.
+    pub fn new(account_id: &str, tasklist_id: &str, task_id: &str) -> TaskKey {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        account_id.hash(&mut hasher);
+        tasklist_id.hash(&mut hasher);
+        task_id.hash(&mut hasher);
+        TaskKey(hasher.finish())
+    }
+}
+
 impl Task {
     pub fn is_overdue(&self, today: NaiveDate) -> bool {
         matches!(self.due, Some(d) if d < today)
@@ -127,12 +161,7 @@ impl Task {
 
     /// This task's identity, for a hit region to carry.
     pub fn key(&self) -> TaskKey {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        self.account_id.hash(&mut hasher);
-        self.tasklist_id.hash(&mut hasher);
-        self.id.hash(&mut hasher);
-        TaskKey(hasher.finish())
+        TaskKey::new(&self.account_id, &self.tasklist_id, &self.id)
     }
 }
 
@@ -163,10 +192,10 @@ impl Agenda {
     /// has to say the same thing the entry under *Tasks* does. Afterwards
     /// [`Agenda::complete_task`] takes both rows away together.
     pub fn is_completing(&self, event: &Event) -> bool {
-        let Some(id) = event.task_id.as_deref() else {
+        let Some(key) = event.task_key() else {
             return false;
         };
-        self.tasks.iter().any(|t| t.completing && t.id == id)
+        self.tasks.iter().any(|t| t.completing && t.key() == key)
     }
 
     /// The task a hit region names, or `None` when it is no longer on the list
@@ -180,13 +209,18 @@ impl Agenda {
     /// entries that were its time block.
     ///
     /// Returns those entries, which is what the sync thread needs to keep the
-    /// provider from putting them straight back on the next run. They carry the
-    /// account they came from; the completion command's own account id is empty
-    /// in a single-account setup, and matching an entry against that would
-    /// never fire.
-    pub fn complete_task(&mut self, task_id: &str) -> Vec<Event> {
-        self.tasks.retain(|t| t.id != task_id);
-        let is_block = |e: &Event| e.task_id.as_deref() == Some(task_id);
+    /// provider from putting them straight back on the next run.
+    ///
+    /// Taken by [`TaskKey`], because a bare task id is not an identity: each
+    /// provider hands out ids in its own namespace, and a second account — or
+    /// a second list within one account — may well be using the same one for a
+    /// different task. Removing by id alone takes those away too.
+    ///
+    /// The entries are matched on the same key, which is what
+    /// [`link_task_time_blocks`] left on them.
+    pub fn complete_task(&mut self, key: TaskKey) -> Vec<Event> {
+        self.tasks.retain(|t| t.key() != key);
+        let is_block = |e: &Event| e.task_key() == Some(key);
         let removed: Vec<Event> = self
             .events
             .iter()
@@ -228,7 +262,7 @@ pub fn link_task_time_blocks(events: &mut [Event], tasks: &[Task]) {
     use std::collections::HashMap;
 
     // `None` marks a title that more than one task claims.
-    let mut by_title: HashMap<(&str, String), Option<&str>> = HashMap::new();
+    let mut by_title: HashMap<(&str, String), Option<&Task>> = HashMap::new();
     for task in tasks {
         let key = title_key(&task.title);
         if key.is_empty() {
@@ -237,15 +271,17 @@ pub fn link_task_time_blocks(events: &mut [Event], tasks: &[Task]) {
         by_title
             .entry((task.account_id.as_str(), key))
             .and_modify(|slot| *slot = None)
-            .or_insert(Some(task.id.as_str()));
+            .or_insert(Some(task));
     }
 
     for event in events {
         let key = title_key(&event.title);
-        event.task_id = match by_title.get(&(event.account_id.as_str(), key)) {
-            Some(Some(id)) => Some((*id).to_string()),
+        let matched = match by_title.get(&(event.account_id.as_str(), key)) {
+            Some(Some(task)) => Some(*task),
             _ => None,
         };
+        event.task_id = matched.map(|t| t.id.clone());
+        event.task_list_id = matched.map(|t| t.tasklist_id.clone());
     }
 }
 
@@ -563,6 +599,7 @@ mod tests {
             calendar_id: "k".into(),
             account_id: String::new(),
             task_id: None,
+            task_list_id: None,
         }
     }
 
@@ -691,8 +728,10 @@ mod tests {
             timed("Renamed since", (9, 0), (10, 0)),
         )];
         events[0].task_id = Some("gone".into());
+        events[0].task_list_id = Some("l".into());
         link_task_time_blocks(&mut events, &[]);
         assert_eq!(events[0].task_id, None);
+        assert_eq!(events[0].task_list_id, None, "half a link is still a link");
     }
 
     #[test]
@@ -716,7 +755,7 @@ mod tests {
         assert!(agenda.is_completing(&agenda.events[0]));
 
         // And once the server confirms, both rows go.
-        let removed = agenda.complete_task("Tax return");
+        let removed = agenda.complete_task(agenda.tasks[0].key());
         let taken: Vec<(&str, &str)> = removed
             .iter()
             .map(|e| (e.account_id.as_str(), e.title.as_str()))
@@ -779,7 +818,60 @@ mod tests {
             ..Default::default()
         };
         link_task_time_blocks(&mut agenda.events, &agenda.tasks.clone());
-        assert!(agenda.complete_task("Order printer paper").is_empty());
+        assert!(agenda.complete_task(agenda.tasks[0].key()).is_empty());
         assert_eq!(agenda.events.len(), 1);
+    }
+
+    /// Ids are namespaced by whoever handed them out, so the same string turns
+    /// up again on another account and in another list of the same account.
+    /// Ticking one of them off must take that one away and nothing else.
+    #[test]
+    fn a_shared_task_id_elsewhere_survives_the_completion() {
+        let same_id = |account: &str, list: &str, title: &str| {
+            let mut t = task_on(account, title);
+            t.id = "1".into();
+            t.tasklist_id = list.into();
+            t
+        };
+        let ticked = same_id("work", "inbox", "Send the invoice");
+        let other_account = same_id("private", "inbox", "Water the plants");
+        let other_list = same_id("work", "someday", "Learn to sail");
+
+        let mut agenda = Agenda {
+            events: vec![
+                on_account("work", timed("Send the invoice", (9, 0), (10, 0))),
+                on_account("private", timed("Water the plants", (9, 0), (10, 0))),
+                on_account("work", timed("Learn to sail", (11, 0), (12, 0))),
+            ],
+            tomorrow: vec![on_account(
+                "private",
+                timed("Water the plants", (8, 0), (8, 30)),
+            )],
+            tasks: vec![ticked.clone(), other_account, other_list],
+            ..Default::default()
+        };
+        // The links the sync run leaves behind: every entry points at "1",
+        // which is three different tasks.
+        link_task_time_blocks(&mut agenda.events, &agenda.tasks.clone());
+        link_task_time_blocks(&mut agenda.tomorrow, &agenda.tasks.clone());
+        assert!(agenda.events.iter().all(|e| e.task_id.is_some()));
+
+        // The optimistic hide belongs to the ticked task alone as well.
+        agenda.tasks[0].completing = true;
+        assert!(agenda.is_completing(&agenda.events[0]));
+        assert!(
+            !agenda.is_completing(&agenda.events[1]),
+            "the other account's entry is not the one being ticked off"
+        );
+
+        let removed = agenda.complete_task(ticked.key());
+        let taken: Vec<&str> = removed.iter().map(|e| e.title.as_str()).collect();
+        assert_eq!(taken, vec!["Send the invoice"]);
+
+        let left: Vec<&str> = agenda.tasks.iter().map(|t| t.title.as_str()).collect();
+        assert_eq!(left, vec!["Water the plants", "Learn to sail"]);
+        let schedule: Vec<&str> = agenda.events.iter().map(|e| e.title.as_str()).collect();
+        assert_eq!(schedule, vec!["Water the plants", "Learn to sail"]);
+        assert_eq!(agenda.tomorrow.len(), 1, "tomorrow belongs to another task");
     }
 }

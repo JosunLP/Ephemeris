@@ -344,6 +344,7 @@ fn worker(shared: Arc<Mutex<Shared>>, waker: Arc<dyn Waker>, rx: Receiver<Comman
                         None => Err(Error::Other(format!("Unknown account '{account_id}'"))),
                     };
 
+                    let key = crate::model::TaskKey::new(&account_id, &tasklist_id, &task_id);
                     let mut guard = lock(&shared);
                     match outcome {
                         Ok(()) => {
@@ -351,7 +352,7 @@ fn worker(shared: Arc<Mutex<Shared>>, waker: Arc<dyn Waker>, rx: Receiver<Comman
                             // it. The task's time block goes with it — to the
                             // user that was one item, however many APIs it
                             // came out of.
-                            let blocks = guard.agenda.complete_task(&task_id);
+                            let blocks = guard.agenda.complete_task(key);
                             let today = guard
                                 .agenda
                                 .day
@@ -364,9 +365,8 @@ fn worker(shared: Arc<Mutex<Shared>>, waker: Arc<dyn Waker>, rx: Receiver<Comman
                         }
                         Err(e) => {
                             log::error(&format!("Completing task failed: {e}"));
-                            // Undo the optimistic hide.
-                            if let Some(t) = guard.agenda.tasks.iter_mut().find(|t| t.id == task_id)
-                            {
+                            // Undo the optimistic hide, on that task alone.
+                            if let Some(t) = guard.agenda.task_mut(key) {
                                 t.completing = false;
                             }
                             guard.status = status_for(&e);
@@ -759,6 +759,7 @@ mod tests {
             calendar_id: "k".into(),
             account_id: account.into(),
             task_id: None,
+            task_list_id: None,
         }
     }
 

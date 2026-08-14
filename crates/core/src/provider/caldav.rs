@@ -330,6 +330,7 @@ impl CalendarProvider for CalDavProvider {
                     calendar_id: calendar.id.clone(),
                     account_id: String::new(),
                     task_id: None,
+                    task_list_id: None,
                 });
             }
         }

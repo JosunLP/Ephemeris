@@ -173,6 +173,7 @@ pub fn list_events(
                 // of every account meet the tasks of every account.
                 account_id: String::new(),
                 task_id: None,
+                task_list_id: None,
             });
         }
 

@@ -442,6 +442,7 @@ mod tests {
                     calendar_id: format!("{}-cal", self.id),
                     account_id: String::new(),
                     task_id: None,
+                    task_list_id: None,
                 })
                 .collect())
         }
