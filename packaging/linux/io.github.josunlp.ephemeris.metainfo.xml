@@ -72,7 +72,7 @@
   </recommends>
 
   <releases>
-    <release version="1.1.0" date="2026-08-14">
+    <release version="1.1.0" date="2026-08-17">
       <description>
         <p>The first release that runs on this desktop at all.</p>
         <ul>
