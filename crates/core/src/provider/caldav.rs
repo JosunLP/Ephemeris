@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! CalDAV (RFC 4791) — iCloud, Nextcloud, Fastmail, Synology, mailbox.org and
 //! anything else speaking the standard.
 //!
@@ -327,6 +327,10 @@ impl CalendarProvider for CalDavProvider {
                     join_url: vevent.url,
                     color: calendar.color,
                     calendar_name: calendar.name.clone(),
+                    calendar_id: calendar.id.clone(),
+                    account_id: String::new(),
+                    task_id: None,
+                    task_list_id: None,
                 });
             }
         }

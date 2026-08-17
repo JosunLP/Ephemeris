@@ -1,0 +1,74 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Copyright (C) 2026 Ephemeris contributors -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="title">
+  <title id="title">Ephemeris</title>
+  <defs>
+    <!-- A superellipse, |x|^5 + |y|^5 = 1, rather than a rounded rectangle:
+         the curvature runs into the straight edge instead of meeting it at a
+         corner, which is the shape every platform's own icons are cut to.
+         `scripts/render-logo.py` regenerates it; see its squircle option. -->
+    <path id="tile-shape" d="M255.5 128.0C255.5 137.6 255.6 146.9 255.5 156.5C255.4 166.0 255.7 175.6 255.0 185.2C254.4 194.7 254.5 204.8 251.8 213.8C249.1 222.7 245.3 232.7 239.0 239.0C232.7 245.3 222.8 249.1 213.9 251.7C205.0 254.4 194.9 254.4 185.4 255.0C176.0 255.6 166.8 255.4 157.2 255.5C147.6 255.6 137.6 255.5 128.0 255.5C118.4 255.5 109.1 255.6 99.5 255.5C90.0 255.4 80.4 255.7 70.8 255.0C61.3 254.4 51.2 254.5 42.2 251.8C33.3 249.1 23.3 245.3 17.0 239.0C10.7 232.7 6.9 222.8 4.3 213.9C1.6 205.0 1.6 194.9 1.0 185.4C0.4 176.0 0.6 166.8 0.5 157.2C0.4 147.6 0.5 137.6 0.5 128.0C0.5 118.4 0.4 109.1 0.5 99.5C0.6 90.0 0.3 80.4 1.0 70.8C1.6 61.3 1.5 51.2 4.2 42.2C6.9 33.3 10.7 23.3 17.0 17.0C23.3 10.7 33.2 6.9 42.1 4.3C51.0 1.6 61.1 1.6 70.6 1.0C80.0 0.4 89.2 0.6 98.8 0.5C108.4 0.4 118.4 0.5 128.0 0.5C137.6 0.5 146.9 0.4 156.5 0.5C166.0 0.6 175.6 0.3 185.2 1.0C194.7 1.6 204.8 1.5 213.8 4.2C222.7 6.9 232.7 10.7 239.0 17.0C245.3 23.3 249.1 33.2 251.7 42.1C254.4 51.0 254.4 61.1 255.0 70.6C255.6 80.0 255.4 89.2 255.5 98.8C255.6 108.4 255.5 118.4 255.5 128.0Z"/>
+
+    <!-- The one arc that is not white, kept in one place so the glow behind it
+         cannot drift out of line with it. -->
+    <path id="now-arc" d="M152.09 58.03A74 74 0 0 1 197.97 103.91"/>
+
+    <linearGradient id="tile" x1=".1" y1="0" x2=".9" y2="1">
+      <stop offset="0" stop-color="#7CC4FF"/>
+      <stop offset=".48" stop-color="#4B87F5"/>
+      <stop offset="1" stop-color="#3A46D8"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity=".20"/>
+      <stop offset=".55" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <!-- Both ring gradients are in user space, not per-shape: the light has to
+         come from the same direction for every arc, wherever it sits. -->
+    <linearGradient id="rest" x1="0" y1="52" x2="0" y2="204" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity=".74"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity=".48"/>
+    </linearGradient>
+    <linearGradient id="due" x1="0" y1="52" x2="0" y2="128" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFDC8C"/>
+      <stop offset="1" stop-color="#FFA92B"/>
+    </linearGradient>
+    <!-- The track is cut into the panel rather than laid on it, so it catches
+         the light along its lower edge and not its upper one. -->
+    <linearGradient id="track" x1="0" y1="54" x2="0" y2="202" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#08214A" stop-opacity=".26"/>
+      <stop offset="1" stop-color="#08214A" stop-opacity=".16"/>
+    </linearGradient>
+    <!-- A rim light along the top edge, which is what stops the panel looking
+         like a flat sticker. -->
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity=".45"/>
+      <stop offset=".4" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- The widget itself: one rounded panel, no window frame. The light falls
+       straight down, so nothing but the hand is off-centre. -->
+  <use href="#tile-shape" fill="url(#tile)"/>
+  <use href="#tile-shape" fill="url(#sheen)"/>
+  <use href="#tile-shape" fill="none" stroke="url(#rim)" stroke-width="2"/>
+
+  <!-- The day rail, which is the thing the widget is recognised by, closed
+       into the ring a day actually is. Four segments of 72 degrees and four
+       gaps of 18, the gaps centred on twelve, three, six and nine o'clock:
+       each arc is the one before it turned a quarter, so the ring reads the
+       same whichever way up you hold it. -->
+  <g fill="none" stroke-width="26" stroke-linecap="round">
+    <circle cx="128" cy="128" r="74" stroke="url(#track)"/>
+    <path d="M197.97 152.09A74 74 0 0 1 152.09 197.97" stroke="url(#rest)"/>
+    <path d="M103.91 197.97A74 74 0 0 1 58.03 152.09" stroke="url(#rest)"/>
+    <path d="M58.03 103.91A74 74 0 0 1 103.91 58.03" stroke="url(#rest)"/>
+    <use href="#now-arc" stroke="url(#due)"/>
+  </g>
+
+  <!-- Now, on the diagonal, pointing at the middle of that segment. It tapers
+       the way a hand does, from the pin outwards. -->
+  <path d="M133.79 134.89L163.74 99.30A5 5 0 0 0 156.70 92.26L121.11 122.21A9 9 0 0 0 133.79 134.89Z"
+        fill="#FFFFFF"/>
+  <circle cx="128" cy="128" r="11" fill="#FFFFFF"/>
+  <circle cx="128" cy="128" r="4" fill="#4B87F5"/>
+</svg>

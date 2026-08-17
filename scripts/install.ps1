@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright (C) 2026 TPMPlaner contributors
+# Copyright (C) 2026 Ephemeris contributors
 #
 # One-line install:
-#   irm https://github.com/JosunLP/TPMPlaner/releases/latest/download/install.ps1 | iex
+#   irm https://github.com/JosunLP/Ephemeris/releases/latest/download/install.ps1 | iex
 #
 # Installs into the user profile. No administrator rights are needed and
 # nothing outside %LOCALAPPDATA% is touched, so uninstalling is a matter of
@@ -19,9 +19,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$repo = 'JosunLP/TPMPlaner'
-$installDir = Join-Path $env:LOCALAPPDATA 'Programs\TPMPlaner'
-$exePath = Join-Path $installDir 'tpmplaner.exe'
+$repo = 'JosunLP/Ephemeris'
+$installDir = Join-Path $env:LOCALAPPDATA 'Programs\Ephemeris'
+$exePath = Join-Path $installDir 'ephemeris.exe'
 
 function Write-Step($text) { Write-Host "==> $text" -ForegroundColor Cyan }
 function Write-Note($text) { Write-Host "    $text" -ForegroundColor DarkGray }
@@ -36,7 +36,7 @@ $arch = switch ($env:PROCESSOR_ARCHITECTURE) {
     'ARM64' { 'aarch64-pc-windows-msvc' }
     default { 'x86_64-pc-windows-msvc' }
 }
-$assetName = "tpmplaner-$arch.exe"
+$assetName = "ephemeris-$arch.exe"
 
 Write-Step "Resolving release ($Version, $arch)"
 $base = if ($Version -eq 'latest') {
@@ -45,12 +45,39 @@ $base = if ($Version -eq 'latest') {
     "https://github.com/$repo/releases/download/$Version"
 }
 
-$temp = Join-Path ([IO.Path]::GetTempPath()) ("tpmplaner-" + [Guid]::NewGuid())
+$temp = Join-Path ([IO.Path]::GetTempPath()) ("ephemeris-" + [Guid]::NewGuid())
 New-Item -ItemType Directory -Force -Path $temp | Out-Null
 try {
     $downloaded = Join-Path $temp $assetName
     Write-Step "Downloading $assetName"
-    Invoke-WebRequest -Uri "$base/$assetName" -OutFile $downloaded -UseBasicParsing
+    try {
+        Invoke-WebRequest -Uri "$base/$assetName" -OutFile $downloaded -UseBasicParsing
+    } catch {
+        # A release published before the rename carries its assets under the
+        # former name, and `latest` is one of those until the first release
+        # under the new one. Without this the documented one-liner fails for
+        # everyone in between.
+        #
+        # Any failure is retried under the former name rather than a 404 in
+        # particular, because a missing asset does not reliably look like one:
+        # `releases/latest/download/...` redirects to the release before it
+        # answers, and Windows PowerShell 5.1 reports the 404 that follows as
+        # a closed connection with no response object to read a status from.
+        # The first error is kept and rethrown if the former name is not there
+        # either, so a machine with no network still gets told what actually
+        # went wrong, about the file it actually asked for.
+        $firstError = $_
+        $legacyName = "tpmplaner-$arch.exe"
+        $legacyPath = Join-Path $temp $legacyName
+        try {
+            Invoke-WebRequest -Uri "$base/$legacyName" -OutFile $legacyPath -UseBasicParsing
+        } catch {
+            throw $firstError
+        }
+        Write-Note "This release still publishes $legacyName"
+        $assetName = $legacyName
+        $downloaded = $legacyPath
+    }
 
     # Verify before anything is written to the install directory. A truncated
     # download or a swapped asset must never reach disk as an executable.
@@ -78,12 +105,35 @@ try {
     }
     Write-Note "sha256 $actual"
 
-    # A running instance holds a lock on its own file.
-    $running = Get-Process tpmplaner -ErrorAction SilentlyContinue
+    # A running instance holds a lock on its own file. Both names: an install
+    # over a version from before the rename has the old one running.
+    $running = Get-Process ephemeris, tpmplaner -ErrorAction SilentlyContinue
     if ($running) {
         Write-Step 'Stopping the running widget'
         $running | Stop-Process -Force
         Start-Sleep -Milliseconds 800
+    }
+
+    # The widget was called TPMPlaner until the rename, and an install under
+    # the new name would otherwise leave the whole of the old one behind: a
+    # second entry in the app list, a start menu shortcut pointing at a binary
+    # about to be deleted, and an autostart value that would fail at every
+    # login in silence.
+    #
+    # Settings and credentials in %APPDATA%\TPMPlaner are deliberately left
+    # alone. The widget moves those itself at its first start, which is also
+    # what carries an installation that did not come from this script.
+    $legacyDir = Join-Path $env:LOCALAPPDATA 'Programs\TPMPlaner'
+    $legacyLink = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\TPMPlaner.lnk'
+    $legacyUninstall = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\TPMPlaner'
+    if ((Test-Path $legacyDir) -or (Test-Path $legacyLink) -or (Test-Path $legacyUninstall)) {
+        Write-Step 'Removing the installation under the former name'
+        Remove-Item $legacyDir -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item $legacyLink -Force -ErrorAction SilentlyContinue
+        Remove-Item $legacyUninstall -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' `
+            -Name 'TPMPlaner' -ErrorAction SilentlyContinue
+        Write-Note "Settings kept: $env:APPDATA\TPMPlaner (moved at first start)"
     }
 
     Write-Step "Installing to $installDir"
@@ -92,7 +142,7 @@ try {
 
     # Start menu entry, so the widget can be found again after closing it.
     $startMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
-    $shortcut = Join-Path $startMenu 'TPMPlaner.lnk'
+    $shortcut = Join-Path $startMenu 'Ephemeris.lnk'
     $shell = New-Object -ComObject WScript.Shell
     $link = $shell.CreateShortcut($shortcut)
     $link.TargetPath = $exePath
@@ -114,18 +164,18 @@ try {
         $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
         if (-not (Test-Path $runKey)) { New-Item -Path $runKey -Force | Out-Null }
         New-ItemProperty -Path $runKey `
-            -Name 'TPMPlaner' -Value "`"$exePath`"" -PropertyType String -Force | Out-Null
+            -Name 'Ephemeris' -Value "`"$exePath`"" -PropertyType String -Force | Out-Null
     }
 
     # Record what was installed so the uninstaller and Windows' own app list
     # know about it.
-    $uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\TPMPlaner'
+    $uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Ephemeris'
     New-Item -Path $uninstallKey -Force | Out-Null
     $props = @{
-        DisplayName     = 'TPMPlaner'
+        DisplayName     = 'Ephemeris'
         DisplayIcon     = $exePath
         InstallLocation = $installDir
-        Publisher       = 'TPMPlaner contributors'
+        Publisher       = 'Ephemeris contributors'
         NoModify        = 1
         NoRepair        = 1
         UninstallString = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$installDir\uninstall.ps1`""
@@ -143,20 +193,20 @@ try {
     }
 
     if (-not $NoStart) {
-        Write-Step 'Starting TPMPlaner'
+        Write-Step 'Starting Ephemeris'
         Start-Process $exePath
     }
 
     Write-Host ''
-    Write-Host 'TPMPlaner installed.' -ForegroundColor Green
+    Write-Host 'Ephemeris installed.' -ForegroundColor Green
     Write-Note "Binary:   $exePath"
-    Write-Note "Settings: $env:APPDATA\TPMPlaner"
+    Write-Note "Settings: $env:APPDATA\Ephemeris"
     # Kept to plain ASCII on purpose. This file has no BOM, so Windows
     # PowerShell 5.1 reads it as the system ANSI codepage and `irm | iex`
     # decodes it from an HTTP response that carries no charset -- either way a
     # UTF-8 dash reaches the user as mojibake. The CI check keeps it that way.
     Write-Note 'Next step: connect a calendar - right-click the widget.'
-    Write-Note 'Docs: https://josunlp.github.io/TPMPlaner/'
+    Write-Note 'Docs: https://josunlp.github.io/Ephemeris/'
 } finally {
     Remove-Item $temp -Recurse -Force -ErrorAction SilentlyContinue
 }

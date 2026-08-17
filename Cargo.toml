@@ -2,17 +2,17 @@
 members = ["crates/core"]
 
 [package]
-name = "tpmplaner"
-version = "1.0.2"
+name = "ephemeris"
+version = "1.1.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
 description = "A desktop widget showing today's calendar events and due tasks"
-repository = "https://github.com/JosunLP/TPMPlaner"
+repository = "https://github.com/JosunLP/Ephemeris"
 readme = "README.md"
 rust-version = "1.90"
 
 [dependencies]
-tpmplaner-core = { path = "crates/core" }
+ephemeris-core = { path = "crates/core" }
 base64 = "0.23.1"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std", "serde"] }
 quick-xml = "0.41.0"
@@ -27,6 +27,31 @@ ureq = { version = "3.3.0", default-features = false, features = [
     "json",
     "win-system-proxy",
 ] }
+
+# Trimmed for a small binary and a low idle footprint.
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# The locale back end on Linux goes through the C library — `newlocale`,
+# `nl_langinfo`, `strftime` — and `struct tm`'s layout and the `nl_item`
+# constants differ between C libraries and architectures. `libc` has them right
+# for every target; writing them out by hand would be guessing at a structure
+# that `strftime` writes through.
+#
+# macOS is deliberately not in this list: it uses Core Foundation, which is a
+# plain C API declared inline, so it needs no crate at all.
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+libc = "0.2.189"
+
+# The Win32 bindings are only ever used by `src/win`, which is itself behind
+# `#[cfg(windows)]`. Declaring them per target keeps them off the macOS and
+# Linux builds entirely rather than compiling a crate that resolves to nothing
+# there.
+[target.'cfg(windows)'.dependencies]
 windows = { version = "0.62.2", features = [
     "Win32_Foundation",
     "Win32_Graphics_Direct2D",
@@ -58,10 +83,12 @@ windows = { version = "0.62.2", features = [
 ] }
 windows-numerics = "0.3.1"
 
-# Trimmed for a small binary and a low idle footprint.
-[profile.release]
-opt-level = "z"
-lto = "fat"
-codegen-units = 1
-panic = "abort"
-strip = true
+# The icon has to be in the executable's resource section for Windows to find
+# it, and putting it there means driving the resource compiler: writing an
+# `.rc`, locating the `rc.exe` of whichever Windows SDK is installed, and
+# handing the linker the object that comes out. `winresource` is that, and
+# nothing else. It builds no code into the binary — it runs, writes a file and
+# is gone — and `cfg(windows)` here is the machine doing the building, so a
+# Linux or macOS build never fetches it. See `build.rs`.
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1.31"

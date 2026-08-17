@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! A small file log.
 //!
 //! The status line in the widget has room for roughly 56 characters, nowhere
 //! near enough for a provider's error message. Without a log, diagnosing a
 //! problem in the field is guesswork, so the full text also goes to
-//! `tpmplaner.log` in the data directory, reachable from the context menu.
+//! `ephemeris.log` in the data directory, reachable from the context menu.
 //!
 //! Deliberately without a logging crate: a `Mutex<File>` and rotation by size
 //! are all this needs.
@@ -22,7 +22,7 @@ use std::sync::{Mutex, OnceLock};
 const MAX_BYTES: u64 = 256 * 1024;
 
 fn path() -> PathBuf {
-    config::data_dir().join("tpmplaner.log")
+    config::data_dir().join("ephemeris.log")
 }
 
 fn lock() -> &'static Mutex<()> {

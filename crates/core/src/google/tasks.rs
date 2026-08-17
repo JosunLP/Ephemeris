@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! Google Tasks API v1.
 //!
 //! Two quirks of this API the widget has to allow for:
@@ -143,7 +143,7 @@ pub fn list_tasks(
             id: t.id.clone(),
             tasklist_id: list.id.clone(),
             title: if t.title.trim().is_empty() {
-                "(ohne Titel)".into()
+                "(no title)".into()
             } else {
                 t.title.clone()
             },

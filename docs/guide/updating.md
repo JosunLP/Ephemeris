@@ -17,15 +17,27 @@ widget closes so the file can be replaced, and the installer starts it again.
 To update by hand at any time:
 
 ```powershell
-irm https://github.com/JosunLP/TPMPlaner/releases/latest/download/install.ps1 | iex
+irm https://github.com/JosunLP/Ephemeris/releases/latest/download/install.ps1 | iex
 ```
 
 Your settings and connected accounts are untouched by an update.
 
+### Updating from a version called TPMPlaner
+
+The widget was renamed to Ephemeris, and the update handles it: install as
+above, and the first start moves your settings, your autostart entry and your
+saved calendar credentials to the new location. Your accounts stay connected
+and there is nothing to do by hand.
+
+On Windows the installer also removes the old program directory, its start menu
+shortcut and its entry in the app list, so you are not left with two of
+everything. If anything could not be moved it is left exactly where it was, and
+the reason is in the log — *Open log* in the context menu.
+
 ## Removing
 
 ```powershell
-irm https://github.com/JosunLP/TPMPlaner/releases/latest/download/uninstall.ps1 | iex
+irm https://github.com/JosunLP/Ephemeris/releases/latest/download/uninstall.ps1 | iex
 ```
 
 This removes the program, the autostart entry, the Start menu shortcut and the
@@ -38,7 +50,7 @@ again. To remove those as well:
 & ([scriptblock]::Create((irm .../uninstall.ps1))) -Purge
 ```
 
-TPMPlaner also appears in *Settings → Apps → Installed apps*, where the normal
+Ephemeris also appears in *Settings → Apps → Installed apps*, where the normal
 uninstall button runs the same script.
 
 ## What is left behind
@@ -46,11 +58,11 @@ uninstall button runs the same script.
 Without `-Purge`, the data directory survives:
 
 ```text
-%APPDATA%\TPMPlaner\
+%APPDATA%\Ephemeris\
   config.json          settings
   token-*.bin          encrypted credentials
   cache.json           last synced day
-  tpmplaner.log        log
+  ephemeris.log        log
   client_secret.json   your Google OAuth client
   microsoft_client.json
   caldav-*.json

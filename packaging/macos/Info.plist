@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>Ephemeris</string>
+    <key>CFBundleDisplayName</key>
+    <string>Ephemeris</string>
+    <key>CFBundleIdentifier</key>
+    <string>io.github.josunlp.ephemeris</string>
+    <key>CFBundleExecutable</key>
+    <string>ephemeris</string>
+
+    <!-- `Resources/Ephemeris.icns`, which the release workflow copies there
+         from `assets`. The extension is left off because that is the form
+         Launch Services has always read this key in. With `LSUIElement` true
+         there is no Dock tile to put it on: this is the icon Finder shows for
+         the bundle itself, and the one the "About" panel of any application
+         that inspects it uses. -->
+    <key>CFBundleIconFile</key>
+    <string>Ephemeris</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>@VERSION@</string>
+    <key>CFBundleVersion</key>
+    <string>@VERSION@</string>
+
+    <!-- No Dock tile and no menu bar. The program sets the same thing in code
+         with `NSApplicationActivationPolicyAccessory`, because the tarball
+         ships a bare binary with no bundle to read this from — but a bundle
+         that did not say so would show a Dock tile for the moment before the
+         code ran. -->
+    <key>LSUIElement</key>
+    <true/>
+
+    <!-- macOS 11 is where `NSColor.controlAccentColor` and the appearance
+         names the widget reads became dependable. -->
+    <key>LSMinimumSystemVersion</key>
+    <string>11.0</string>
+
+    <key>NSHumanReadableCopyright</key>
+    <string>GNU General Public License, version 3 or later</string>
+    <key>NSSupportsAutomaticGraphicsSwitching</key>
+    <true/>
+</dict>
+</plist>

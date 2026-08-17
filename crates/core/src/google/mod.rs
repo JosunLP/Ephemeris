@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! The Google APIs: OAuth, Calendar and Tasks.
 //!
 //! Everything blocking, and only ever called from the sync thread. No async
@@ -34,19 +34,19 @@ impl std::error::Error for Error {}
 
 impl From<ureq::Error> for Error {
     fn from(e: ureq::Error) -> Self {
-        Error::Other(format!("Netzwerkfehler: {e}"))
+        Error::Other(format!("Network error: {e}"))
     }
 }
 
 impl From<serde_json::Error> for Error {
     fn from(e: serde_json::Error) -> Self {
-        Error::Other(format!("Unerwartete Antwort: {e}"))
+        Error::Other(format!("Unexpected response: {e}"))
     }
 }
 
 impl From<std::io::Error> for Error {
     fn from(e: std::io::Error) -> Self {
-        Error::Other(format!("E/A-Fehler: {e}"))
+        Error::Other(format!("I/O error: {e}"))
     }
 }
 
@@ -64,7 +64,7 @@ pub fn agent() -> &'static ureq::Agent {
             // code.
             .http_status_as_error(false)
             .timeout_global(Some(Duration::from_secs(30)))
-            .user_agent("TPMPlaner/0.1 (Windows Desktop Gadget)")
+            .user_agent("Ephemeris/0.1 (Windows Desktop Gadget)")
             .build()
             .new_agent()
     })
@@ -101,9 +101,9 @@ pub fn api_error(status: u16, body: &str) -> Error {
         .unwrap_or_else(|| body.chars().take(200).collect());
 
     match status {
-        401 => Error::NeedsLogin(format!("Anmeldung abgelaufen: {detail}")),
+        401 => Error::NeedsLogin(format!("Sign-in expired: {detail}")),
         403 if detail.contains("has not been used") || detail.contains("is disabled") => {
-            Error::NeedsSetup(format!("API nicht aktiviert: {detail}"))
+            Error::NeedsSetup(format!("API not enabled: {detail}"))
         }
         _ => Error::Other(format!("HTTP {status}: {detail}")),
     }

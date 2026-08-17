@@ -102,6 +102,15 @@ date at all, which means the *Tasks* section only shows it once you turn on
 A task created in the Google Tasks app has no time block, only a due date, so
 it appears under *Tasks* alone.
 
+**Ticking it off clears both rows.** Neither API says the two halves belong
+together — the calendar entry carries no task id and the task carries no event
+id — so the widget pairs them by their title within one account. That is a
+guess, and it is kept narrow: the whole title has to match, case and spacing
+aside, and if two tasks on screen share a title neither is paired, because there
+would be no telling which block belongs to which. An unpaired block stays where
+it is and behaves like any other entry; you can still tick the task off, the
+schedule row simply outlives it until the next sync.
+
 ## Times are hours off (Microsoft)
 
 Graph returns timestamps without a UTC offset, with the zone in a separate
@@ -127,7 +136,7 @@ animations turned off, the widget skips them entirely.
 
 ## Still stuck
 
-[Open an issue](https://github.com/JosunLP/TPMPlaner/issues/new/choose) with
+[Open an issue](https://github.com/JosunLP/Ephemeris/issues/new/choose) with
 the relevant log lines. Redact anything private — the log contains no event
 titles, but it does contain account labels and error messages from your
 provider.

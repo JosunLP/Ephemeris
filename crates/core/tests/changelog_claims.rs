@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! Tests for the claims made in the changelog that unit tests did not cover.
 //!
 //! Several features had only ever been reasoned about: the panic hook, log
@@ -11,10 +11,10 @@
 //! The host trait is what makes most of this testable: a temporary directory
 //! can be installed as the data directory without touching a real one.
 
+use ephemeris_core::host::{Host, PortableHost};
+use ephemeris_core::{i18n, log, update};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use tpmplaner_core::host::{Host, PortableHost};
-use tpmplaner_core::{i18n, log, update};
 
 /// A host that redirects the data directory into a scratch folder.
 struct TempHost(PathBuf);
@@ -30,7 +30,7 @@ impl Host for TempHost {
     fn unprotect(&self, cipher: &[u8], tag: &[u8]) -> Option<Vec<u8>> {
         PortableHost.unprotect(cipher, tag)
     }
-    fn random_bytes(&self, len: usize) -> Vec<u8> {
+    fn random_bytes(&self, len: usize) -> Option<Vec<u8>> {
         PortableHost.random_bytes(len)
     }
 }
@@ -41,7 +41,7 @@ impl Host for TempHost {
 static HOST_LOCK: Mutex<()> = Mutex::new(());
 
 fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("tpmplaner-test-{name}"));
+    let dir = std::env::temp_dir().join(format!("ephemeris-test-{name}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("scratch directory");
     dir
@@ -53,18 +53,21 @@ fn scratch(name: &str) -> PathBuf {
 /// forgotten translation cannot compile. This test guards the other half: that
 /// no field was filled in with the English text by accident, and that none is
 /// empty.
+///
+/// Driven by [`i18n::CATALOGS`] rather than a list written out here, so adding
+/// a language cannot silently escape the check. The exhaustive per-field
+/// version — every field, the column budgets, the plural forms — lives in the
+/// unit tests next to the data, where the private field walker can reach it.
 #[test]
 fn every_shipped_language_is_complete_and_distinct() {
-    let catalogues = [
-        ("en", &i18n::EN),
-        ("de", &i18n::DE),
-        ("fr", &i18n::FR),
-        ("es", &i18n::ES),
-        ("it", &i18n::IT),
-    ];
+    assert_eq!(
+        i18n::CATALOGS.len(),
+        20,
+        "the shipped language count changed — update the changelog claim too"
+    );
 
-    for (code, cat) in catalogues {
-        assert_eq!(cat.code, code);
+    for cat in i18n::CATALOGS {
+        let code = cat.code;
         // A handful of representative fields; empty text would show as a gap
         // in the interface.
         for (name, value) in [
@@ -90,10 +93,6 @@ fn every_shipped_language_is_complete_and_distinct() {
             ("in_pattern", cat.in_pattern),
             ("ago_pattern", cat.ago_pattern),
             ("left_pattern", cat.left_pattern),
-            ("overdue_one", cat.overdue_one),
-            ("overdue_many", cat.overdue_many),
-            ("conflict_one", cat.conflict_one),
-            ("conflict_many", cat.conflict_many),
             ("update_available", cat.update_available),
         ] {
             assert!(value.contains("{}"), "{code}: {name} lost its placeholder");
@@ -106,8 +105,9 @@ fn every_shipped_language_is_complete_and_distinct() {
         );
     }
 
-    // The four translations must not simply be the English text.
-    for (code, cat) in &catalogues[1..] {
+    // No translation may simply be the English text.
+    for cat in i18n::CATALOGS.iter().filter(|c| c.code != "en") {
+        let code = cat.code;
         assert_ne!(
             cat.section_tasks,
             i18n::EN.section_tasks,
@@ -121,21 +121,36 @@ fn every_shipped_language_is_complete_and_distinct() {
     }
 }
 
-/// Relative times have to work in every shipped language, not only the two
-/// that were looked at on screen.
+/// Relative times and counted messages have to work in every shipped language,
+/// not only the two that were looked at on screen.
+///
+/// The counts are chosen to walk every plural category the shipped rules can
+/// select: 1, the dual, the Slavic `few` and `many` bands, the 11-to-14 trap,
+/// and a value past 100 where Arabic falls back to `other`.
 #[test]
 fn relative_times_render_in_every_language() {
-    for tag in ["en-US", "de-DE", "fr-FR", "es-ES", "it-IT"] {
+    for cat in i18n::CATALOGS {
+        let tag = cat.code;
         let loc = i18n::Locale::resolve(tag);
+        assert_eq!(loc.cat.code, cat.code, "{tag} did not resolve to itself");
+
         for minutes in [-90i64, -5, 0, 25, 130, 3000] {
             let text = loc.relative(minutes);
             assert!(!text.trim().is_empty(), "{tag}: empty for {minutes}");
             assert!(!text.contains("{}"), "{tag}: placeholder left in {text}");
         }
         assert!(!loc.time_left(32).contains("{}"), "{tag}: time_left");
-        assert!(!loc.overdue(1).contains("{}"), "{tag}: overdue(1)");
-        assert!(!loc.overdue(3).contains("{}"), "{tag}: overdue(3)");
-        assert!(!loc.conflicts(2).contains("{}"), "{tag}: conflicts");
+
+        for n in [0, 1, 2, 3, 5, 11, 14, 21, 22, 101] {
+            for (what, text) in [("overdue", loc.overdue(n)), ("conflicts", loc.conflicts(n))] {
+                assert!(!text.trim().is_empty(), "{tag}: {what}({n}) is empty");
+                assert!(
+                    !text.contains("{}"),
+                    "{tag}: {what}({n}) left a placeholder in {text}"
+                );
+            }
+        }
+
         let updated = loc.updated_next("09:00", "09:30");
         assert!(
             updated.contains("09:00") && updated.contains("09:30"),
@@ -150,10 +165,10 @@ fn relative_times_render_in_every_language() {
 fn the_log_rotates_once_it_grows_too_large() {
     let _guard = HOST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = scratch("log-rotation");
-    tpmplaner_core::host::set_host(Arc::new(TempHost(dir.clone())));
+    ephemeris_core::host::set_host(Arc::new(TempHost(dir.clone())));
 
-    let path = dir.join("tpmplaner.log");
-    let rotated = dir.join("tpmplaner.log.1");
+    let path = dir.join("ephemeris.log");
+    let rotated = dir.join("ephemeris.log.1");
 
     // Write past the 256 KB threshold. Each line is roughly 120 bytes.
     for i in 0..2600 {
@@ -174,7 +189,7 @@ fn the_log_rotates_once_it_grows_too_large() {
     let tail = std::fs::read_to_string(&path).expect("read live log");
     assert!(tail.contains("line 2599"), "the newest line was lost");
 
-    tpmplaner_core::host::set_host(Arc::new(PortableHost));
+    ephemeris_core::host::set_host(Arc::new(PortableHost));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -185,7 +200,7 @@ fn the_log_rotates_once_it_grows_too_large() {
 fn a_panic_is_recorded_before_the_process_would_die() {
     let _guard = HOST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = scratch("panic-hook");
-    tpmplaner_core::host::set_host(Arc::new(TempHost(dir.clone())));
+    ephemeris_core::host::set_host(Arc::new(TempHost(dir.clone())));
     log::install_panic_hook();
 
     // Under the test profile panics unwind, so the hook can be observed
@@ -195,7 +210,7 @@ fn a_panic_is_recorded_before_the_process_would_die() {
     });
     assert!(result.is_err(), "the panic did not happen");
 
-    let text = std::fs::read_to_string(dir.join("tpmplaner.log")).expect("log file");
+    let text = std::fs::read_to_string(dir.join("ephemeris.log")).expect("log file");
     assert!(text.contains("PANIC"), "no panic line in the log:\n{text}");
     assert!(
         text.contains("deliberate failure for the panic hook test"),
@@ -207,7 +222,7 @@ fn a_panic_is_recorded_before_the_process_would_die() {
     );
 
     let _ = std::panic::take_hook();
-    tpmplaner_core::host::set_host(Arc::new(PortableHost));
+    ephemeris_core::host::set_host(Arc::new(PortableHost));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -233,7 +248,7 @@ fn the_release_check_survives_a_repository_without_releases() {
 /// test, and "we read the value" is not the same as "we act on it".
 #[test]
 fn the_system_appearance_switches_actually_change_the_palette() {
-    use tpmplaner_core::theme::{ContrastColors, Palette, SystemVisuals, ThemePref};
+    use ephemeris_core::theme::{ContrastColors, Palette, SystemVisuals, ThemePref};
 
     let base = SystemVisuals::default();
 
@@ -324,7 +339,7 @@ fn the_system_appearance_switches_actually_change_the_palette() {
 /// Motion has to stop entirely when the system says so, not merely run faster.
 #[test]
 fn animations_disabled_means_no_animation_at_all() {
-    use tpmplaner_core::anim::Animations;
+    use ephemeris_core::anim::Animations;
 
     let mut anim = Animations::default();
     anim.enabled = false;

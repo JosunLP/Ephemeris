@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! Calendar and task back ends.
 //!
 //! Every service the widget can talk to implements [`CalendarProvider`]. The
@@ -45,7 +45,7 @@ pub fn http() -> &'static ureq::Agent {
             // status code.
             .http_status_as_error(false)
             .timeout_global(Some(Duration::from_secs(30)))
-            .user_agent(concat!("TPMPlaner/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!("Ephemeris/", env!("CARGO_PKG_VERSION")))
             .build()
             .new_agent()
     })
@@ -439,6 +439,10 @@ mod tests {
                     join_url: None,
                     color: 0,
                     calendar_name: self.id.into(),
+                    calendar_id: format!("{}-cal", self.id),
+                    account_id: String::new(),
+                    task_id: None,
+                    task_list_id: None,
                 })
                 .collect())
         }

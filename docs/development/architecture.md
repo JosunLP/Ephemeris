@@ -3,26 +3,76 @@
 ## The split
 
 ```text
-crates/core/          tpmplaner-core   — portable, no operating system calls
+crates/core/          ephemeris-core   — portable, no operating system calls
   model.rs            events, tasks, filtering, sorting, conflict detection
   provider/           Google, Microsoft Graph, CalDAV, iCalendar
   sync.rs             schedule, backoff, parallel fetch, cache
   i18n.rs             catalogues, relative times, bidi handling
-  theme.rs            palette, metrics
+  layout.rs           where everything goes, and what a click landed on
+  menu.rs             what the right-click menu contains
+  theme.rs            palette, metrics, appearance customisation
+  hotkey.rs           reading "Ctrl+Alt+Shift+K"
   host.rs             the traits the platform must supply
   update.rs           release check
 
-src/                  tpmplaner       — the Windows front end
-  render.rs           Direct2D / DirectWrite / DirectComposition
-  window.rs           Win32 window, input, timers, menu
-  host_impl.rs        Host, LocaleBackend and Waker for Windows
-  platform.rs         registry, monitors, clipboard, shortcuts
-  secure.rs           DPAPI
+src/                  ephemeris       — the front ends
+  main.rs             platform-neutral: picks a front end, and nothing else
+  paint/              what the widget looks like — every front end
+    canvas.rs         what a renderer has to be able to draw
+    widget.rs         the panel, drawn once against that trait
+  win/                #[cfg(windows)]
+    render.rs         the D3D/DXGI/DComp chain and the fonts
+    canvas.rs         Direct2D and DirectWrite behind paint::canvas::Canvas
+    window.rs         Win32 window, input, timers, menu
+    host_impl.rs      Host, LocaleBackend and Waker for Windows
+    platform.rs       registry, monitors, clipboard, shortcuts
+    secure.rs         DPAPI
+  unix/               #[cfg(unix)] — macOS and Linux
+    host.rs           Host: XDG paths, xdg-open/open, /dev/urandom
+    locale.rs         CFDateFormatter, or the C library's locale database
+    secure.rs         Keychain, or the Secret Service
+    autostart.rs      a launch agent, or an XDG autostart entry
+    app.rs            the widget's behaviour, behind the Shell trait
+    paint.rs          the widget's drawing, behind the Canvas trait
+    canvas.rs         what a renderer has to be able to draw
+    text.rs           prints the agenda where there is no desktop
+    mac/              #[cfg(target_os = "macos")]
+      window.rs       NSWindow, the run loop, the shell
+      canvas.rs       Core Graphics and Core Text
+      objc.rs         the slice of the Objective-C runtime that is used
+      menu.rs         NSMenu · visuals.rs appearance · hotkey.rs Carbon
+    linux/            #[cfg(target_os = "linux")]
+      canvas.rs       Cairo and Pango, on a window or on raw memory
+      ffi.rs          Xlib, Cairo and Pango, opened with dlopen
+      drawn_menu.rs   the menu's rows and painting — Linux has no menus
+      window.rs       X11 window, the poll loop, the shell
+      menu.rs         the X11 menu: a grabbed override-redirect window
+      visuals.rs      appearance through the XDG settings portal
+      wayland/
+        ffi.rs        libwayland, and the protocols it does not ship
+        window.rs     layer surface or toplevel, shm buffers, the loop
+        menu.rs       the Wayland menu: an xdg_popup with a grab
+        cursor.rs     the pointer, which a Wayland client draws itself
 ```
 
 The core has **no dependency on the `windows` crate** and calls no platform
 API. Continuous integration builds and tests it on Ubuntu, macOS and Windows,
 so that boundary is enforced rather than merely intended.
+
+`main.rs` sees one thing from a front end: `install_host`,
+`acquire_single_instance`, `run` and `fatal`. Which module supplies them is a
+`#[cfg]` and nothing else, so adding a platform is adding a directory rather
+than threading conditionals through the program.
+
+**Two traits sit between the front ends and the shared code.** `Canvas` is what
+a renderer has to be able to draw — a rounded rectangle, a line, a circle, an
+arc, a gradient, a clip and two kinds of text; four implementations sit behind
+it, and `paint/widget.rs` above it is the only description of what the widget
+looks like. `Shell` is what the widget needs from a window system — geometry, a
+cursor, three timers, a menu, the clipboard and the appearance settings — and
+`app.rs` above it serves macOS and Linux; Windows still owns its own message
+pump, which [Porting](/development/porting) records as the remaining
+duplication and explains why it is a smaller one.
 
 ## The three traits
 
@@ -36,8 +86,10 @@ Everything the core needs from an operating system goes through
 | `Waker` | how background work reaches the interface |
 
 `LocaleBackend` is separate from `Host` on purpose: the quality of the answers
-differs enormously. Windows has a complete NLS database; a portable fallback
-can only approximate. Splitting them lets a front end supply a good
+differs enormously. Windows has NLS, macOS has Core Foundation's CLDR data, and
+Linux has the C library's locale database — where the long date is an
+approximation, because POSIX has no pattern for one. A portable fallback can
+only approximate all of it. Splitting them lets a front end supply a good
 implementation of one and take the default for the other.
 
 Portable fallbacks exist for all of them, so tests and headless tools work

@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Name=Ephemeris
+GenericName=Calendar widget
+Comment=Today's calendar events and due tasks on your desktop
+Exec=ephemeris
+Icon=io.github.josunlp.ephemeris
+Terminal=false
+Categories=Office;Calendar;
+Keywords=calendar;agenda;tasks;todo;widget;
+StartupNotify=false
+# The widget has no window in the ordinary sense: no taskbar entry, no
+# window-switcher entry, and it never takes focus. A desktop that tried to
+# track it as a launched application would show a starting-up cursor that
+# never finishes.
+X-GNOME-UsesNotifications=false

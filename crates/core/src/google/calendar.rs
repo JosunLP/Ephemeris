@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! Google Calendar API v3.
 
 use super::auth::Auth;
@@ -159,7 +159,7 @@ pub fn list_events(
                 title: item
                     .summary
                     .filter(|s| !s.trim().is_empty())
-                    .unwrap_or_else(|| "(ohne Titel)".into()),
+                    .unwrap_or_else(|| "(no title)".into()),
                 start,
                 end,
                 all_day,
@@ -168,6 +168,12 @@ pub fn list_events(
                 join_url: None,
                 color: cal.color,
                 calendar_name: cal.name.clone(),
+                calendar_id: cal.id.clone(),
+                // Both stamped by the sync thread, which is where the events
+                // of every account meet the tasks of every account.
+                account_id: String::new(),
+                task_id: None,
+                task_list_id: None,
             });
         }
 

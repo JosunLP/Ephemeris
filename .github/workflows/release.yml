@@ -35,10 +35,10 @@ jobs:
         include:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            binary: tpmplaner.exe
+            binary: ephemeris.exe
           - os: windows-11-arm
             target: aarch64-pc-windows-msvc
-            binary: tpmplaner.exe
+            binary: ephemeris.exe
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -55,10 +55,16 @@ jobs:
       # it came from. Cheap to verify, expensive to discover afterwards.
       - name: Verify tag matches Cargo.toml
         shell: pwsh
+        # Through the environment rather than expanded into the script text:
+        # the value comes from a `workflow_dispatch` input, and a quote in it
+        # would otherwise end the string and run as PowerShell in this job. It
+        # is only ever compared against a version string.
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          $tag = "${{ inputs.tag || github.ref_name }}" -replace '^v', ''
+          $tag = $env:TAG -replace '^v', ''
           $manifest = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
-          $version = ($manifest.packages | Where-Object name -eq tpmplaner).version
+          $version = ($manifest.packages | Where-Object name -eq ephemeris).version
           if ($tag -ne $version) {
             throw "Tag '$tag' does not match Cargo.toml version '$version'"
           }
@@ -72,7 +78,7 @@ jobs:
       - name: Package and checksum
         shell: pwsh
         run: |
-          $name = "tpmplaner-${{ matrix.target }}"
+          $name = "ephemeris-${{ matrix.target }}"
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary }}" "dist/$name.exe"
           $hash = (Get-FileHash "dist/$name.exe" -Algorithm SHA256).Hash.ToLower()
@@ -85,9 +91,123 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  # macOS and Linux ship a tarball rather than an installer. There is no
+  # equivalent of the `install.ps1` one-liner on either, and inventing one that
+  # writes outside the package manager's view would make the widget a worse
+  # citizen than having none — the reasoning is in
+  # `docs/development/porting.md`. So: one archive per target, a checksum
+  # beside it, and `tar -xzf` as the documented install.
+  #
+  # macOS is built twice rather than as a universal binary. `lipo` would halve
+  # the number of assets and double the size of each, and the download page can
+  # say "Apple silicon" and "Intel" perfectly well.
+  build-unix:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-latest
+            target: x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+
+      - name: Verify tag matches Cargo.toml
+        # Through the environment rather than into the script text: a
+        # `workflow_dispatch` input expanded inline would be shell code in this
+        # job. It is only ever compared against a version string.
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          tag="$TAG"
+          tag="${tag#v}"
+          version=$(cargo metadata --no-deps --format-version 1 |
+            python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "ephemeris"))')
+          if [ "$tag" != "$version" ]; then
+            echo "Tag '$tag' does not match Cargo.toml version '$version'" >&2
+            exit 1
+          fi
+          echo "Tag and Cargo.toml agree on $version"
+
+      - name: Build
+        run: cargo build --locked --release --target ${{ matrix.target }}
+
+      # macOS also gets an application bundle. It is *not* signed or notarised
+      # — that needs a paid developer account this repository does not have —
+      # so Gatekeeper will refuse it on first launch until the user right-
+      # clicks and chooses Open. The bundle is still worth shipping: it is
+      # what puts the widget in Applications, gives it an identifier, and
+      # makes `LSUIElement` true from the very first frame rather than from
+      # whenever the program's own code runs.
+      - name: Build the application bundle
+        if: runner.os == 'macOS'
+        run: |
+          version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          app="dist/Ephemeris.app"
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          cp "target/${{ matrix.target }}/release/ephemeris" "$app/Contents/MacOS/"
+          sed "s/@VERSION@/$version/g" packaging/macos/Info.plist \
+            > "$app/Contents/Info.plist"
+          cp LICENSE README.md "$app/Contents/Resources/"
+          # Under the name `CFBundleIconFile` gives. The container is built
+          # from the SVG by `scripts/render-logo.py` and committed, so no
+          # rendering happens on the runner and `iconutil` is not needed.
+          cp assets/logo.icns "$app/Contents/Resources/Ephemeris.icns"
+
+      # The archive carries the licence and the readme beside the binary,
+      # because a tarball is all a distribution packager or a curious user
+      # gets — there is no installer to point them anywhere else.
+      - name: Package and checksum
+        run: |
+          name="ephemeris-${{ matrix.target }}"
+          mkdir -p "dist/$name"
+          cp "target/${{ matrix.target }}/release/ephemeris" "dist/$name/"
+          cp LICENSE README.md "dist/$name/"
+          if [ -d dist/Ephemeris.app ]; then
+            cp -R dist/Ephemeris.app "dist/$name/"
+            rm -rf dist/Ephemeris.app
+          fi
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            cp packaging/linux/io.github.josunlp.ephemeris.desktop "dist/$name/"
+            # Beside it, under the name its `Icon=` names, so whoever installs
+            # the one has the other in the form `hicolor/scalable/apps` wants.
+            cp assets/logo.svg "dist/$name/io.github.josunlp.ephemeris.svg"
+          fi
+          tar -czf "dist/$name.tar.gz" -C dist "$name"
+          rm -rf "dist/$name"
+          cd dist
+          # `shasum` on macOS, `sha256sum` on Linux; both write the format the
+          # verification step reads back.
+          if command -v sha256sum > /dev/null; then
+            sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
+          else
+            shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
+          fi
+          cat "$name.tar.gz.sha256"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
   release:
     name: Publish release
-    needs: build
+    needs: [build, build-unix]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # The only place in either workflow that may write to the repository.

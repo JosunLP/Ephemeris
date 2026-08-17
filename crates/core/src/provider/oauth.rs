@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! OAuth 2.0 for installed applications: loopback redirect with PKCE.
 //!
 //! Google and Microsoft use the same flow; only the endpoints, the scopes and
@@ -16,7 +16,7 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufReader, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -153,10 +153,13 @@ impl Session {
         let redirect_uri = format!("http://127.0.0.1:{port}");
 
         // PKCE protects the authorization code should another local process
-        // intercept it. Mandatory for loopback redirects.
-        let verifier = URL_SAFE_NO_PAD.encode(crate::host::host().random_bytes(48));
+        // intercept it. Mandatory for loopback redirects. Both secrets are
+        // taken before anything is sent: without a secure source there is no
+        // sign-in to attempt, and the request must not go out with a verifier
+        // and a `state` that protect nothing.
+        let verifier = URL_SAFE_NO_PAD.encode(secret(48)?);
         let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
-        let state = URL_SAFE_NO_PAD.encode(crate::host::host().random_bytes(16));
+        let state = URL_SAFE_NO_PAD.encode(secret(16)?);
 
         let mut url = format!(
             "{}?client_id={}&redirect_uri={}&response_type=code&scope={}\
@@ -245,19 +248,43 @@ impl Session {
     /// request carrying `code=` or `error=` arrives.
     fn wait_for_code(&self, listener: TcpListener, expected_state: &str) -> Result<String> {
         let cat = crate::i18n::global();
-        listener.set_nonblocking(false).map_err(io_err)?;
+        // Non-blocking so the deadline is actually a deadline. `accept` has no
+        // timeout of its own, and a blocking one is only interrupted by a
+        // connection — so the ordinary cancel (the user closes the consent tab,
+        // and the provider never redirects to the loopback) would park this
+        // call forever, and with it the sync thread, for the life of the
+        // process: no further sync, no queued completion, no quit.
+        listener.set_nonblocking(true).map_err(io_err)?;
         let deadline = Instant::now() + Duration::from_secs(300);
 
         while Instant::now() < deadline {
-            let (mut stream, _) = listener.accept().map_err(io_err)?;
+            let (mut stream, _) = match listener.accept() {
+                Ok(accepted) => accepted,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(100));
+                    continue;
+                }
+                Err(e) => return Err(io_err(e)),
+            };
+            // BSD and macOS hand the accepted socket the listener's
+            // non-blocking flag; Linux does not. Setting it either way is what
+            // makes the read below behave the same on all three.
+            stream.set_nonblocking(false).map_err(io_err)?;
             stream
                 .set_read_timeout(Some(Duration::from_secs(10)))
                 .map_err(io_err)?;
 
-            let mut request_line = String::new();
-            BufReader::new(&stream)
-                .read_line(&mut request_line)
-                .map_err(io_err)?;
+            // Not `read_line`, and not `?`: a connection that is accepted and
+            // then says nothing — a browser's speculative preconnect to the
+            // loopback port is the ordinary case, a port scan the other — would
+            // time out and abandon the whole sign-in while the real redirect
+            // was still waiting in the accept queue. No line means this
+            // connection had nothing to say; the next one may.
+            let mut reader = BufReader::new(&stream);
+            let Some(request_line) = crate::google::auth::read_request_line(&mut reader, deadline)
+            else {
+                continue;
+            };
 
             // "GET /?code=...&state=... HTTP/1.1"
             let target = request_line.split_whitespace().nth(1).unwrap_or("");
@@ -279,6 +306,7 @@ impl Session {
             if let Some(err) = error {
                 respond(
                     &mut stream,
+                    cat,
                     cat.auth_cancelled_title,
                     cat.auth_connected_body,
                 );
@@ -289,11 +317,12 @@ impl Session {
                 // State check against cross-site request forgery: only our own
                 // request counts.
                 if state.as_deref() != Some(expected_state) {
-                    respond(&mut stream, cat.auth_cancelled_title, cat.auth_waiting);
+                    respond(&mut stream, cat, cat.auth_cancelled_title, cat.auth_waiting);
                     return Err(Error::NeedsLogin("OAuth state mismatch".into()));
                 }
                 respond(
                     &mut stream,
+                    cat,
                     cat.auth_connected_title,
                     cat.auth_connected_body,
                 );
@@ -301,7 +330,7 @@ impl Session {
             }
 
             // Background noise such as a favicon request.
-            respond(&mut stream, "TPMPlaner", cat.auth_waiting);
+            respond(&mut stream, cat, "Ephemeris", cat.auth_waiting);
         }
 
         Err(Error::NeedsLogin(cat.err_timeout.into()))
@@ -312,15 +341,38 @@ fn io_err(e: std::io::Error) -> Error {
     Error::Other(format!("I/O error: {e}"))
 }
 
-fn respond(stream: &mut std::net::TcpStream, title: &str, subtitle: &str) {
+/// Random bytes for a sign-in secret, or the error that abandons the sign-in.
+///
+/// The host has already logged why it could not produce any; this only has to
+/// stop the flow. See [`crate::host::Host::random_bytes`] for why there is
+/// nothing to fall back to.
+fn secret(len: usize) -> Result<Vec<u8>> {
+    crate::host::host().random_bytes(len).ok_or_else(|| {
+        Error::Other(
+            "No secure random source available — the sign-in cannot be started safely.".into(),
+        )
+    })
+}
+
+fn respond(
+    stream: &mut std::net::TcpStream,
+    cat: &crate::i18n::Catalog,
+    title: &str,
+    subtitle: &str,
+) {
+    // The catalogue is the caller's, not the global one read afresh: the
+    // callback can be waited on for minutes, and a language switched in
+    // the meantime would put `lang`/`dir` from one catalogue on a page
+    // whose text came from another.
+    let attrs = cat.html_attrs();
     let html = format!(
-        "<!doctype html><meta charset=\"utf-8\"><title>{title}</title>\
+        "<!doctype html><html {attrs}><meta charset=\"utf-8\"><title>{title}</title>\
          <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
          <body style=\"font-family:Segoe UI,system-ui,sans-serif;background:#1b1f24;\
          color:#e8edf3;display:flex;flex-direction:column;align-items:center;\
          justify-content:center;height:100vh;margin:0\">\
          <h2 style=\"font-weight:600\">{title}</h2>\
-         <p style=\"opacity:.65\">{subtitle}</p></body>"
+         <p style=\"opacity:.65\">{subtitle}</p></body></html>"
     );
     let response = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! The widget window.
 //!
 //! It behaves like a Vista gadget:
@@ -16,21 +16,30 @@
 //! The window is larger than the visible glass body by [`Metrics::shadow`] on
 //! every side; the renderer draws the drop shadow in that margin.
 //!
+//! Dragging and resizing are the widget's own: `WS_POPUP` without
+//! `WS_THICKFRAME` means the system provides neither, so empty space drags and
+//! the glass edges resize. `"locked": true` in the settings switches both off
+//! while leaving everything else working — see [`is_locked`].
+//!
 //! Three timers, each alive only as long as it is needed: the minute tick
 //! (clock, sync due, configuration check), ~60 Hz during an animation, and
 //! 100 ms while an undo grace period is running.
 
-use crate::platform;
-use crate::render::{self, Frame, Hit, HitRegion, Renderer, UndoView};
+use crate::win::platform;
+use crate::win::render::{self, Frame, Hit, HitRegion, Renderer, UndoView};
 use chrono::{DateTime, Duration as ChronoDuration, Local, Timelike};
+use ephemeris_core::anim::Animations;
+use ephemeris_core::config::{self, Config};
+use ephemeris_core::i18n::Locale;
+use ephemeris_core::layout::{Panel, hit_point};
+use ephemeris_core::log;
+use ephemeris_core::menu;
+use ephemeris_core::model::TaskKey;
+use ephemeris_core::sync::{self, Command, Shared, Status, SyncHandle};
+use ephemeris_core::theme::{Appearance, Metrics, Palette, SystemVisuals, ThemePref};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
-use tpmplaner_core::anim::Animations;
-use tpmplaner_core::config::{self, Config};
-use tpmplaner_core::i18n::Locale;
-use tpmplaner_core::log;
-use tpmplaner_core::sync::{self, Command, Shared, Status, SyncHandle};
-use tpmplaner_core::theme::{Metrics, Palette, ThemePref};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{
     DWMSBT_NONE, DWMSBT_TRANSIENTWINDOW, DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE,
@@ -67,20 +76,6 @@ const UNDO_INTERVAL_MS: u32 = 100;
 /// DWM reporting a changed accent colour. Not defined in
 /// `WindowsAndMessaging`, but documented.
 const WM_DWMCOLORIZATIONCOLORCHANGED: u32 = 0x0320;
-
-const CMD_SYNC: usize = 1001;
-const CMD_AUTOSTART: usize = 1002;
-const CMD_CONFIG: usize = 1003;
-const CMD_FOLDER: usize = 1004;
-const CMD_LOG: usize = 1005;
-const CMD_RELOGIN: usize = 1006;
-const CMD_RESET_POS: usize = 1007;
-const CMD_COPY: usize = 1009;
-const CMD_UPDATE: usize = 1011;
-const CMD_QUIT: usize = 1010;
-/// Identifier ranges for the dynamically created source entries.
-const CMD_CALENDAR_BASE: usize = 2000;
-const CMD_TASKLIST_BASE: usize = 3000;
 
 /// The edge or edges of the glass body under the mouse pointer.
 ///
@@ -143,7 +138,7 @@ struct State {
     sync: Option<SyncHandle>,
     renderer: Option<Renderer>,
 
-    /// Wird pro Frame neu befuellt statt neu alloziert.
+    /// Refilled once per frame rather than allocated again.
     hits: Vec<HitRegion>,
     hover: Option<Hit>,
     tracking_mouse: bool,
@@ -172,12 +167,21 @@ struct State {
     dpi: f32,
     scale: f32,
     metrics: Metrics,
-    config_mtime: Option<SystemTime>,
+    /// The customisation last read from the settings, resolved from an inline
+    /// block or a named theme file. Kept to compare against: typography and
+    /// density live in the DirectWrite formats and the metrics, so a change to
+    /// any of it has to rebuild the renderer rather than repaint.
+    appearance: Appearance,
+    /// The named theme file, if `appearance` came from one. Watched alongside
+    /// the settings: editing that file is the whole point of having one, and it
+    /// leaves `config.json` untouched.
+    theme_file: Option<PathBuf>,
+    config_mtime: Stamps,
     loc: Locale,
     /// The appearance settings last read from Windows. Re-read on
     /// `WM_SETTINGCHANGE`, and also kept as the value to compare against, so
     /// an unrelated system notification does not trigger a redraw.
-    visuals: tpmplaner_core::theme::SystemVisuals,
+    visuals: SystemVisuals,
 }
 
 pub fn run() -> Result<()> {
@@ -190,13 +194,18 @@ pub fn run() -> Result<()> {
         if let Some(e) = &config_error {
             log::warn(e);
         }
-        let metrics = metrics_for(&cfg);
+        let appearance = appearance_for(&cfg);
+        // Read before the metrics: a contrast theme overrides the surface
+        // style, and the surface style decides whether the geometry reserves a
+        // margin for the shadow.
+        let visuals = platform::system_visuals();
+        let metrics = metrics_for(&cfg, &appearance, visuals);
+        let theme_file = cfg.appearance.file();
         let loc = Locale::resolve(&cfg.language);
         // The sync thread and the emergency exit have no access to this
         // instance, so they reach for the global catalogue instead.
-        tpmplaner_core::i18n::set_global(loc.cat);
-        let visuals = platform::system_visuals();
-        let palette = Palette::resolve(ThemePref::parse(&cfg.theme), &cfg.accent, visuals);
+        ephemeris_core::i18n::set_global(loc.cat);
+        let palette = palette_for(&cfg, &appearance, visuals, false);
         log::info(&format!(
             "Start — locale {} ({}{}), theme {}{}, accent #{:06X}, sync every {} min",
             loc.tag,
@@ -220,19 +229,19 @@ pub fn run() -> Result<()> {
             hInstance: instance.into(),
             hCursor: LoadCursorW(None, IDC_ARROW)?,
             hbrBackground: HBRUSH::default(),
-            lpszClassName: w!("TPMPlanerWidget"),
+            lpszClassName: w!("EphemerisWidget"),
             ..Default::default()
         };
         if RegisterClassExW(&class) == 0 {
             return Err(windows::core::Error::from_thread());
         }
 
-        let demo = tpmplaner_core::demo::enabled();
+        let demo = ephemeris_core::demo::enabled();
         let mut state = Box::new(State {
             hwnd: HWND::default(),
             shared: Arc::new(Mutex::new(Shared {
                 agenda: if demo {
-                    tpmplaner_core::demo::agenda()
+                    ephemeris_core::demo::agenda()
                 } else {
                     // The last known state, so start-up does not begin with a
                     // blank surface.
@@ -267,7 +276,9 @@ pub fn run() -> Result<()> {
             dpi: 96.0,
             scale: cfg.scale,
             metrics,
-            config_mtime: config_mtime(),
+            appearance,
+            config_mtime: config_mtime(theme_file.as_deref()),
+            theme_file,
             loc,
             visuals,
         });
@@ -277,8 +288,8 @@ pub fn run() -> Result<()> {
         // on an actual monitor.
         let hwnd = CreateWindowExW(
             WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-            w!("TPMPlanerWidget"),
-            w!("TPMPlaner"),
+            w!("EphemerisWidget"),
+            w!("Ephemeris"),
             WS_POPUP,
             cfg.x.unwrap_or(0),
             cfg.y.unwrap_or(0),
@@ -306,15 +317,31 @@ pub fn run() -> Result<()> {
             ph,
             SWP_NOACTIVATE | SWP_NOOWNERZORDER,
         );
-        st.renderer = Some(Renderer::new(
+        // Not `?`: the window already carries a pointer to `state` in its
+        // `GWLP_USERDATA`, and returning here drops that box while the window
+        // itself lives on. `fatal` then puts up a message box, whose modal
+        // pump delivers the broadcast messages — `WM_SETTINGCHANGE`,
+        // `WM_THEMECHANGED` — to a window procedure that would read freed
+        // memory. So the window goes first, on the one path that gets here:
+        // neither Direct3D nor WARP nor DirectComposition being available.
+        let renderer = Renderer::new(
             hwnd,
             pw.max(1) as u32,
             ph.max(1) as u32,
             st.dpi,
-            cfg.scale,
+            st.metrics,
             palette,
             st.loc.rtl,
-        )?);
+            &st.appearance,
+            &st.loc.tag,
+        );
+        st.renderer = Some(match renderer {
+            Ok(renderer) => renderer,
+            Err(e) => {
+                let _ = DestroyWindow(hwnd);
+                return Err(e);
+            }
+        });
 
         // Demo mode deliberately runs no sync thread — otherwise the missing
         // Google credentials would immediately bury the sample data under an
@@ -322,7 +349,7 @@ pub fn run() -> Result<()> {
         if !demo {
             st.sync = Some(sync::spawn(
                 shared,
-                std::sync::Arc::new(crate::host_impl::WindowWaker {
+                std::sync::Arc::new(crate::win::host_impl::WindowWaker {
                     hwnd: hwnd.0 as isize,
                     message: WM_APP_SYNC_DONE,
                 }),
@@ -354,9 +381,52 @@ pub fn run() -> Result<()> {
     }
 }
 
-/// Metrics for a configuration: no shadow margin in acrylic mode.
-fn metrics_for(cfg: &Config) -> Metrics {
-    Metrics::with_shadow(cfg.scale, cfg.backdrop != "acrylic")
+/// Metrics for a configuration: the DPI scale, the density and font offset
+/// from the customisation, and no shadow margin where nothing draws one — the
+/// acrylic backdrop fills the whole window rectangle, and a flat surface has
+/// no shadow to leave room for.
+fn metrics_for(cfg: &Config, custom: &Appearance, visuals: SystemVisuals) -> Metrics {
+    Metrics::resolve(
+        cfg.scale,
+        cfg.backdrop != "acrylic",
+        custom,
+        // The same question `Palette::resolve` asks. Reading `visuals` alone
+        // would leave `"theme": "contrast"` with a high-contrast palette and
+        // metrics sized for the configured surface — the exact disagreement
+        // `effective_surface` exists to prevent.
+        ThemePref::parse(&cfg.theme).high_contrast(visuals),
+    )
+}
+
+/// Resolves the customisation and puts anything it complained about in the
+/// log.
+///
+/// A theme file that is missing, a colour that is not a colour, text that had
+/// to be lightened to stay readable: each of those otherwise looks exactly
+/// like a setting that had no effect, which is the hardest kind of thing to
+/// work out from the outside.
+fn appearance_for(cfg: &Config) -> Appearance {
+    let (custom, notes) = cfg.appearance.resolve();
+    for note in notes {
+        log::warn(&note);
+    }
+    custom
+}
+
+/// The palette for a configuration, with the customisation applied.
+fn palette_for(cfg: &Config, custom: &Appearance, visuals: SystemVisuals, quiet: bool) -> Palette {
+    let mut palette = Palette::resolve(ThemePref::parse(&cfg.theme), &cfg.accent, visuals);
+    let notes = palette.customize(custom);
+    // `quiet` is for the paths that re-resolve the same palette after a system
+    // appearance change or a lost graphics device. The notes would be the same
+    // ones already in the log, and repeating them on every theme switch turns
+    // the log into noise.
+    if !quiet {
+        for note in notes {
+            log::warn(&note);
+        }
+    }
+    palette
 }
 
 /// Window position and size in physical pixels.
@@ -452,7 +522,7 @@ fn arm_tick(hwnd: HWND) {
     }
 }
 
-// --- Animationsantrieb ------------------------------------------------------
+// --- Animation driver -------------------------------------------------------
 
 /// Starts the animation timer if needed and takes a step immediately, so the
 /// response does not feel delayed by up to 16 ms.
@@ -717,10 +787,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
     }
 }
 
-// --- Rueckgaengig -----------------------------------------------------------
+// --- Undo -------------------------------------------------------------------
 
 /// Records the tick provisionally and starts the grace period.
-fn begin_pending(st: &mut State, idx: usize) {
+fn begin_pending(st: &mut State, key: TaskKey) {
     // Only one task waits at a time: a second completion confirms the first
     // immediately.
     commit_pending(st);
@@ -728,7 +798,11 @@ fn begin_pending(st: &mut State, idx: usize) {
     let seconds = sync::lock(&st.shared).config.undo_seconds;
     let ids = {
         let mut guard = sync::lock(&st.shared);
-        guard.agenda.tasks.get_mut(idx).map(|t| {
+        // By task, not by row: a sync between the frame that drew the row and
+        // this click may have moved it, and nothing must be ticked off except
+        // what was clicked. Gone from the list is a click on a row that is no
+        // longer there, and does nothing.
+        guard.agenda.task_mut(key).map(|t| {
             // Acknowledge visually at once, so the click feels immediate.
             t.completing = true;
             (t.account_id.clone(), t.tasklist_id.clone(), t.id.clone())
@@ -757,7 +831,7 @@ fn begin_pending(st: &mut State, idx: usize) {
     redraw(st);
 }
 
-/// Bedenkzeit abgelaufen? Dann absenden.
+/// Has the grace period run out? Then send it.
 fn on_undo_tick(st: &mut State) {
     let expired = st
         .pending
@@ -781,7 +855,8 @@ fn cancel_pending(st: &mut State) {
     let Some(p) = st.pending.take() else { return };
     stop_undo_timer(st);
     let mut guard = sync::lock(&st.shared);
-    if let Some(t) = guard.agenda.tasks.iter_mut().find(|t| t.id == p.task_id) {
+    let key = TaskKey::new(&p.account_id, &p.tasklist_id, &p.task_id);
+    if let Some(t) = guard.agenda.task_mut(key) {
         t.completing = false;
     }
     drop(guard);
@@ -847,7 +922,7 @@ fn toggle_source(st: &mut State, is_calendar: bool, index: usize) {
         }
         guard.config.save();
     }
-    st.config_mtime = config_mtime();
+    st.config_mtime = config_mtime(st.theme_file.as_deref());
     request_sync(st);
 }
 
@@ -863,7 +938,7 @@ fn start_update(st: &mut State) {
     log::info(&format!("Installing update {}", update.version));
 
     const INSTALLER: &str =
-        "irm https://github.com/JosunLP/TPMPlaner/releases/latest/download/install.ps1 | iex";
+        "irm https://github.com/JosunLP/Ephemeris/releases/latest/download/install.ps1 | iex";
     let args = platform::wide(&format!(
         "-NoProfile -ExecutionPolicy Bypass -Command \"{INSTALLER}\""
     ));
@@ -889,102 +964,24 @@ fn start_update(st: &mut State) {
 }
 
 /// Puts the day's plan on the clipboard as text.
+///
+/// The text itself is built in the core, so the three front ends copy the
+/// same agenda rather than three near-identical ones.
 fn copy_agenda(st: &mut State) {
-    let guard = sync::lock(&st.shared);
-    let loc = &st.loc;
-    let today = guard
-        .agenda
-        .day
-        .unwrap_or_else(|| Local::now().date_naive());
-    let mut out = format!(
-        "{} — {}
-",
-        loc.weekday(today),
-        loc.date_line(today)
-    );
+    let text = {
+        let guard = sync::lock(&st.shared);
+        ephemeris_core::model::agenda_as_text(&guard.agenda, &st.loc)
+    };
 
-    out.push_str(&format!(
-        "
-{}
-",
-        loc.cat.section_events
-    ));
-    if guard.agenda.events.is_empty() {
-        out.push_str(&format!(
-            "  {}
-",
-            loc.cat.no_events
-        ));
-    }
-    for ev in &guard.agenda.events {
-        let when = if ev.all_day {
-            loc.cat.all_day.to_string()
-        } else {
-            match (ev.start, ev.end) {
-                (Some(s), Some(e)) => format!("{}-{}", loc.time(s), loc.time(e)),
-                (Some(s), None) => loc.time(s),
-                _ => String::new(),
-            }
-        };
-        match &ev.location {
-            Some(place) => out.push_str(&format!(
-                "  {when}  {}  ({place})
-",
-                ev.title
-            )),
-            None => out.push_str(&format!(
-                "  {when}  {}
-",
-                ev.title
-            )),
-        }
-    }
-
-    out.push_str(&format!(
-        "
-{}
-",
-        loc.cat.section_tasks
-    ));
-    if guard.agenda.tasks.is_empty() {
-        out.push_str(&format!(
-            "  {}
-",
-            loc.cat.no_tasks
-        ));
-    }
-    for task in &guard.agenda.tasks {
-        let due = match task.due {
-            Some(d) if d == today => loc.cat.today.to_string(),
-            Some(d) => loc.day_month(d),
-            None => "-".into(),
-        };
-        // Subtasks indented, as they are on screen.
-        let indent = "  ".repeat(task.depth as usize + 1);
-        out.push_str(&format!(
-            "{indent}[ ] {due}  {}
-",
-            task.title
-        ));
-    }
-    drop(guard);
-
-    if platform::set_clipboard_text(&out) {
-        log::info("Agenda in die Zwischenablage kopiert");
-    } else {
-        log::warn("Clipboard is not available");
+    // The widget's own window owns the clipboard: with a null handle
+    // `EmptyClipboard` leaves no owner and `SetClipboardData` is documented to
+    // fail. `set_clipboard_text` has already logged which step failed and what
+    // Windows called it.
+    if platform::set_clipboard_text(st.hwnd, &text) {
+        log::info("Agenda copied to the clipboard");
     }
 }
 
-/// Combinations tried when the configured one is already taken.
-///
-/// Measured on a normal Windows 11 desktop: `Ctrl+Alt+K` and `Win+Alt+K` are
-/// both refused with `ERROR_HOTKEY_ALREADY_REGISTERED`. Silently doing
-/// nothing would leave a documented feature dead, so the widget falls back and
-/// records which combination it ended up with.
-const PEEK_FALLBACKS: &[&str] = &["Ctrl+Alt+Shift+K", "Ctrl+Shift+F12", "Ctrl+Alt+Y"];
-
-/// Registers the global "peek" hotkey.
 fn register_peek_hotkey(hwnd: HWND, cfg: &Config) {
     unsafe {
         let _ = UnregisterHotKey(Some(hwnd), HOTKEY_PEEK);
@@ -993,21 +990,14 @@ fn register_peek_hotkey(hwnd: HWND, cfg: &Config) {
         return;
     }
 
-    let mut candidates: Vec<&str> = vec![cfg.peek_hotkey.as_str()];
-    candidates.extend(
-        PEEK_FALLBACKS
-            .iter()
-            .copied()
-            .filter(|f| !f.eq_ignore_ascii_case(cfg.peek_hotkey.trim())),
-    );
-
-    for spec in &candidates {
-        let Some((modifiers, key)) = platform::parse_hotkey(spec) else {
+    for spec in ephemeris_core::hotkey::candidates(&cfg.peek_hotkey) {
+        let Some(combo) = ephemeris_core::hotkey::parse(spec) else {
             log::warn(&format!("peek_hotkey '{spec}' is not a usable combination"));
             continue;
         };
+        let (modifiers, key) = platform::hotkey_codes(combo);
         if try_register(hwnd, modifiers, key) {
-            if *spec == cfg.peek_hotkey {
+            if spec == cfg.peek_hotkey.trim() {
                 log::info(&format!("Peek hotkey: {spec}"));
             } else {
                 log::warn(&format!(
@@ -1080,7 +1070,7 @@ fn end_peek(st: &mut State) {
     redraw(st);
 }
 
-// --- Zeitplanung ------------------------------------------------------------
+// --- Scheduling -------------------------------------------------------------
 
 fn on_tick(st: &mut State) {
     let now = Local::now();
@@ -1140,7 +1130,7 @@ fn on_sync_done(st: &mut State) {
             st.next_sync_at = Local::now() + ChronoDuration::minutes(interval);
         }
         Status::NeedsSetup(_) | Status::NeedsLogin(_) => {
-            // Ohne Benutzeraktion bringt ein Wiederholen nichts.
+            // Retrying achieves nothing without the user acting first.
             st.next_sync_at = Local::now() + ChronoDuration::minutes(interval.max(15));
         }
         _ => {
@@ -1163,13 +1153,11 @@ fn on_sync_done(st: &mut State) {
     kick(st);
 }
 
-/// Uebernimmt Aenderungen an `config.json` ohne Neustart.
+/// Picks up changes to `config.json` without a restart.
 fn reload_config_if_changed(st: &mut State) {
-    let current = config_mtime();
-    if current == st.config_mtime {
+    if config_mtime(st.theme_file.as_deref()) == st.config_mtime {
         return;
     }
-    st.config_mtime = current;
 
     let (cfg, error) = Config::load();
     if let Some(e) = &error {
@@ -1179,19 +1167,43 @@ fn reload_config_if_changed(st: &mut State) {
     }
 
     let scale_changed = (cfg.scale - st.scale).abs() > f32::EPSILON;
-    let (px, py, pw, ph) = target_geometry(&cfg, metrics_for(&cfg), st.dpi);
-    let palette = Palette::resolve(ThemePref::parse(&cfg.theme), &cfg.accent, st.visuals);
+    // Typography, density and the surface style are baked into the DirectWrite
+    // formats and the metrics at construction, so a change to any of them
+    // needs the same rebuild a change of scale does. A colour is not: it is
+    // uploaded per frame, and rebuilding for one would flicker the whole panel
+    // every time somebody nudges a value in a theme file.
+    let appearance = appearance_for(&cfg);
+    let layout_changed = appearance.layout_differs(&st.appearance);
+    let appearance_changed = appearance != st.appearance;
+    st.appearance = appearance;
+    // Stamped after the theme name is known, not before: switching from one
+    // named theme to another changes which file is watched, and stamping the
+    // outgoing one would leave a mismatch that reloads again on the next tick.
+    st.theme_file = cfg.appearance.file();
+    st.config_mtime = config_mtime(st.theme_file.as_deref());
+
+    // Compared rather than derived from the settings that feed it. The
+    // renderer caches these metrics at construction, so any move at all has to
+    // rebuild — and the list of settings that move them has grown twice now
+    // (`backdrop` decides the shadow margin, `theme: contrast` overrides the
+    // surface style). Asking `Metrics` directly cannot fall behind that list.
+    let previous_metrics = st.metrics;
+    st.metrics = metrics_for(&cfg, &st.appearance, st.visuals);
+    let metrics_changed = st.metrics != previous_metrics;
+    let (px, py, pw, ph) = target_geometry(&cfg, st.metrics, st.dpi);
+    let palette = palette_for(&cfg, &st.appearance, st.visuals, !appearance_changed);
     st.anim.enabled = palette.animations;
 
-    // Reading direction lives in the DirectWrite formats, so switching
-    // between LTR and RTL forces the same rebuild as a change of scale.
+    // Reading direction and the locale name both live in the DirectWrite
+    // formats, so a change to either forces the same rebuild as a change of
+    // scale. The locale name is not cosmetic: it selects the Han glyph shapes
+    // and the line breaking rules — see `render::locale_name`.
     let new_loc = Locale::resolve(&cfg.language);
-    let direction_changed = new_loc.rtl != st.loc.rtl;
-    tpmplaner_core::i18n::set_global(new_loc.cat);
+    let text_layout_changed = new_loc.rtl != st.loc.rtl || new_loc.tag != st.loc.tag;
+    ephemeris_core::i18n::set_global(new_loc.cat);
     st.loc = new_loc;
 
     st.scale = cfg.scale;
-    st.metrics = metrics_for(&cfg);
     {
         let mut guard = sync::lock(&st.shared);
         guard.config = cfg.clone();
@@ -1212,12 +1224,18 @@ fn reload_config_if_changed(st: &mut State) {
         );
     }
 
-    // Font sizes live in the DirectWrite formats and cannot be changed after
-    // the fact — a change of scale means rebuilding the renderer completely.
-    if scale_changed || direction_changed {
+    // Font sizes, the family, the header weight and the locale name live in
+    // the DirectWrite formats and cannot be changed after the fact, and the
+    // metrics are fixed at construction — so a change of scale, of the
+    // metrics, of the interface language or of the layout half of the
+    // customisation means rebuilding the renderer completely. Colours alone do
+    // not, which is what `layout_differs` separates out: they are uploaded per
+    // frame, and rebuilding for one would flicker the whole panel every time
+    // somebody nudges a value in a theme file.
+    if scale_changed || text_layout_changed || layout_changed || metrics_changed {
         recreate_renderer(st, pw.max(1) as u32, ph.max(1) as u32, palette);
     } else if let Some(r) = st.renderer.as_mut() {
-        r.set_palette(palette);
+        r.set_palette(palette, &st.appearance);
     }
     redraw(st);
 }
@@ -1239,25 +1257,74 @@ fn refresh_palette(st: &mut State) {
         visuals.transparency,
         visuals.animations
     ));
+    // Which corrections `customize` reports depends on both of these: contrast
+    // decides whether the custom colours are ignored at all, and a light or
+    // dark background decides what has to be corrected to stay readable. When
+    // either moves, the notes are genuinely new rather than the repetition
+    // `quiet` exists to suppress, and staying silent would hide the one that
+    // says the custom colours are being ignored.
+    let contrast_changed = visuals.high_contrast != st.visuals.high_contrast;
+    let notes_would_differ = contrast_changed || visuals.light != st.visuals.light;
     st.visuals = visuals;
 
     let cfg = sync::lock(&st.shared).config.clone();
-    let palette = Palette::resolve(ThemePref::parse(&cfg.theme), &cfg.accent, st.visuals);
+    let palette = palette_for(&cfg, &st.appearance, st.visuals, !notes_would_differ);
     st.anim.enabled = palette.animations;
     apply_backdrop(st.hwnd, &cfg, palette.dark);
+
+    // Contrast overrides the surface style, and the surface style decides
+    // whether the geometry reserves a shadow margin — so the window has to be
+    // resized and the renderer rebuilt around the new metrics, exactly as a
+    // change to the setting itself would.
+    if contrast_changed {
+        let metrics = metrics_for(&cfg, &st.appearance, st.visuals);
+        let moved = metrics != st.metrics;
+        st.metrics = metrics;
+        if moved {
+            let (px, py, pw, ph) = target_geometry(&cfg, st.metrics, st.dpi);
+            unsafe {
+                let _ = SetWindowPos(
+                    st.hwnd,
+                    Some(HWND_BOTTOM),
+                    px,
+                    py,
+                    pw,
+                    ph,
+                    SWP_NOACTIVATE | SWP_NOOWNERZORDER,
+                );
+            }
+            recreate_renderer(st, pw.max(1) as u32, ph.max(1) as u32, palette);
+            redraw(st);
+            return;
+        }
+    }
+
     if let Some(r) = st.renderer.as_mut() {
-        r.set_palette(palette);
+        r.set_palette(palette, &st.appearance);
     }
     redraw(st);
 }
 
-fn config_mtime() -> Option<SystemTime> {
-    std::fs::metadata(config::config_path())
-        .ok()
-        .and_then(|m| m.modified().ok())
+/// When the settings and the named theme file were last written.
+///
+/// Both, because a named theme lives in its own file: watching only
+/// `config.json` meant `"appearance": "midnight"` never picked up an edit to
+/// `midnight.theme.json` until the settings file happened to be rewritten for
+/// some unrelated reason — which is the advertised way to use a theme.
+///
+/// `None` in either slot is "no such file", and that is a state worth noticing
+/// rather than ignoring: a theme file appearing or being deleted changes the
+/// appearance just as much as an edit to one.
+type Stamps = (Option<SystemTime>, Option<SystemTime>);
+
+fn config_mtime(theme_file: Option<&Path>) -> Stamps {
+    fn stamp(path: &Path) -> Option<SystemTime> {
+        std::fs::metadata(path).ok().and_then(|m| m.modified().ok())
+    }
+    (stamp(&config::config_path()), theme_file.and_then(stamp))
 }
 
-// --- Maus -------------------------------------------------------------------
+// --- Mouse ------------------------------------------------------------------
 
 fn on_mouse_move(st: &mut State, lparam: LPARAM) {
     unsafe {
@@ -1317,7 +1384,7 @@ fn on_mouse_move(st: &mut State, lparam: LPARAM) {
     let hover = hit_at(st, x, y);
     if hover != st.hover {
         st.hover = hover;
-        // Beim Wechsel neu aufblenden statt hart umzuspringen.
+        // Fade in again on a change rather than jumping.
         st.anim.hover.jump(0.0);
         st.anim.hover.set(if hover.is_some() { 1.0 } else { 0.0 });
         kick(st);
@@ -1346,7 +1413,7 @@ fn on_left_down(st: &mut State, lparam: LPARAM) {
         // Sits on top of the row for as long as the grace period runs.
         Some(Hit::Undo(_)) => cancel_pending(st),
 
-        Some(Hit::TaskCheck(idx)) => begin_pending(st, idx),
+        Some(Hit::TaskCheck(key)) => begin_pending(st, key),
 
         Some(Hit::Event(idx)) | Some(Hit::Hero(idx)) => open_event(st, idx, false),
         Some(Hit::Tomorrow(idx)) => open_event(st, idx, true),
@@ -1380,7 +1447,11 @@ fn on_left_down(st: &mut State, lparam: LPARAM) {
             }
         }
 
-        // Leere Flaeche: Fenster verschieben.
+        // Empty space: drag the window — unless it is pinned, in which case
+        // the click does nothing at all. That is the point of the lock: the
+        // widget sits below everything and is grabbed by its empty space, so
+        // reaching past it for something on the desktop moves it by accident.
+        None if is_locked(st) => {}
         None => unsafe {
             let mut cursor = POINT::default();
             let _ = GetCursorPos(&mut cursor);
@@ -1413,8 +1484,24 @@ fn open_event(st: &State, idx: usize, tomorrow: bool) {
     }
 }
 
+/// Is the widget pinned where it is?
+///
+/// Read from the settings rather than cached on [`State`], so an edit to
+/// `config.json` takes effect at the next reload like every other setting
+/// without a second copy to keep in step.
+fn is_locked(st: &State) -> bool {
+    sync::lock(&st.shared).config.locked
+}
+
 /// Which edge is under the pointer? Coordinates in DIPs.
+///
+/// Nothing at all while the widget is locked, which is what removes the resize
+/// cursor along with the resize: an edge that still shows a double arrow but
+/// refuses to move reads as a bug rather than as a decision.
 fn edge_at(st: &State, x: f32, y: f32) -> Edges {
+    if is_locked(st) {
+        return Edges::NONE;
+    }
     let Some(r) = st.renderer.as_ref() else {
         return Edges::NONE;
     };
@@ -1491,13 +1578,26 @@ fn save_geometry(st: &mut State) {
         guard.config.height = (wr.bottom - wr.top) as f32 / scale - st.metrics.shadow * 2.0;
         guard.config.save();
     }
-    st.config_mtime = config_mtime();
+    st.config_mtime = config_mtime(st.theme_file.as_deref());
 }
 
 /// Hit testing back to front: the regions drawn last (those on top) win —
 /// which is how the tick circle beats the task row, and the undo area beats
 /// them both.
+///
+/// The point is folded first. The rectangles come out of `ephemeris_core`
+/// unmirrored and the drawing is mirrored at the primitives, so a raw client
+/// position and a hit rectangle are in different coordinates in a right-to-left
+/// layout. See [`hit_point`].
 fn hit_at(st: &State, x: f32, y: f32) -> Option<Hit> {
+    let (x, y) = if st.loc.rtl {
+        // No renderer means nothing has been drawn, so there are no regions to
+        // be wrong about either.
+        let (w, h) = st.renderer.as_ref()?.size_dip();
+        hit_point(&Panel::new(w, h, &st.metrics), true, x, y)
+    } else {
+        (x, y)
+    };
     st.hits
         .iter()
         .rev()
@@ -1524,10 +1624,15 @@ fn save_position(st: &mut State) {
         }
     }
     // Do not mistake our own save for someone else's edit.
-    st.config_mtime = config_mtime();
+    st.config_mtime = config_mtime(st.theme_file.as_deref());
 }
 
 /// Brings the window back when its position is no longer on any monitor.
+///
+/// Runs even while the widget is locked, and deliberately so: the lock exists
+/// to stop the *user* moving it by accident, not to let an unplugged monitor
+/// strand it somewhere with no way back. A lock that could hide the widget for
+/// good would be a trap rather than a convenience.
 fn rescue_offscreen(st: &mut State) {
     unsafe {
         let mut wr = RECT::default();
@@ -1542,7 +1647,7 @@ fn rescue_offscreen(st: &mut State) {
             guard.config.save();
             guard.config.clone()
         };
-        st.config_mtime = config_mtime();
+        st.config_mtime = config_mtime(st.theme_file.as_deref());
 
         let (px, py, pw, ph) = target_geometry(&cfg, st.metrics, st.dpi);
         let _ = SetWindowPos(
@@ -1557,7 +1662,7 @@ fn rescue_offscreen(st: &mut State) {
     }
 }
 
-// --- Zeichnen ---------------------------------------------------------------
+// --- Drawing ----------------------------------------------------------------
 
 fn redraw(st: &mut State) {
     // Copy the Arc, not the contents: during an animation this runs 60 times
@@ -1567,7 +1672,7 @@ fn redraw(st: &mut State) {
     let guard = sync::lock(&shared);
 
     let undo = st.pending.as_ref().map(|p| UndoView {
-        task_id: p.task_id.as_str(),
+        key: TaskKey::new(&p.account_id, &p.tasklist_id, &p.task_id),
         remaining: 1.0
             - (p.started.elapsed().as_secs_f32() / p.window.as_secs_f32()).clamp(0.0, 1.0),
     });
@@ -1618,9 +1723,7 @@ fn redraw(st: &mut State) {
             let (w, h) = current_size_px(st.hwnd);
             let pal = st.renderer.as_ref().map(|r| r.palette());
             let cfg = sync::lock(&st.shared).config.clone();
-            let pal = pal.unwrap_or_else(|| {
-                Palette::resolve(ThemePref::parse(&cfg.theme), &cfg.accent, st.visuals)
-            });
+            let pal = pal.unwrap_or_else(|| palette_for(&cfg, &st.appearance, st.visuals, true));
             recreate_renderer(st, w, h, pal);
         }
         Err(_) => {}
@@ -1636,9 +1739,11 @@ fn recreate_renderer(st: &mut State, width_px: u32, height_px: u32, pal: Palette
         width_px.max(1),
         height_px.max(1),
         st.dpi,
-        st.scale,
+        st.metrics,
         pal,
         st.loc.rtl,
+        &st.appearance,
+        &st.loc.tag,
     )
     .ok();
     if st.renderer.is_none() {
@@ -1660,100 +1765,85 @@ fn current_size_px(hwnd: HWND) -> (u32, u32) {
     }
 }
 
-// --- Kontextmenue -----------------------------------------------------------
+// --- Context menu -----------------------------------------------------------
 
+/// Puts the shared menu model on screen as a Win32 popup, and runs whatever
+/// was picked.
+///
+/// What the menu *contains* is decided in [`ephemeris_core::menu`], so this
+/// function only translates: an [`Entry`] becomes an `AppendMenuW` call, and a
+/// command identifier becomes an index into the commands collected on the way
+/// in. That indirection replaces the block of `CMD_*` constants this used to
+/// carry — with three front ends the identifiers would otherwise have to agree
+/// across all of them by hand.
 fn show_menu(st: &mut State) {
+    let autostart = platform::autostart_enabled();
+    let (calendars, tasklists, selected_cal, selected_list, update_available, locked) = {
+        let g = sync::lock(&st.shared);
+        (
+            g.calendars.clone(),
+            g.tasklists.clone(),
+            g.config.calendar_ids.clone(),
+            g.config.tasklist_ids.clone(),
+            g.update.is_some(),
+            g.config.locked,
+        )
+    };
+    let entries = menu::context_menu(&menu::Inputs {
+        cat: st.loc.cat,
+        autostart,
+        // Windows always can: it is a value under the Run key.
+        can_autostart: true,
+        locked,
+        calendars: &calendars,
+        tasklists: &tasklists,
+        selected_calendars: &selected_cal,
+        selected_tasklists: &selected_list,
+        update_available,
+        // No sync thread in demo mode, so nothing would receive the command.
+        can_relogin: st.sync.is_some(),
+    });
+
     unsafe {
-        let Ok(menu) = CreatePopupMenu() else { return };
-        let autostart = platform::autostart_enabled();
-        let c = st.loc.cat;
-
-        // The labels come from the catalogue and therefore have to be
-        // converted to UTF-16 at run time; `w!()` only handles literals.
-        let item = |flags: MENU_ITEM_FLAGS, id: usize, label: &str| {
-            let text = platform::wide(label);
-            let _ = AppendMenuW(menu, flags, id, PCWSTR(text.as_ptr()));
-        };
-
-        item(MF_STRING, CMD_SYNC, c.menu_sync);
-        item(
-            if autostart {
-                MF_STRING | MF_CHECKED
-            } else {
-                MF_STRING
-            },
-            CMD_AUTOSTART,
-            c.menu_autostart,
-        );
-        // Select and deselect sources straight from the menu. The ids are
-        // long, email-like strings, and copying them into the JSON by hand was
-        // the most unpleasant part of the setup.
-        let (calendars, tasklists, selected_cal, selected_list) = {
-            let g = sync::lock(&st.shared);
-            (
-                g.calendars.clone(),
-                g.tasklists.clone(),
-                g.config.calendar_ids.clone(),
-                g.config.tasklist_ids.clone(),
-            )
-        };
-        let mut sources = Vec::new();
-        if !calendars.is_empty() {
-            sources.push((
-                c.menu_calendars,
-                &calendars,
-                &selected_cal,
-                CMD_CALENDAR_BASE,
-            ));
-        }
-        if !tasklists.is_empty() {
-            sources.push((
-                c.menu_tasklists,
-                &tasklists,
-                &selected_list,
-                CMD_TASKLIST_BASE,
-            ));
-        }
-        if !sources.is_empty() {
-            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-        }
-        // Untermenues muessen leben, bis `TrackPopupMenu` zurueckkehrt.
+        let Ok(popup) = CreatePopupMenu() else { return };
+        // Identifier zero means "nothing was chosen", so the commands are
+        // numbered from one.
+        let mut commands: Vec<menu::Command> = Vec::with_capacity(entries.len());
+        // Submenus have to stay alive until `TrackPopupMenu` returns.
         let mut submenus = Vec::new();
-        for (label, entries, selected, base) in sources {
-            let Ok(sub) = CreatePopupMenu() else { continue };
-            for (i, (id, name)) in entries.iter().enumerate() {
-                // An empty selection means "all" — so everything is ticked.
-                let checked = selected.is_empty() || selected.contains(id);
-                let text = platform::wide(name);
-                let _ = AppendMenuW(
-                    sub,
-                    if checked {
-                        MF_STRING | MF_CHECKED
-                    } else {
-                        MF_STRING
-                    },
-                    base + i,
-                    PCWSTR(text.as_ptr()),
-                );
-            }
-            let text = platform::wide(label);
-            let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, PCWSTR(text.as_ptr()));
-            submenus.push(sub);
-        }
 
-        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-        // Only offered when there is something to install.
-        if sync::lock(&st.shared).update.is_some() {
-            item(MF_STRING, CMD_UPDATE, c.menu_update);
+        let append = |target: HMENU, item: &menu::Item, commands: &mut Vec<menu::Command>| {
+            commands.push(item.command);
+            let mut flags = MF_STRING;
+            if item.checked {
+                flags |= MF_CHECKED;
+            }
+            if !item.enabled {
+                flags |= MF_GRAYED;
+            }
+            // The labels come from the catalogue and therefore have to be
+            // converted to UTF-16 at run time; `w!()` only handles literals.
+            let text = platform::wide(&item.label);
+            let _ = AppendMenuW(target, flags, commands.len(), PCWSTR(text.as_ptr()));
+        };
+
+        for entry in &entries {
+            match entry {
+                menu::Entry::Separator => {
+                    let _ = AppendMenuW(popup, MF_SEPARATOR, 0, PCWSTR::null());
+                }
+                menu::Entry::Item(item) => append(popup, item, &mut commands),
+                menu::Entry::Submenu(label, items) => {
+                    let Ok(sub) = CreatePopupMenu() else { continue };
+                    for item in items {
+                        append(sub, item, &mut commands);
+                    }
+                    let text = platform::wide(label);
+                    let _ = AppendMenuW(popup, MF_POPUP, sub.0 as usize, PCWSTR(text.as_ptr()));
+                    submenus.push(sub);
+                }
+            }
         }
-        item(MF_STRING, CMD_COPY, c.menu_copy);
-        item(MF_STRING, CMD_CONFIG, c.menu_config);
-        item(MF_STRING, CMD_RESET_POS, c.menu_reset_pos);
-        item(MF_STRING, CMD_LOG, c.menu_log);
-        item(MF_STRING, CMD_FOLDER, c.menu_folder);
-        item(MF_STRING, CMD_RELOGIN, c.menu_relogin);
-        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-        item(MF_STRING, CMD_QUIT, c.menu_quit);
 
         let mut pt = POINT::default();
         let _ = GetCursorPos(&mut pt);
@@ -1770,7 +1860,7 @@ fn show_menu(st: &mut State) {
             TPM_LEFTALIGN
         };
         let choice = TrackPopupMenu(
-            menu,
+            popup,
             TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY | align,
             pt.x,
             pt.y,
@@ -1782,66 +1872,110 @@ fn show_menu(st: &mut State) {
         for sub in submenus {
             let _ = DestroyMenu(sub);
         }
-        let _ = DestroyMenu(menu);
+        let _ = DestroyMenu(popup);
 
-        match choice.0 as usize {
-            CMD_SYNC => request_sync(st),
-            CMD_AUTOSTART => {
-                platform::set_autostart(!autostart);
-                log::info(if autostart {
-                    "Autostart deaktiviert"
-                } else {
-                    "Autostart aktiviert"
-                });
-            }
-            CMD_CONFIG => {
-                // Make sure the file exists before opening it — the editor
-                // should not report "not found".
-                sync::lock(&st.shared).config.save();
-                st.config_mtime = config_mtime();
-                platform::open_path(&config::config_path());
-            }
-            CMD_RESET_POS => {
-                {
-                    let mut guard = sync::lock(&st.shared);
-                    guard.config.x = None;
-                    guard.config.y = None;
-                    guard.config.save();
-                }
-                st.config_mtime = config_mtime();
-                let cfg = sync::lock(&st.shared).config.clone();
-                let (px, py, pw, ph) = target_geometry(&cfg, st.metrics, st.dpi);
-                let _ = SetWindowPos(
-                    st.hwnd,
-                    Some(HWND_BOTTOM),
-                    px,
-                    py,
-                    pw,
-                    ph,
-                    SWP_NOACTIVATE | SWP_NOOWNERZORDER,
-                );
-            }
-            CMD_UPDATE => start_update(st),
-            CMD_COPY => copy_agenda(st),
-            CMD_LOG => platform::open_path(&log::file_path()),
-            id if (CMD_CALENDAR_BASE..CMD_CALENDAR_BASE + calendars.len()).contains(&id) => {
-                toggle_source(st, true, id - CMD_CALENDAR_BASE);
-            }
-            id if (CMD_TASKLIST_BASE..CMD_TASKLIST_BASE + tasklists.len()).contains(&id) => {
-                toggle_source(st, false, id - CMD_TASKLIST_BASE);
-            }
-            CMD_FOLDER => platform::open_path(&config::data_dir()),
-            CMD_RELOGIN => {
-                if let Some(s) = st.sync.as_ref() {
-                    s.send(Command::Relogin);
-                }
-                st.anim.spinning = true;
-                kick(st);
-            }
-            CMD_QUIT => {
-                let _ = DestroyWindow(st.hwnd);
-            }
-            _ => {}
+        let picked = (choice.0 as usize)
+            .checked_sub(1)
+            .and_then(|i| commands.get(i).copied());
+        if let Some(command) = picked {
+            run_command(st, command, autostart);
         }
+    }
+}
+
+/// Carries out a menu choice.
+///
+/// Separate from the presentation above so the `match` is exhaustive over
+/// [`menu::Command`] with nothing else in scope: a command added to the core
+/// stops compiling here until this front end says what it does.
+fn run_command(st: &mut State, command: menu::Command, autostart: bool) {
+    match command {
+        menu::Command::Sync => request_sync(st),
+        menu::Command::Autostart => {
+            platform::set_autostart(!autostart);
+            log::info(if autostart {
+                "Autostart disabled"
+            } else {
+                "Autostart enabled"
+            });
+        }
+        menu::Command::Lock => toggle_lock(st),
+        menu::Command::OpenConfig => {
+            // Make sure the file exists before opening it — the editor should
+            // not report "not found".
+            sync::lock(&st.shared).config.save();
+            st.config_mtime = config_mtime(st.theme_file.as_deref());
+            platform::open_path(&config::config_path());
+        }
+        menu::Command::ResetPosition => reset_position(st),
+        menu::Command::OpenLog => platform::open_path(&log::file_path()),
+        menu::Command::OpenDataFolder => platform::open_path(&config::data_dir()),
+        menu::Command::InstallUpdate => start_update(st),
+        menu::Command::CopyAgenda => copy_agenda(st),
+        menu::Command::Relogin => {
+            if let Some(s) = st.sync.as_ref() {
+                s.send(Command::Relogin);
+            }
+            st.anim.spinning = true;
+            kick(st);
+        }
+        menu::Command::Quit => unsafe {
+            let _ = DestroyWindow(st.hwnd);
+        },
+        menu::Command::Calendar(i) => toggle_source(st, true, i),
+        menu::Command::Tasklist(i) => toggle_source(st, false, i),
+    }
+}
+
+/// Pins the widget where it is, or lets it go again.
+///
+/// Written to `config.json` rather than kept in memory: the point of the lock
+/// is that the widget stays put, and a setting that forgets itself at the next
+/// restart would not do that.
+fn toggle_lock(st: &mut State) {
+    let locked = {
+        let mut guard = sync::lock(&st.shared);
+        guard.config.locked = !guard.config.locked;
+        guard.config.save();
+        guard.config.locked
+    };
+    st.config_mtime = config_mtime(st.theme_file.as_deref());
+    log::info(if locked {
+        "Position and size locked"
+    } else {
+        "Position and size unlocked"
+    });
+
+    // The pointer may be sitting on a resize grip that has just stopped being
+    // one. Without this the double arrow stays until the mouse next moves.
+    st.hover_edge = Edges::NONE;
+    unsafe {
+        if let Ok(cursor) = LoadCursorW(None, IDC_ARROW) {
+            SetCursor(Some(cursor));
+        }
+    }
+}
+
+/// Forgets a hand-placed position and goes back to the default corner.
+fn reset_position(st: &mut State) {
+    {
+        let mut guard = sync::lock(&st.shared);
+        guard.config.x = None;
+        guard.config.y = None;
+        guard.config.save();
+    }
+    st.config_mtime = config_mtime(st.theme_file.as_deref());
+    let cfg = sync::lock(&st.shared).config.clone();
+    let (px, py, pw, ph) = target_geometry(&cfg, st.metrics, st.dpi);
+    unsafe {
+        let _ = SetWindowPos(
+            st.hwnd,
+            Some(HWND_BOTTOM),
+            px,
+            py,
+            pw,
+            ph,
+            SWP_NOACTIVATE | SWP_NOOWNERZORDER,
+        );
     }
 }

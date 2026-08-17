@@ -13,7 +13,7 @@
 - [ ] `cargo fmt --all`
 - [ ] `cargo clippy --workspace --all-targets -- -D warnings`
 - [ ] `cargo test --workspace`
-- [ ] No operating system call was added to `tpmplaner-core`
+- [ ] No operating system call was added to `ephemeris-core`
 - [ ] Comments and documentation are in English
 
 ## What I could not verify

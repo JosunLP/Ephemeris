@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! Animation state.
 //!
 //! Deliberately without a render loop: the window starts a 16 ms timer *only*

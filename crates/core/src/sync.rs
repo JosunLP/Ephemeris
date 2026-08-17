@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! Background synchronisation on a thread of its own.
 //!
 //! The user interface owns all the scheduling and sends commands in; this
@@ -10,13 +10,15 @@ use crate::config::{self, Config};
 use crate::host::Waker;
 use crate::log;
 use crate::model::{
-    Agenda, Event, Task, filter_tasks_for_today, local_day_start, sort_events, sort_tasks,
+    Agenda, Event, Task, filter_tasks_for_today, link_task_time_blocks, local_day_start,
+    sort_events, sort_tasks, title_key,
 };
 use crate::provider::{
     self, AccountConfig, CalendarProvider, CalendarRef, Error, FetchRequest, Kind, TaskListRef,
 };
-use chrono::{Duration as ChronoDuration, Local};
-use std::collections::HashMap;
+use chrono::{Duration as ChronoDuration, Local, NaiveDate};
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -55,7 +57,7 @@ pub struct Shared {
     pub agenda: Agenda,
     pub status: Status,
     pub config: Config,
-    /// Syntaxfehler in `config.json`, falls vorhanden.
+    /// Syntax error in `config.json`, if there is one.
     pub config_error: Option<String>,
     /// Available calendars as `(id, name)`, the basis for picking them in the
     /// context menu. Before this, the ids had to be typed into the settings
@@ -100,6 +102,70 @@ impl Meta {
             }
         }
         (calendars, lists)
+    }
+}
+
+/// Time blocks whose task has been completed, so a sync cannot bring them back.
+///
+/// Ticking a task off takes its calendar entry with it (see
+/// [`Agenda::complete_task`]), but the next sync asks the provider again, and
+/// whether the entry is still there depends on the service. Google hides a
+/// completed task from the calendar grid, so most likely it is not — but that
+/// could not be confirmed against a live account, and if the entry does come
+/// back the row the user just dismissed reappears a minute later.
+///
+/// So the completed block is remembered and dropped on arrival. Deliberately
+/// narrow, because this is the one part of the fix that can hide something it
+/// should not:
+///
+/// * only a task that actually had a block on screen is remembered — a plain
+///   task cannot suppress anything;
+/// * the entry is matched on account and title, exactly as the pairing is;
+/// * and the set is emptied when the day rolls over and lives only for as long
+///   as the process does.
+///
+/// [`drop_completed`] logs whenever it takes something, so the log answers the
+/// question the issue could not: if that line never appears, the provider
+/// clears the block itself and this can go.
+#[derive(Default)]
+struct CompletedBlocks {
+    day: Option<NaiveDate>,
+    /// `(account id, normalised title)`.
+    keys: HashSet<(String, String)>,
+}
+
+impl CompletedBlocks {
+    fn remember(&mut self, today: NaiveDate, account_id: &str, title: &str) {
+        self.roll_over(today);
+        self.keys.insert((account_id.to_string(), title_key(title)));
+    }
+
+    /// Takes the remembered blocks out of a freshly fetched list.
+    fn drop_completed(&mut self, today: NaiveDate, events: &mut Vec<Event>) {
+        self.roll_over(today);
+        if self.keys.is_empty() {
+            return;
+        }
+        events.retain(|e| {
+            let gone = self
+                .keys
+                .contains(&(e.account_id.clone(), title_key(&e.title)));
+            if gone {
+                log::info(&format!(
+                    "Dropping '{}': its task was completed and the provider still returns the \
+                     time block",
+                    e.title
+                ));
+            }
+            !gone
+        });
+    }
+
+    fn roll_over(&mut self, today: NaiveDate) {
+        if self.day != Some(today) {
+            self.day = Some(today);
+            self.keys.clear();
+        }
     }
 }
 
@@ -211,17 +277,22 @@ impl SyncHandle {
 pub fn spawn(shared: Arc<Mutex<Shared>>, waker: Arc<dyn Waker>) -> SyncHandle {
     let (tx, rx) = channel();
     std::thread::Builder::new()
-        .name("tpmplaner-sync".into())
+        .name("ephemeris-sync".into())
         .spawn(move || worker(shared, waker, rx))
         .expect("could not start the sync thread");
     SyncHandle { tx }
 }
 
 fn worker(shared: Arc<Mutex<Shared>>, waker: Arc<dyn Waker>, rx: Receiver<Command>) {
+    // Here rather than in `spawn`, so a directory listing never lands on the
+    // front end's thread. Once per process is enough: nothing but this thread
+    // writes the cache.
+    sweep_stale_cache_files();
     let mut providers = build_providers(&snapshot_config(&shared).effective_accounts());
     let mut meta: Option<Meta> = None;
     // Ride along with the sync run rather than opening a second connection.
     let mut last_update_check: Option<Instant> = None;
+    let mut completed = CompletedBlocks::default();
 
     while let Ok(first) = rx.recv() {
         for cmd in coalesce(first, &rx) {
@@ -239,7 +310,7 @@ fn worker(shared: Arc<Mutex<Shared>>, waker: Arc<dyn Waker>, rx: Receiver<Comman
                         providers = build_providers(&wanted);
                         meta = None;
                     }
-                    let result = run_sync(&mut providers, cfg, &mut meta);
+                    let result = run_sync(&mut providers, cfg, &mut meta, &mut completed);
                     publish_sources(&shared, &meta);
                     apply_sync_result(&shared, &waker, result);
                     check_for_update(&shared, &waker, &mut last_update_check);
@@ -255,7 +326,7 @@ fn worker(shared: Arc<Mutex<Shared>>, waker: Arc<dyn Waker>, rx: Receiver<Comman
                     providers = build_providers(&cfg.effective_accounts());
                     // The directory belonged to the previous sign-in.
                     meta = None;
-                    let result = run_sync(&mut providers, cfg, &mut meta);
+                    let result = run_sync(&mut providers, cfg, &mut meta, &mut completed);
                     publish_sources(&shared, &meta);
                     apply_sync_result(&shared, &waker, result);
                 }
@@ -273,19 +344,33 @@ fn worker(shared: Arc<Mutex<Shared>>, waker: Arc<dyn Waker>, rx: Receiver<Comman
                         None => Err(Error::Other(format!("Unknown account '{account_id}'"))),
                     };
 
+                    let key = crate::model::TaskKey::new(&account_id, &tasklist_id, &task_id);
                     let mut guard = lock(&shared);
                     match outcome {
                         Ok(()) => {
-                            // Remove for good; the next regular sync confirms it.
-                            guard.agenda.tasks.retain(|t| t.id != task_id);
+                            // Remove for good; the next regular sync confirms
+                            // it. The task's time block goes with it — to the
+                            // user that was one item, however many APIs it
+                            // came out of.
+                            let blocks = guard.agenda.complete_task(key);
+                            // The wall clock, not `agenda.day` — that one is
+                            // the day of the *last sync*, and `drop_completed`
+                            // stamps the set with the wall clock. Ticking a
+                            // task off at 00:03 after a 23:55 sync would file
+                            // it under yesterday, and the next sync would then
+                            // decide the day had rolled over and empty the set
+                            // — bringing the block straight back.
+                            let today = Local::now().date_naive();
+                            for block in &blocks {
+                                completed.remember(today, &block.account_id, &block.title);
+                            }
                             guard.status = Status::Idle;
                             write_cache(&guard.agenda);
                         }
                         Err(e) => {
                             log::error(&format!("Completing task failed: {e}"));
-                            // Undo the optimistic hide.
-                            if let Some(t) = guard.agenda.tasks.iter_mut().find(|t| t.id == task_id)
-                            {
+                            // Undo the optimistic hide, on that task alone.
+                            if let Some(t) = guard.agenda.task_mut(key) {
                                 t.completing = false;
                             }
                             guard.status = status_for(&e);
@@ -380,6 +465,7 @@ fn run_sync(
     providers: &mut [Box<dyn CalendarProvider>],
     cfg: Config,
     meta: &mut Option<Meta>,
+    completed: &mut CompletedBlocks,
 ) -> std::result::Result<Agenda, Error> {
     let started = Instant::now();
     let today = Local::now().date_naive();
@@ -416,7 +502,13 @@ fn run_sync(
             log::warn(&format!("Account '{}': {e}", account.display_name));
             continue;
         }
-        events.extend(account.events.iter().cloned());
+        for event in &account.events {
+            let mut event = event.clone();
+            // Stamp the origin, as the tasks below get it: a title only
+            // identifies an entry within one account.
+            event.account_id = account.account_id.clone();
+            events.push(event);
+        }
         directory.insert(
             account.account_id.clone(),
             provider::Directory {
@@ -459,6 +551,8 @@ fn run_sync(
     let (mut events, mut next_day): (Vec<Event>, Vec<Event>) = events
         .into_iter()
         .partition(|e| e.start.map(|s| s < midnight).unwrap_or(true));
+    completed.drop_completed(today, &mut events);
+    completed.drop_completed(today, &mut next_day);
     sort_events(&mut events);
     sort_events(&mut next_day);
 
@@ -466,6 +560,11 @@ fn run_sync(
     // drops everything still in the future for every provider alike.
     let mut tasks = filter_tasks_for_today(tasks, today, cfg.show_undated_tasks);
     sort_tasks(&mut tasks);
+
+    // After the filter, so an entry can only ever be tied to a task the user
+    // can actually see and tick off.
+    link_task_time_blocks(&mut events, &tasks);
+    link_task_time_blocks(&mut next_day, &tasks);
 
     log::info(&format!(
         "Sync ok: {} events today (+{} tomorrow), {} tasks, {}/{} accounts, {} ms",
@@ -548,12 +647,201 @@ pub fn read_cache() -> Option<Agenda> {
     Some(agenda)
 }
 
+/// Replaces the cache in one step.
+///
+/// A plain write truncates first, so anything reading concurrently can catch
+/// the file half written — and nothing stops a second copy of the program from
+/// running: the Unix front end's single-instance check is still a stub. Writing
+/// beside the file and renaming over it means every reader sees one complete
+/// version or the other. `rename` replaces an existing file on POSIX and on
+/// Windows alike.
+///
+/// [`read_cache`] would survive the torn file — it treats unparseable JSON as
+/// no cache — but at the cost of the day's agenda, which is the thing the cache
+/// exists to keep across a restart.
+///
+/// The process id in the temporary name keeps two writers off the same scratch
+/// path.
 fn write_cache(agenda: &Agenda) {
     let path = config::cache_path();
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
+    if let Some(dir) = path.parent()
+        && let Err(e) = std::fs::create_dir_all(dir)
+    {
+        log::warn(&format!("Could not create {}: {e}", dir.display()));
+        return;
     }
-    if let Ok(json) = serde_json::to_string(agenda) {
-        let _ = std::fs::write(path, json);
+    let json = match serde_json::to_string(agenda) {
+        Ok(json) => json,
+        Err(e) => {
+            log::warn(&format!("Could not encode the agenda for the cache: {e}"));
+            return;
+        }
+    };
+    let tmp = path.with_extension(format!("tmp{}", std::process::id()));
+    // Every step says why it failed. Silence here has one symptom — the widget
+    // is blank for a moment at every start, because `read_cache` finds nothing
+    // — and that symptom points nowhere on its own. The rename in particular
+    // fails in a way the plain write did not: on Windows, replacing a file
+    // another process holds open is a sharing violation, and `read_cache` opens
+    // this file at every start-up of every copy.
+    //
+    // Cleaned up whichever step failed, not only a failed rename: a write that
+    // failed part-way — a full disk is the ordinary cause — leaves the file
+    // behind, and the name carries the process id, so nothing later reuses it.
+    if let Err(e) = std::fs::write(&tmp, &json) {
+        log::warn(&format!("Could not write {}: {e}", tmp.display()));
+    } else if let Err(e) = std::fs::rename(&tmp, &path) {
+        log::warn(&format!("Could not replace {}: {e}", path.display()));
+    } else {
+        return;
+    }
+    let _ = std::fs::remove_file(&tmp);
+}
+
+/// Removes scratch files an earlier run left behind.
+///
+/// [`write_cache`] cleans up after itself, but it cannot clean up after a
+/// process that was killed between the write and the rename — and the name
+/// carries that process's id, so nothing later ever reclaims it. Called once at
+/// start-up, where the cost is one directory listing.
+///
+/// Only this program's own scratch names, and only in its own data directory.
+/// Another copy of the widget running right now would have its file swept from
+/// under it; that is why the sweep is at start-up rather than on every write,
+/// where the window would be wide open.
+fn sweep_stale_cache_files() {
+    for path in stale_tmp_files(&config::cache_path(), std::process::id()) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+/// Which scratch files beside `cache` are not this process's own.
+///
+/// Split from [`sweep_stale_cache_files`] so the matching can be tested against
+/// a directory of its own, without standing up a host to point
+/// [`config::cache_path`] somewhere safe. Deleting is the easy half; picking
+/// exactly the right files is the half worth a test.
+fn stale_tmp_files(cache: &Path, my_pid: u32) -> Vec<PathBuf> {
+    let (Some(dir), Some(stem)) = (cache.parent(), cache.file_stem()) else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let prefix = format!("{}.tmp", stem.to_string_lossy());
+    let mine = format!("{prefix}{my_pid}");
+    entries
+        .flatten()
+        .filter(|e| {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            // The suffix has to be a process id and nothing else, or a
+            // `cache.tmp.bak` somebody left in the folder counts as ours.
+            name.strip_prefix(&prefix)
+                .is_some_and(|pid| !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit()))
+                && name != mine.as_str()
+        })
+        .map(|e| e.path())
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn event(account: &str, title: &str) -> Event {
+        Event {
+            title: title.into(),
+            start: None,
+            end: None,
+            all_day: true,
+            location: None,
+            html_link: None,
+            join_url: None,
+            color: 0,
+            calendar_name: "K".into(),
+            calendar_id: "k".into(),
+            account_id: account.into(),
+            task_id: None,
+            task_list_id: None,
+        }
+    }
+
+    #[test]
+    fn a_completed_time_block_does_not_come_back_on_the_next_sync() {
+        let today = NaiveDate::from_ymd_opt(2026, 8, 8).unwrap();
+        let mut completed = CompletedBlocks::default();
+        completed.remember(today, "google", "Write the quarterly report");
+
+        // What the provider hands back a minute later, if it keeps the entry.
+        let mut fetched = vec![
+            event("google", "Write the quarterly report"),
+            event("google", "Dentist"),
+            // The same title, but the other account never had it completed.
+            event("work", "Write the quarterly report"),
+        ];
+        completed.drop_completed(today, &mut fetched);
+
+        let titles: Vec<(&str, &str)> = fetched
+            .iter()
+            .map(|e| (e.account_id.as_str(), e.title.as_str()))
+            .collect();
+        assert_eq!(
+            titles,
+            vec![
+                ("google", "Dentist"),
+                ("work", "Write the quarterly report")
+            ]
+        );
+    }
+
+    #[test]
+    fn the_suppression_ends_with_the_day() {
+        // Tomorrow the same title is an ordinary entry again — the block that
+        // was ticked off belonged to yesterday.
+        let today = NaiveDate::from_ymd_opt(2026, 8, 8).unwrap();
+        let mut completed = CompletedBlocks::default();
+        completed.remember(today, "google", "Water the plants");
+
+        let mut fetched = vec![event("google", "Water the plants")];
+        completed.drop_completed(today + ChronoDuration::days(1), &mut fetched);
+        assert_eq!(fetched.len(), 1);
+        assert!(completed.keys.is_empty());
+    }
+
+    #[test]
+    fn the_sweep_takes_stale_scratch_files_and_nothing_else() {
+        // The process id is in the directory name, not just for tidiness: a
+        // fixed path under the shared temp directory is the same path for every
+        // run on the machine, so two overlapping `cargo test` invocations —
+        // two checkouts, an editor testing while the terminal does — would have
+        // one deleting the other's fixtures mid-assertion, and the failure
+        // would look like a bug in `stale_tmp_files`.
+        let dir = std::env::temp_dir().join(format!("ephemeris-test-sweep{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch directory");
+        let cache = dir.join("cache.json");
+
+        for name in [
+            "cache.json",     // the cache itself
+            "cache.tmp4242",  // another run's leftover — the one to take
+            "cache.tmp99",    // and another
+            "cache.tmp1234",  // ours, still being written
+            "cache.tmp",      // no process id at all
+            "cache.tmp.bak",  // not a scratch file
+            "cache.json.bak", // nor this
+            "config.json",    // and nothing else in the folder
+        ] {
+            std::fs::write(dir.join(name), "{}").expect("fixture");
+        }
+
+        let mut found: Vec<String> = stale_tmp_files(&cache, 1234)
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        found.sort();
+        assert_eq!(found, ["cache.tmp4242", "cache.tmp99"]);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! Windows DPAPI wrapper for stored credentials.
 //!
 //! A refresh token is standing access to a calendar account and has no
@@ -7,6 +7,7 @@
 //! Windows user account: another user of the same machine cannot read it, and
 //! copying the file to a different machine makes it worthless.
 
+use ephemeris_core::log;
 use windows::Win32::Foundation::{HLOCAL, LocalFree};
 use windows::Win32::Security::Cryptography::{
     BCRYPT_USE_SYSTEM_PREFERRED_RNG, BCryptGenRandom, CRYPT_INTEGER_BLOB, CryptProtectData,
@@ -17,10 +18,20 @@ use windows::core::PCWSTR;
 /// Base entropy. The per-account tag is appended so one account's stored
 /// token cannot be decrypted in the context of another, and so a file copied
 /// from a different program is useless here.
-const ENTROPY_BASE: &[u8] = b"TPMPlaner/v1/";
+const ENTROPY_BASE: &[u8] = b"Ephemeris/v1/";
 
-fn entropy_for(tag: &[u8]) -> Vec<u8> {
-    let mut buf = ENTROPY_BASE.to_vec();
+/// The base the same secrets were encrypted with before the program was
+/// renamed.
+///
+/// The entropy is part of the key: a refresh token written by the previous
+/// version cannot be decrypted with the base above, and dropping it would mean
+/// every existing installation silently losing its calendar sign-ins on
+/// upgrade. So [`unprotect`] falls back to this one, and what it decrypts is
+/// written back under the current base the next time that secret is stored.
+const LEGACY_ENTROPY_BASE: &[u8] = b"TPMPlaner/v1/";
+
+fn entropy_for(base: &[u8], tag: &[u8]) -> Vec<u8> {
+    let mut buf = base.to_vec();
     buf.extend_from_slice(tag);
     buf
 }
@@ -46,7 +57,7 @@ unsafe fn take_blob(out: CRYPT_INTEGER_BLOB) -> Vec<u8> {
 
 pub fn protect(plain: &[u8], tag: &[u8]) -> Option<Vec<u8>> {
     unsafe {
-        let salt = entropy_for(tag);
+        let salt = entropy_for(ENTROPY_BASE, tag);
         let input = blob(plain);
         let entropy = blob(&salt);
         let mut out = CRYPT_INTEGER_BLOB::default();
@@ -64,9 +75,20 @@ pub fn protect(plain: &[u8], tag: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
+/// Decrypts what [`protect`] wrote — under either entropy base.
+///
+/// The second attempt is what carries an installation across the rename; it
+/// costs one extra DPAPI call, and only on the path that was about to fail
+/// anyway. See [`LEGACY_ENTROPY_BASE`], which can go once no installation
+/// predating the rename is plausible.
 pub fn unprotect(cipher: &[u8], tag: &[u8]) -> Option<Vec<u8>> {
+    with_entropy(ENTROPY_BASE, cipher, tag)
+        .or_else(|| with_entropy(LEGACY_ENTROPY_BASE, cipher, tag))
+}
+
+fn with_entropy(base: &[u8], cipher: &[u8], tag: &[u8]) -> Option<Vec<u8>> {
     unsafe {
-        let salt = entropy_for(tag);
+        let salt = entropy_for(base, tag);
         let input = blob(cipher);
         let entropy = blob(&salt);
         let mut out = CRYPT_INTEGER_BLOB::default();
@@ -78,11 +100,15 @@ pub fn unprotect(cipher: &[u8], tag: &[u8]) -> Option<Vec<u8>> {
 /// Cryptographically secure random bytes for PKCE verifiers and OAuth state.
 ///
 /// Uses the system generator directly rather than carrying an RNG crate.
-pub fn random_bytes(len: usize) -> Vec<u8> {
+/// `None` rather than a short or zeroed buffer on failure — see
+/// [`ephemeris_core::host::Host::random_bytes`] for why there is nothing safe
+/// to substitute.
+pub fn random_bytes(len: usize) -> Option<Vec<u8>> {
     let mut buf = vec![0u8; len];
-    unsafe {
-        let status = BCryptGenRandom(None, &mut buf, BCRYPT_USE_SYSTEM_PREFERRED_RNG);
-        assert!(status.is_ok(), "BCryptGenRandom failed");
+    let status = unsafe { BCryptGenRandom(None, &mut buf, BCRYPT_USE_SYSTEM_PREFERRED_RNG) };
+    if status.is_err() {
+        log::error(&format!("BCryptGenRandom failed: {status:?}"));
+        return None;
     }
-    buf
+    Some(buf)
 }

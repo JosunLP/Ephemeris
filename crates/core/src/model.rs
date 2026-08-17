@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 TPMPlaner contributors
+// Copyright (C) 2026 Ephemeris contributors
 //! The widget's domain model: what actually gets drawn.
 //!
 //! Deliberately decoupled from any provider's JSON shapes, so the renderer
@@ -29,9 +29,46 @@ pub struct Event {
     /// Colour of the source calendar as `0xRRGGBB`.
     pub color: u32,
     pub calendar_name: String,
+    /// Id of the source calendar, as the provider knows it.
+    ///
+    /// Not drawn — it is the key a per-calendar colour override is looked up
+    /// by, alongside the name. Defaulted on read so a cache written before it
+    /// existed still loads.
+    #[serde(default)]
+    pub calendar_id: String,
+    /// Which account this came from, the same stamp [`Task::account_id`]
+    /// carries. A title identifies an entry within one account and nowhere
+    /// else, so [`link_task_time_blocks`] needs it.
+    #[serde(default)]
+    pub account_id: String,
+    /// The task this entry is the time block of, if one could be identified.
+    ///
+    /// Derived locally; see [`link_task_time_blocks`] for why no provider
+    /// hands it over.
+    #[serde(default)]
+    pub task_id: Option<String>,
+    /// The list [`Event::task_id`] was read from. Set with it and empty
+    /// without it.
+    ///
+    /// Together with [`Event::account_id`] it completes the [`TaskKey`] the
+    /// link stands for: an id on its own belongs to whichever provider issued
+    /// it, and a second list may be using the same one. A cache written before
+    /// this existed loads without it, and the entry simply goes unmatched
+    /// until the next sync links it again.
+    #[serde(default)]
+    pub task_list_id: Option<String>,
 }
 
 impl Event {
+    /// The task this entry is the time block of, as an identity rather than a
+    /// bare id. `None` when nothing was linked, and when a cache written
+    /// before [`Event::task_list_id`] existed left half a link behind.
+    pub fn task_key(&self) -> Option<TaskKey> {
+        let id = self.task_id.as_deref()?;
+        let list = self.task_list_id.as_deref()?;
+        Some(TaskKey::new(&self.account_id, list, id))
+    }
+
     /// Is the event running right now?
     pub fn is_now(&self, now: DateTime<Local>) -> bool {
         match (self.start, self.end) {
@@ -85,9 +122,46 @@ pub struct Task {
     pub completing: bool,
 }
 
+/// Which task a hit region belongs to.
+///
+/// A position in [`Agenda::tasks`] would be smaller still and is what this
+/// replaces, because a position is not an identity: the rectangles a click is
+/// tested against were measured while painting, and the sync thread can put a
+/// different list in place before the click arrives. `get(idx)` then answers
+/// perfectly happily — with another task, which the widget would tick off on
+/// the user's behalf.
+///
+/// A hash rather than the id itself so that [`crate::layout::Hit`] stays
+/// `Copy`: every frame compares one against what is hovered, and a `String` in
+/// there would put an allocation and a lifetime through all of that for no
+/// gain. The account and the list are hashed alongside the task id because
+/// each provider hands out ids in its own namespace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TaskKey(u64);
+
+impl TaskKey {
+    /// The identity of the task these three ids name.
+    ///
+    /// For the completion path, which carries the ids around rather than the
+    /// task itself and has to arrive at the same key [`Task::key`] produces.
+    pub fn new(account_id: &str, tasklist_id: &str, task_id: &str) -> TaskKey {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        account_id.hash(&mut hasher);
+        tasklist_id.hash(&mut hasher);
+        task_id.hash(&mut hasher);
+        TaskKey(hasher.finish())
+    }
+}
+
 impl Task {
     pub fn is_overdue(&self, today: NaiveDate) -> bool {
         matches!(self.due, Some(d) if d < today)
+    }
+
+    /// This task's identity, for a hit region to carry.
+    pub fn key(&self) -> TaskKey {
+        TaskKey::new(&self.account_id, &self.tasklist_id, &self.id)
     }
 }
 
@@ -107,6 +181,159 @@ pub struct Agenda {
     /// Not cached — at start-up the state is simply "unknown".
     #[serde(skip)]
     pub last_error: Option<String>,
+}
+
+impl Agenda {
+    /// Is this calendar entry the time block of a task that has just been
+    /// ticked off?
+    ///
+    /// The tick is acknowledged on the task row at once and only sent when the
+    /// undo window closes, so for those few seconds the entry under *Schedule*
+    /// has to say the same thing the entry under *Tasks* does. Afterwards
+    /// [`Agenda::complete_task`] takes both rows away together.
+    pub fn is_completing(&self, event: &Event) -> bool {
+        let Some(key) = event.task_key() else {
+            return false;
+        };
+        self.tasks.iter().any(|t| t.completing && t.key() == key)
+    }
+
+    /// The task a hit region names, or `None` when it is no longer on the list
+    /// — a sync that arrived between the frame and the click, or the same task
+    /// ticked off twice.
+    pub fn task_mut(&mut self, key: TaskKey) -> Option<&mut Task> {
+        self.tasks.iter_mut().find(|t| t.key() == key)
+    }
+
+    /// Takes a completed task off the display, together with the calendar
+    /// entries that were its time block.
+    ///
+    /// Returns those entries, which is what the sync thread needs to keep the
+    /// provider from putting them straight back on the next run.
+    ///
+    /// Taken by [`TaskKey`], because a bare task id is not an identity: each
+    /// provider hands out ids in its own namespace, and a second account — or
+    /// a second list within one account — may well be using the same one for a
+    /// different task. Removing by id alone takes those away too.
+    ///
+    /// The entries are matched on the same key, which is what
+    /// [`link_task_time_blocks`] left on them.
+    pub fn complete_task(&mut self, key: TaskKey) -> Vec<Event> {
+        self.tasks.retain(|t| t.key() != key);
+        let is_block = |e: &Event| e.task_key() == Some(key);
+        let removed: Vec<Event> = self
+            .events
+            .iter()
+            .chain(self.tomorrow.iter())
+            .filter(|e| is_block(e))
+            .cloned()
+            .collect();
+        self.events.retain(|e| !is_block(e));
+        self.tomorrow.retain(|e| !is_block(e));
+        removed
+    }
+}
+
+/// Marks the calendar entries that are a task's time block.
+///
+/// A task with a time block leads a double life. Creating a task from the
+/// Google Calendar interface offers two dates: a *start date and duration*,
+/// which is a genuine block on the calendar, and a *deadline*, which is the due
+/// date the task list works from. Both are fetched, through two different APIs,
+/// and nothing in either answer says they belong together — the calendar side
+/// has no task id, and the task side has no event id. So the widget drew two
+/// unrelated rows, and ticking one of them left the other exactly where it was.
+///
+/// Nothing can be done about the missing identifier: as of the 2026 revision of
+/// the Calendar API, `eventType` has six values and none of them is a task, so
+/// there is no field to read. What is left is the title, which both halves
+/// carry unchanged because they *are* one item to the service that made them.
+/// Matching on it is a guess, so the guess is made as narrow as it can be:
+///
+/// * within one account only — two accounts sharing a title mean nothing;
+/// * on the whole normalised title, never a prefix;
+/// * and never when two visible tasks carry the same title, because then there
+///   is no telling which of them the block belongs to, and hiding a row for the
+///   wrong reason is worse than leaving it.
+///
+/// Any link a previous pass left behind is dropped first, so a task that was
+/// completed or renamed does not keep an entry tied to it.
+pub fn link_task_time_blocks(events: &mut [Event], tasks: &[Task]) {
+    use std::collections::HashMap;
+
+    // `None` marks a title that more than one task claims.
+    let mut by_title: HashMap<(&str, String), Option<&Task>> = HashMap::new();
+    for task in tasks {
+        let key = title_key(&task.title);
+        if key.is_empty() {
+            continue;
+        }
+        by_title
+            .entry((task.account_id.as_str(), key))
+            .and_modify(|slot| *slot = None)
+            .or_insert(Some(task));
+    }
+
+    for event in events.iter_mut() {
+        let key = title_key(&event.title);
+        let matched = match by_title.get(&(event.account_id.as_str(), key)) {
+            Some(Some(task)) => Some(*task),
+            _ => None,
+        };
+        event.task_id = matched.map(|t| t.id.clone());
+        event.task_list_id = matched.map(|t| t.tasklist_id.clone());
+    }
+
+    // The same question from the other side. A task's time block is one
+    // calendar entry, so a task that two of them claim is a task whose block
+    // cannot be told from an ordinary meeting that happens to carry the same
+    // title — and `complete_task` removes *every* entry linked to the task, so
+    // guessing wrong there takes a real appointment off the day. Neither is
+    // linked, for the same reason two tasks sharing a title link nothing.
+    // The full identity, not the id alone: an id only means something to the
+    // list that issued it, and the same string is a different task in another
+    // list or another account. That is what `TaskKey` is about, and counting
+    // by the id alone would call three unrelated entries one ambiguous task.
+    let claimed = |event: &Event| {
+        Some((
+            event.account_id.clone(),
+            event.task_list_id.clone()?,
+            event.task_id.clone()?,
+        ))
+    };
+    let mut claims: HashMap<(String, String, String), usize> = HashMap::new();
+    for event in events.iter() {
+        if let Some(key) = claimed(event) {
+            *claims.entry(key).or_insert(0) += 1;
+        }
+    }
+    if claims.values().all(|&count| count < 2) {
+        return;
+    }
+    for event in events.iter_mut() {
+        if claimed(event).is_some_and(|key| claims.get(&key) > Some(&1)) {
+            event.task_id = None;
+            event.task_list_id = None;
+        }
+    }
+}
+
+/// The normalised form two titles are compared in.
+///
+/// Case and runs of whitespace differ between the calendar and the task copy of
+/// the same item often enough — a wrapped title, a trailing space someone typed
+/// — that comparing the raw strings would miss pairs that are obviously the
+/// same. Nothing beyond that is folded away: punctuation and accents carry
+/// meaning in a title.
+pub fn title_key(title: &str) -> String {
+    let mut key = String::with_capacity(title.len());
+    for word in title.split_whitespace() {
+        if !key.is_empty() {
+            key.push(' ');
+        }
+        key.extend(word.chars().flat_map(char::to_lowercase));
+    }
+    key
 }
 
 /// Google Tasks and Microsoft To Do both return `due` as an RFC 3339
@@ -178,17 +405,25 @@ pub fn sort_events(events: &mut [Event]) {
 ///
 /// All-day events do not count: they overlap everything by definition and
 /// would be worthless as a warning.
-pub fn mark_overlaps(events: &[Event]) -> Vec<bool> {
+///
+/// The second half of the result is the number of clashing *pairs*, counted
+/// here because this is the loop that already knows them. Dividing the number
+/// of flagged events by two — which is what the badge used to do — under-counts
+/// exactly the case most worth flagging: three meetings in the same slot are
+/// three pairs, not one.
+pub fn mark_overlaps(events: &[Event]) -> (Vec<bool>, usize) {
     let mut flags = vec![false; events.len()];
+    let mut pairs = 0;
     for i in 0..events.len() {
         for j in (i + 1)..events.len() {
             if overlaps(&events[i], &events[j]) {
                 flags[i] = true;
                 flags[j] = true;
+                pairs += 1;
             }
         }
     }
-    flags
+    (flags, pairs)
 }
 
 fn overlaps(a: &Event, b: &Event) -> bool {
@@ -224,9 +459,78 @@ pub fn local_day_start(day: NaiveDate) -> DateTime<Local> {
     }
 }
 
+/// Today's agenda as plain text, for pasting into a message.
+///
+/// Here rather than in a front end because "copy agenda" is one of the menu
+/// commands and all three offer it. What differs per platform is putting the
+/// string on the clipboard, which is one call; what does not is the shape of
+/// the text, and three copies of that would be three subtly different
+/// agendas.
+///
+/// Deliberately plain: no colour, no box drawing and no alignment padding. It
+/// is pasted into a chat window or an email, where a proportional font makes
+/// columns meaningless — and where `終日` counting as two characters and four
+/// columns would misalign them anyway.
+pub fn agenda_as_text(agenda: &Agenda, loc: &crate::i18n::Locale) -> String {
+    let c = loc.cat;
+    let today = agenda.day.unwrap_or_else(|| Local::now().date_naive());
+    let mut out = format!("{} — {}\n", loc.weekday(today), loc.date_line(today));
+
+    out.push_str(&format!("\n{}\n", c.section_events));
+    if agenda.events.is_empty() {
+        out.push_str(&format!("  {}\n", c.no_events));
+    }
+    for ev in &agenda.events {
+        let when = if ev.all_day {
+            c.all_day.to_string()
+        } else {
+            match (ev.start, ev.end) {
+                (Some(s), Some(e)) => format!("{}-{}", loc.time(s), loc.time(e)),
+                (Some(s), None) => loc.time(s),
+                _ => String::new(),
+            }
+        };
+        match &ev.location {
+            Some(place) => out.push_str(&format!("  {when}  {}  ({place})\n", ev.title)),
+            None => out.push_str(&format!("  {when}  {}\n", ev.title)),
+        }
+    }
+
+    out.push_str(&format!("\n{}\n", c.section_tasks));
+    if agenda.tasks.is_empty() {
+        out.push_str(&format!("  {}\n", c.no_tasks));
+    }
+    for task in &agenda.tasks {
+        let due = match task.due {
+            Some(d) if d == today => c.today.to_string(),
+            Some(d) => loc.day_month(d),
+            None => "-".into(),
+        };
+        // Subtasks indented, as they are on screen.
+        let indent = "  ".repeat(task.depth as usize + 1);
+        out.push_str(&format!("{indent}[ ] {due}  {}\n", task.title));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The copied text is the one thing a user takes out of the widget and
+    /// into somewhere else, so an empty day has to read as an empty day rather
+    /// than as a broken export.
+    #[test]
+    fn the_copied_agenda_names_both_sections_even_when_empty() {
+        let loc = crate::i18n::Locale::resolve("en-GB");
+        let text = agenda_as_text(&Agenda::default(), &loc);
+        assert!(text.contains(loc.cat.section_events), "{text}");
+        assert!(text.contains(loc.cat.section_tasks), "{text}");
+        assert!(text.contains(loc.cat.no_events), "{text}");
+        assert!(text.contains(loc.cat.no_tasks), "{text}");
+        // No placeholder may survive into text somebody pastes.
+        assert!(!text.contains("{}"), "{text}");
+    }
 
     #[test]
     fn due_date_is_not_timezone_shifted() {
@@ -300,24 +604,24 @@ mod tests {
     fn future_tasks_are_dropped_overdue_are_kept() {
         let today = NaiveDate::from_ymd_opt(2026, 8, 4).unwrap();
         let input = vec![
-            task("in drei Wochen", Some("2026-08-25")),
-            task("heute", Some("2026-08-04")),
-            task("ueberfaellig", Some("2026-07-30")),
-            task("ohne Datum", None),
+            task("in three weeks", Some("2026-08-25")),
+            task("today", Some("2026-08-04")),
+            task("overdue", Some("2026-07-30")),
+            task("undated", None),
         ];
         let kept = filter_tasks_for_today(input, today, false);
         let titles: Vec<_> = kept.iter().map(|t| t.title.as_str()).collect();
-        assert_eq!(titles, vec!["heute", "ueberfaellig"]);
+        assert_eq!(titles, vec!["today", "overdue"]);
     }
 
     #[test]
     fn undated_tasks_can_be_opted_in_and_sort_last() {
         let today = NaiveDate::from_ymd_opt(2026, 8, 4).unwrap();
-        let input = vec![task("ohne Datum", None), task("heute", Some("2026-08-04"))];
+        let input = vec![task("undated", None), task("today", Some("2026-08-04"))];
         let mut kept = filter_tasks_for_today(input, today, true);
         sort_tasks(&mut kept);
         let titles: Vec<_> = kept.iter().map(|t| t.title.as_str()).collect();
-        assert_eq!(titles, vec!["heute", "ohne Datum"]);
+        assert_eq!(titles, vec!["today", "undated"]);
     }
 
     fn timed(title: &str, from: (u32, u32), to: (u32, u32)) -> Event {
@@ -333,6 +637,10 @@ mod tests {
             join_url: None,
             color: 0,
             calendar_name: "K".into(),
+            calendar_id: "k".into(),
+            account_id: String::new(),
+            task_id: None,
+            task_list_id: None,
         }
     }
 
@@ -340,7 +648,7 @@ mod tests {
     fn back_to_back_events_are_not_a_conflict() {
         // 09:00-10:00 and 10:00-11:00 merely touch.
         let events = vec![timed("a", (9, 0), (10, 0)), timed("b", (10, 0), (11, 0))];
-        assert_eq!(mark_overlaps(&events), vec![false, false]);
+        assert_eq!(mark_overlaps(&events).0, vec![false, false]);
     }
 
     #[test]
@@ -350,37 +658,284 @@ mod tests {
             timed("b", (9, 30), (10, 30)),
             timed("c", (14, 0), (15, 0)),
         ];
-        assert_eq!(mark_overlaps(&events), vec![true, true, false]);
+        assert_eq!(mark_overlaps(&events).0, vec![true, true, false]);
     }
 
     #[test]
     fn an_event_fully_inside_another_counts() {
         let events = vec![
-            timed("lang", (9, 0), (12, 0)),
-            timed("kurz", (10, 0), (10, 15)),
+            timed("long", (9, 0), (12, 0)),
+            timed("short", (10, 0), (10, 15)),
         ];
-        assert_eq!(mark_overlaps(&events), vec![true, true]);
+        assert_eq!(mark_overlaps(&events).0, vec![true, true]);
     }
 
     #[test]
     fn all_day_events_never_conflict() {
-        let mut all_day = timed("ganztags", (0, 0), (23, 59));
+        let mut all_day = timed("all day", (0, 0), (23, 59));
         all_day.all_day = true;
         all_day.start = None;
         all_day.end = None;
-        let events = vec![all_day, timed("termin", (9, 0), (10, 0))];
-        assert_eq!(mark_overlaps(&events), vec![false, false]);
+        let events = vec![all_day, timed("meeting", (9, 0), (10, 0))];
+        assert_eq!(mark_overlaps(&events).0, vec![false, false]);
     }
 
     #[test]
     fn tasks_sort_oldest_due_first() {
         let mut t = vec![
-            task("b heute", Some("2026-08-04")),
-            task("a heute", Some("2026-08-04")),
-            task("alt", Some("2026-07-01")),
+            task("b today", Some("2026-08-04")),
+            task("a today", Some("2026-08-04")),
+            task("old", Some("2026-07-01")),
         ];
         sort_tasks(&mut t);
         let titles: Vec<_> = t.iter().map(|x| x.title.as_str()).collect();
-        assert_eq!(titles, vec!["alt", "a heute", "b heute"]);
+        assert_eq!(titles, vec!["old", "a today", "b today"]);
+    }
+
+    /// The reported case: one item, two rows, and a tick that only reached one
+    /// of them.
+    fn on_account(id: &str, mut event: Event) -> Event {
+        event.account_id = id.into();
+        event
+    }
+
+    fn task_on(account: &str, title: &str) -> Task {
+        let mut t = task(title, Some("2026-08-04"));
+        t.account_id = account.into();
+        t
+    }
+
+    #[test]
+    fn a_time_block_is_tied_to_the_task_of_the_same_name() {
+        let mut events = vec![
+            on_account(
+                "google",
+                timed("Write the quarterly report", (9, 0), (11, 0)),
+            ),
+            on_account("google", timed("Dentist", (14, 0), (15, 0))),
+        ];
+        let tasks = vec![
+            task_on("google", "Write the quarterly report"),
+            task_on("google", "Order printer paper"),
+        ];
+        link_task_time_blocks(&mut events, &tasks);
+
+        assert_eq!(
+            events[0].task_id.as_deref(),
+            Some("Write the quarterly report"),
+            "the block and its task were not paired up"
+        );
+        assert_eq!(events[1].task_id, None, "the dentist is not a task");
+    }
+
+    #[test]
+    fn case_and_spacing_do_not_break_the_pairing() {
+        let mut events = vec![on_account(
+            "google",
+            timed("  Write   the Quarterly Report ", (9, 0), (11, 0)),
+        )];
+        let tasks = vec![task_on("google", "Write the quarterly report")];
+        link_task_time_blocks(&mut events, &tasks);
+        assert!(events[0].task_id.is_some());
+    }
+
+    #[test]
+    fn a_title_shared_by_two_tasks_pairs_with_neither() {
+        // Two "Follow up" tasks, one block. There is no telling which of them
+        // it belongs to, and taking the row away for the wrong one is worse
+        // than leaving it.
+        let mut events = vec![on_account("google", timed("Follow up", (9, 0), (10, 0)))];
+        let mut second = task_on("google", "Follow up");
+        second.id = "other-id".into();
+        let tasks = vec![task_on("google", "Follow up"), second];
+        link_task_time_blocks(&mut events, &tasks);
+        assert_eq!(events[0].task_id, None);
+    }
+
+    #[test]
+    fn a_title_shared_across_accounts_is_not_a_pair() {
+        // The work calendar's "Standup" has nothing to do with the private
+        // account's task of the same name.
+        let mut events = vec![on_account("work", timed("Standup", (9, 0), (9, 15)))];
+        let tasks = vec![task_on("private", "Standup")];
+        link_task_time_blocks(&mut events, &tasks);
+        assert_eq!(events[0].task_id, None);
+    }
+
+    #[test]
+    fn a_stale_link_is_dropped_rather_than_kept() {
+        let mut events = vec![on_account(
+            "google",
+            timed("Renamed since", (9, 0), (10, 0)),
+        )];
+        events[0].task_id = Some("gone".into());
+        events[0].task_list_id = Some("l".into());
+        link_task_time_blocks(&mut events, &[]);
+        assert_eq!(events[0].task_id, None);
+        assert_eq!(events[0].task_list_id, None, "half a link is still a link");
+    }
+
+    #[test]
+    fn ticking_the_task_off_marks_the_time_block_too() {
+        let mut agenda = Agenda {
+            events: vec![on_account("google", timed("Tax return", (9, 0), (11, 0)))],
+            tomorrow: vec![on_account("google", timed("Tax return", (9, 0), (11, 0)))],
+            tasks: vec![task_on("google", "Tax return")],
+            ..Default::default()
+        };
+        link_task_time_blocks(&mut agenda.events, &agenda.tasks.clone());
+        link_task_time_blocks(&mut agenda.tomorrow, &agenda.tasks.clone());
+
+        assert!(
+            !agenda.is_completing(&agenda.events[0]),
+            "nothing has been ticked yet"
+        );
+
+        // The optimistic hide, before the call goes out.
+        agenda.tasks[0].completing = true;
+        assert!(agenda.is_completing(&agenda.events[0]));
+
+        // And once the server confirms, both rows go.
+        let removed = agenda.complete_task(agenda.tasks[0].key());
+        let taken: Vec<(&str, &str)> = removed
+            .iter()
+            .map(|e| (e.account_id.as_str(), e.title.as_str()))
+            .collect();
+        assert_eq!(
+            taken,
+            vec![("google", "Tax return"), ("google", "Tax return")],
+            "the caller needs the account, not only the title"
+        );
+        assert!(agenda.tasks.is_empty());
+        assert!(agenda.events.is_empty(), "the schedule row stayed behind");
+        assert!(agenda.tomorrow.is_empty());
+    }
+
+    /// The click that ticks a task off is tested against rectangles measured
+    /// while painting, and the sync thread can put a different list in place in
+    /// between. A row number would then name whatever moved into that place —
+    /// so the hit region carries the task instead.
+    #[test]
+    fn a_ticked_task_is_found_by_its_own_identity_and_not_by_its_position() {
+        // The list the row was painted from: the second task was clicked.
+        let painted = [
+            task_on("google", "Renew the passport"),
+            task_on("google", "Book the flight"),
+        ];
+        let key = painted[1].key();
+
+        // What the sync thread put there instead: the first task gone, so the
+        // clicked row is now at index 0.
+        let mut agenda = Agenda {
+            tasks: vec![task_on("google", "Book the flight")],
+            ..Default::default()
+        };
+        assert_eq!(
+            agenda.task_mut(key).map(|t| t.title.clone()).as_deref(),
+            Some("Book the flight")
+        );
+
+        // The same title on another account is a different task.
+        let mut elsewhere = Agenda {
+            tasks: vec![task_on("private", "Book the flight")],
+            ..Default::default()
+        };
+        assert!(elsewhere.task_mut(key).is_none());
+
+        // And a task that has left the list at all is nobody, rather than
+        // whoever took its place.
+        let mut gone = Agenda {
+            tasks: vec![task_on("google", "Renew the passport")],
+            ..Default::default()
+        };
+        assert!(gone.task_mut(key).is_none());
+    }
+
+    #[test]
+    fn completing_a_task_without_a_block_leaves_the_schedule_alone() {
+        let mut agenda = Agenda {
+            events: vec![on_account("google", timed("Dentist", (14, 0), (15, 0)))],
+            tasks: vec![task_on("google", "Order printer paper")],
+            ..Default::default()
+        };
+        link_task_time_blocks(&mut agenda.events, &agenda.tasks.clone());
+        assert!(agenda.complete_task(agenda.tasks[0].key()).is_empty());
+        assert_eq!(agenda.events.len(), 1);
+    }
+
+    /// The guess is refused from both sides. Two tasks with one title link
+    /// nothing, and so do two calendar entries: a task's block is one entry, so
+    /// the second is a meeting that happens to be called the same thing — and
+    /// completion removes every linked entry, which would take it off the day.
+    #[test]
+    fn two_entries_with_one_title_are_linked_to_neither() {
+        let mut agenda = Agenda {
+            events: vec![
+                on_account("google", timed("Standup", (9, 0), (9, 15))),
+                on_account("google", timed("Standup", (16, 0), (16, 30))),
+            ],
+            tasks: vec![task_on("google", "Standup")],
+            ..Default::default()
+        };
+        link_task_time_blocks(&mut agenda.events, &agenda.tasks.clone());
+        assert!(
+            agenda.events.iter().all(|e| e.task_id.is_none()),
+            "neither entry may be claimed as the block"
+        );
+        assert!(agenda.complete_task(agenda.tasks[0].key()).is_empty());
+        assert_eq!(agenda.events.len(), 2, "the meeting stays on the day");
+    }
+
+    /// Ids are namespaced by whoever handed them out, so the same string turns
+    /// up again on another account and in another list of the same account.
+    /// Ticking one of them off must take that one away and nothing else.
+    #[test]
+    fn a_shared_task_id_elsewhere_survives_the_completion() {
+        let same_id = |account: &str, list: &str, title: &str| {
+            let mut t = task_on(account, title);
+            t.id = "1".into();
+            t.tasklist_id = list.into();
+            t
+        };
+        let ticked = same_id("work", "inbox", "Send the invoice");
+        let other_account = same_id("private", "inbox", "Water the plants");
+        let other_list = same_id("work", "someday", "Learn to sail");
+
+        let mut agenda = Agenda {
+            events: vec![
+                on_account("work", timed("Send the invoice", (9, 0), (10, 0))),
+                on_account("private", timed("Water the plants", (9, 0), (10, 0))),
+                on_account("work", timed("Learn to sail", (11, 0), (12, 0))),
+            ],
+            tomorrow: vec![on_account(
+                "private",
+                timed("Water the plants", (8, 0), (8, 30)),
+            )],
+            tasks: vec![ticked.clone(), other_account, other_list],
+            ..Default::default()
+        };
+        // The links the sync run leaves behind: every entry points at "1",
+        // which is three different tasks.
+        link_task_time_blocks(&mut agenda.events, &agenda.tasks.clone());
+        link_task_time_blocks(&mut agenda.tomorrow, &agenda.tasks.clone());
+        assert!(agenda.events.iter().all(|e| e.task_id.is_some()));
+
+        // The optimistic hide belongs to the ticked task alone as well.
+        agenda.tasks[0].completing = true;
+        assert!(agenda.is_completing(&agenda.events[0]));
+        assert!(
+            !agenda.is_completing(&agenda.events[1]),
+            "the other account's entry is not the one being ticked off"
+        );
+
+        let removed = agenda.complete_task(ticked.key());
+        let taken: Vec<&str> = removed.iter().map(|e| e.title.as_str()).collect();
+        assert_eq!(taken, vec!["Send the invoice"]);
+
+        let left: Vec<&str> = agenda.tasks.iter().map(|t| t.title.as_str()).collect();
+        assert_eq!(left, vec!["Water the plants", "Learn to sail"]);
+        let schedule: Vec<&str> = agenda.events.iter().map(|e| e.title.as_str()).collect();
+        assert_eq!(schedule, vec!["Water the plants", "Learn to sail"]);
+        assert_eq!(agenda.tomorrow.len(), 1, "tomorrow belongs to another task");
     }
 }

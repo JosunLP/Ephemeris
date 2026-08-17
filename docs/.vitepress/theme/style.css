@@ -1,0 +1,793 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+/* Copyright (C) 2026 Ephemeris contributors */
+
+/*
+ * The documentation's design layer.
+ *
+ * Everything here is either a VitePress variable given a Ephemeris value, or a
+ * rule that changes a shape the default theme has no variable for. The palette
+ * is taken from `assets/logo.svg` so the site, the icon and the widget are
+ * visibly the same product: the blue ramp is the tile gradient, and the amber
+ * is the one arc in the logo that is not white — the thing due next.
+ */
+
+/* ------------------------------------------------------------------ *
+ * Palette
+ * ------------------------------------------------------------------ */
+
+:root {
+  --tpm-brand-50: #eff6ff;
+  --tpm-brand-100: #dbeafe;
+  --tpm-brand-200: #bfdbfe;
+  --tpm-brand-300: #93c5fd;
+  --tpm-brand-400: #7cc4ff; /* logo: gradient start */
+  --tpm-brand-500: #4b87f5; /* logo: gradient middle, the pin */
+  --tpm-brand-600: #3a62e8;
+  --tpm-brand-700: #3a46d8; /* logo: gradient end */
+  --tpm-brand-800: #2f37ac;
+  --tpm-brand-900: #262c85;
+
+  --tpm-accent: #f59e0b; /* logo: the "due" arc */
+  --tpm-accent-soft: rgba(245, 158, 11, 0.22);
+
+  --tpm-gradient: linear-gradient(
+    120deg,
+    var(--tpm-brand-400) 0%,
+    var(--tpm-brand-500) 42%,
+    var(--tpm-brand-700) 100%
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * Light
+ * ------------------------------------------------------------------ */
+
+:root {
+  --vp-c-brand-1: #2f55d4;
+  --vp-c-brand-2: var(--tpm-brand-600);
+  --vp-c-brand-3: var(--tpm-brand-500);
+  --vp-c-brand-soft: rgba(75, 135, 245, 0.14);
+
+  --vp-c-bg: #ffffff;
+  --vp-c-bg-alt: #f7f9fc;
+  --vp-c-bg-soft: #f5f8fd;
+  --vp-c-bg-elv: #ffffff;
+
+  --vp-c-divider: rgba(24, 43, 84, 0.1);
+  --vp-c-border: rgba(24, 43, 84, 0.16);
+  --vp-c-gutter: rgba(24, 43, 84, 0.1);
+
+  --vp-c-text-1: #101a30;
+  --vp-c-text-2: #4a5875;
+  --vp-c-text-3: #7c88a3;
+
+  --tpm-border-strong: rgba(75, 135, 245, 0.42);
+  --tpm-grid-line: rgba(24, 43, 84, 0.055);
+  --tpm-aura-opacity: 0.3;
+  --tpm-card-shadow: 0 1px 2px rgba(16, 26, 48, 0.04);
+  --tpm-card-shadow-hover:
+    0 14px 32px -14px rgba(29, 55, 120, 0.28), 0 2px 6px rgba(16, 26, 48, 0.05);
+
+  /* The widget preview's own surface, which is a dark panel in both themes:
+     it is drawn on a wallpaper, not on the page. */
+  --tpm-stage-bg: #0f172a;
+  --tpm-stage-glow-a: rgba(75, 135, 245, 0.45);
+  --tpm-stage-glow-b: rgba(58, 70, 216, 0.45);
+  --tpm-panel-bg: rgba(20, 30, 54, 0.82);
+  --tpm-panel-border: rgba(255, 255, 255, 0.12);
+  --tpm-panel-text: #f1f5fb;
+  --tpm-panel-text-dim: rgba(226, 235, 250, 0.62);
+  --tpm-panel-shadow: 0 24px 60px -20px rgba(4, 10, 28, 0.75);
+  --tpm-rail-track: rgba(255, 255, 255, 0.13);
+  --tpm-rail-rest: rgba(255, 255, 255, 0.42);
+  --tpm-now-bg: rgba(75, 135, 245, 0.16);
+  --tpm-now-border: rgba(124, 196, 255, 0.28);
+
+  /* Home hero. */
+  --vp-home-hero-name-color: transparent;
+  --vp-home-hero-name-background: var(--tpm-gradient);
+  --vp-home-hero-image-background-image: var(--tpm-gradient);
+  --vp-home-hero-image-filter: blur(58px) opacity(0.42);
+
+  /* Buttons. */
+  --vp-button-brand-border: transparent;
+  --vp-button-brand-bg: var(--tpm-brand-500);
+  --vp-button-brand-hover-border: transparent;
+  --vp-button-brand-hover-bg: var(--tpm-brand-600);
+  --vp-button-brand-active-bg: var(--tpm-brand-700);
+  --vp-button-alt-border: var(--vp-c-border);
+  --vp-button-alt-bg: transparent;
+  --vp-button-alt-hover-border: var(--tpm-border-strong);
+  --vp-button-alt-hover-bg: var(--vp-c-brand-soft);
+  --vp-button-alt-hover-text: var(--vp-c-brand-1);
+
+  /* Callouts, tuned to the same ramp so a tip is not a different product. */
+  --vp-c-tip-1: #0f7a5a;
+  --vp-c-tip-2: #12946d;
+  --vp-c-tip-3: #3fbf9a;
+  --vp-c-tip-soft: rgba(63, 191, 154, 0.14);
+
+  --vp-c-warning-1: #9a5b04;
+  --vp-c-warning-2: #b8710a;
+  --vp-c-warning-3: var(--tpm-accent);
+  --vp-c-warning-soft: rgba(245, 158, 11, 0.14);
+
+  --vp-c-danger-1: #b42540;
+  --vp-c-danger-2: #d1304e;
+  --vp-c-danger-3: #f0506e;
+  --vp-c-danger-soft: rgba(240, 80, 110, 0.14);
+
+  --vp-code-block-bg: #0f172a;
+  --vp-code-block-divider-color: rgba(255, 255, 255, 0.09);
+
+  --vp-layout-max-width: 1504px;
+}
+
+/* ------------------------------------------------------------------ *
+ * Dark
+ * ------------------------------------------------------------------ */
+
+.dark {
+  --vp-c-brand-1: #90c6ff;
+  --vp-c-brand-2: #6faaff;
+  --vp-c-brand-3: #3f6fe0;
+  --vp-c-brand-soft: rgba(124, 196, 255, 0.16);
+
+  /* Blue-cast greys rather than neutral ones: the same light the icon is
+     lit by, so the page and the product do not sit at different temperatures. */
+  --vp-c-bg: #0b1120;
+  --vp-c-bg-alt: #070c17;
+  --vp-c-bg-soft: #121a2c;
+  --vp-c-bg-elv: #141d31;
+
+  --vp-c-divider: rgba(150, 178, 230, 0.14);
+  --vp-c-border: rgba(150, 178, 230, 0.2);
+  --vp-c-gutter: rgba(150, 178, 230, 0.12);
+
+  --vp-c-text-1: #eaf0fb;
+  --vp-c-text-2: #a6b4d0;
+  --vp-c-text-3: #74829f;
+
+  --tpm-border-strong: rgba(124, 196, 255, 0.45);
+  --tpm-grid-line: rgba(150, 178, 230, 0.06);
+  --tpm-aura-opacity: 0.24;
+  --tpm-card-shadow: none;
+  --tpm-card-shadow-hover: 0 16px 36px -18px rgba(0, 0, 0, 0.8);
+
+  /* The stage has to stay clear of the page behind it, which in dark mode is
+     already almost the colour a wallpaper would be. */
+  --tpm-stage-bg: #05080f;
+  --tpm-stage-glow-a: rgba(75, 135, 245, 0.42);
+  --tpm-stage-glow-b: rgba(58, 70, 216, 0.42);
+  --tpm-panel-bg: rgba(28, 40, 68, 0.88);
+  --tpm-panel-border: rgba(255, 255, 255, 0.16);
+
+  --vp-home-hero-image-filter: blur(64px) opacity(0.34);
+
+  --vp-button-brand-bg: var(--tpm-brand-500);
+  --vp-button-brand-hover-bg: #5d95f8;
+  --vp-button-brand-active-bg: var(--tpm-brand-600);
+
+  --vp-c-tip-1: #58d3ac;
+  --vp-c-tip-2: #3fbf9a;
+  --vp-c-tip-3: #2b9d7d;
+  --vp-c-tip-soft: rgba(63, 191, 154, 0.16);
+
+  --vp-c-warning-1: #ffc266;
+  --vp-c-warning-2: #f5a623;
+  --vp-c-warning-3: #c97f0a;
+  --vp-c-warning-soft: rgba(245, 158, 11, 0.16);
+
+  --vp-c-danger-1: #ff8098;
+  --vp-c-danger-2: #f0506e;
+  --vp-c-danger-3: #c93a56;
+  --vp-c-danger-soft: rgba(240, 80, 110, 0.16);
+
+  --vp-code-block-bg: #070c17;
+}
+
+/* ------------------------------------------------------------------ *
+ * Typography
+ * ------------------------------------------------------------------ */
+
+html {
+  scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Prose measure. The default theme lets a paragraph run the full width of a
+   wide window, which is where documentation becomes hard to read rather than
+   hard to find. */
+.vp-doc > div > p,
+.vp-doc > div > ul,
+.vp-doc > div > ol,
+.vp-doc > div > blockquote {
+  max-width: 72ch;
+}
+
+.vp-doc h1 {
+  margin-bottom: 12px;
+  font-size: 2.35rem;
+  font-weight: 700;
+  letter-spacing: -0.028em;
+  line-height: 1.18;
+}
+
+.vp-doc h2 {
+  margin-top: 52px;
+  padding-top: 26px;
+  border-top: 1px solid var(--vp-c-divider);
+  font-size: 1.5rem;
+  font-weight: 650;
+  letter-spacing: -0.018em;
+}
+
+.vp-doc h3 {
+  margin-top: 34px;
+  font-size: 1.16rem;
+  font-weight: 620;
+  letter-spacing: -0.012em;
+}
+
+.vp-doc p,
+.vp-doc li {
+  line-height: 1.72;
+}
+
+.vp-doc li + li {
+  margin-top: 6px;
+}
+
+/* Links read as links without shouting: the underline sits clear of the
+   descenders and only fills in on hover. */
+.vp-doc a {
+  font-weight: 500;
+  text-decoration-color: var(--tpm-border-strong);
+  text-underline-offset: 3px;
+  transition:
+    color 0.2s ease,
+    text-decoration-color 0.2s ease;
+}
+
+.vp-doc a:hover {
+  text-decoration-color: currentColor;
+}
+
+.vp-doc blockquote {
+  margin: 20px 0;
+  padding: 2px 0 2px 18px;
+  border-left: 3px solid var(--tpm-brand-500);
+}
+
+.vp-doc blockquote > p {
+  color: var(--vp-c-text-2);
+  font-size: 15px;
+}
+
+/* ------------------------------------------------------------------ *
+ * Home: hero
+ * ------------------------------------------------------------------ */
+
+.VPHome {
+  position: relative;
+  /* The default theme has no bottom padding under the last feature row. */
+  padding-bottom: 96px;
+}
+
+.VPHome .VPHero,
+.VPHome .VPFeatures,
+.VPHome .vp-doc {
+  position: relative;
+  z-index: 1;
+}
+
+.VPHero .name {
+  font-size: clamp(3rem, 8vw, 4.75rem);
+  font-weight: 750;
+  letter-spacing: -0.04em;
+  line-height: 1.06;
+  /* Gradient text needs the clip; the variable only sets the fill. */
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+
+.VPHero .text {
+  max-width: 22ch;
+  font-size: clamp(1.5rem, 3.4vw, 2.1rem);
+  font-weight: 620;
+  letter-spacing: -0.028em;
+  line-height: 1.2;
+}
+
+.VPHero .tagline {
+  max-width: 46ch;
+  padding-top: 14px;
+  color: var(--vp-c-text-2);
+  font-size: clamp(1rem, 1.6vw, 1.16rem);
+  font-weight: 400;
+  line-height: 1.62;
+}
+
+.VPHero .actions {
+  padding-top: 30px;
+}
+
+.VPHero .VPButton {
+  border-radius: 10px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  transition:
+    transform 0.18s ease,
+    background-color 0.18s ease,
+    border-color 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+.VPHero .VPButton.brand {
+  box-shadow: 0 8px 22px -10px rgba(58, 70, 216, 0.85);
+}
+
+.VPHero .VPButton:hover {
+  transform: translateY(-1px);
+}
+
+.VPHero .VPButton.brand:hover {
+  box-shadow: 0 12px 28px -10px rgba(58, 70, 216, 0.95);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .VPHero .VPButton:hover {
+    transform: none;
+  }
+}
+
+/* The logo, lifted off the page rather than sitting flat on it. The shadow is
+   kept short: cast far enough down it reads as part of the logo, which drops
+   the whole mark's optical weight towards the cards below. */
+.VPHero .VPImage {
+  filter: drop-shadow(0 12px 26px rgba(29, 55, 120, 0.26));
+}
+
+.image-src {
+  top: 30% !important;
+  left: 20% !important;
+}
+
+/* The default theme centres the logo against the hero band, which includes
+   the button row, so it hangs lower than the text it sits beside. Raising it
+   settles it against the heading and the tagline instead. Only the Y changes;
+   the X is the default theme's own offset. */
+@media (min-width: 960px) {
+  .VPHero .image-container {
+    /*rtl:ignore*/
+    transform: translate(-32px, -62px);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .VPHero .VPImage {
+    animation: tpm-float 9s ease-in-out infinite;
+  }
+}
+
+@keyframes tpm-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Home: features
+ * ------------------------------------------------------------------ */
+
+.VPFeatures {
+  padding-top: 12px;
+}
+
+.VPFeature {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 16px;
+  background: var(--vp-c-bg-soft);
+  box-shadow: var(--tpm-card-shadow);
+  transition:
+    border-color 0.24s ease,
+    transform 0.24s ease,
+    box-shadow 0.24s ease;
+}
+
+/* A hairline of the brand gradient along the top edge, drawn only on hover:
+   the whole grid stays quiet until you point at one card. */
+.VPFeature::before {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 2px;
+  background: var(--tpm-gradient);
+  opacity: 0;
+  transition: opacity 0.24s ease;
+  content: '';
+}
+
+.VPFeature:hover {
+  border-color: var(--tpm-border-strong);
+  transform: translateY(-3px);
+  box-shadow: var(--tpm-card-shadow-hover);
+}
+
+.VPFeature:hover::before {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .VPFeature:hover {
+    transform: none;
+  }
+}
+
+.VPFeature .icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  margin-bottom: 18px;
+  border: 1px solid var(--vp-c-brand-soft);
+  border-radius: 12px;
+  background: var(--vp-c-brand-soft);
+  color: var(--vp-c-brand-1);
+  font-size: 22px;
+}
+
+.VPFeature .icon svg {
+  width: 22px;
+  height: 22px;
+}
+
+.VPFeature .title {
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.012em;
+  line-height: 1.35;
+}
+
+.VPFeature .details {
+  margin-top: 8px;
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+/* ------------------------------------------------------------------ *
+ * Home: the prose below the features
+ * ------------------------------------------------------------------ */
+
+/* Markdown on the home page is rendered outside the doc column, so it gets no
+   width or gutter of its own. */
+.VPHome .vp-doc.container {
+  max-width: 1152px;
+  margin: 0 auto;
+  padding: 16px 24px 0;
+}
+
+.VPHome .vp-doc h2 {
+  margin-top: 64px;
+  border-top: 0;
+  font-size: 1.85rem;
+  letter-spacing: -0.026em;
+  text-align: center;
+}
+
+/* Every paragraph on the home page is centred, not just the one under the
+   heading: a landing page that switches alignment halfway down a section
+   reads as two pages stitched together. */
+/* The home page wraps its Markdown in one more div than a doc page does, so
+   the paragraphs sit a level deeper than `.vp-doc > div > p`. Matching only
+   direct children keeps this off the paragraphs inside the components below. */
+.VPHome .vp-doc > div > div > p {
+  margin-inline: auto;
+  max-width: 62ch;
+  color: var(--vp-c-text-2);
+  text-align: center;
+}
+
+/* The install command is the exception — a shell line is not prose, and it
+   keeps the narrower measure it is legible at. */
+.VPHome .vp-doc div[class*='language-'] {
+  max-width: 760px;
+  margin-inline: auto;
+}
+
+@media (min-width: 640px) {
+  .VPHome .vp-doc.container {
+    padding-inline: 48px;
+  }
+}
+
+@media (min-width: 960px) {
+  .VPHome .vp-doc.container {
+    padding-inline: 64px;
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Navigation and sidebar
+ * ------------------------------------------------------------------ */
+
+.VPNavBar:not(.has-sidebar):not(.home.top) {
+  background-color: transparent;
+}
+
+/* Glass rather than a solid bar, so the aura shows through as you scroll. */
+.VPNavBar .divider {
+  background-color: transparent;
+}
+
+.VPNavBar:not(.home) .content-body,
+.VPNavBar.home:not(.top) .content-body,
+.VPNavBar.has-sidebar .content-body {
+  background: color-mix(in srgb, var(--vp-c-bg) 78%, transparent);
+  backdrop-filter: saturate(180%) blur(14px);
+}
+
+.VPNavBar:not(.top) {
+  border-bottom: 1px solid var(--vp-c-divider);
+}
+
+.VPNavBarTitle .title {
+  font-weight: 680;
+  letter-spacing: -0.02em;
+}
+
+.VPNavBarTitle .logo {
+  height: 26px;
+  margin-right: 9px;
+}
+
+.VPNavBarMenuLink {
+  font-weight: 550;
+}
+
+/* The sidebar's active page as a filled pill, not a coloured word: it is
+   findable with a glance down the column. */
+.VPSidebarItem.level-1 > .item > .text,
+.VPSidebarItem.level-0 > .item > .text {
+  font-weight: 650;
+  letter-spacing: -0.008em;
+}
+
+.VPSidebarItem.level-1 .link .link-text,
+.VPSidebarItem.level-2 .link .link-text {
+  padding: 5px 10px;
+  margin-left: -10px;
+  border-radius: 7px;
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease;
+}
+
+.VPSidebarItem.is-link > .item:hover .link-text {
+  background: var(--vp-c-bg-soft);
+}
+
+.VPSidebarItem.is-active > .item .link-text {
+  background: var(--vp-c-brand-soft);
+  color: var(--vp-c-brand-1);
+  font-weight: 600;
+}
+
+/* The default indicator bar duplicates what the pill now says. */
+.VPSidebarItem.is-active > .item > .indicator {
+  background-color: transparent;
+}
+
+.VPDocOutlineItem a {
+  transition: color 0.2s ease;
+}
+
+/* ------------------------------------------------------------------ *
+ * Code
+ * ------------------------------------------------------------------ */
+
+.vp-doc div[class*='language-'] {
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 12px;
+  box-shadow: var(--tpm-card-shadow);
+}
+
+.dark .vp-doc div[class*='language-'] {
+  border-color: rgba(150, 178, 230, 0.16);
+}
+
+.vp-doc div[class*='language-'] pre {
+  padding: 18px 0;
+}
+
+.vp-doc [class*='language-'] code {
+  font-size: 13.5px;
+  line-height: 1.7;
+}
+
+/* The language tag keeps the default theme's behaviour of appearing on hover
+   and giving way to the copy button: shown always, it lands on top of the
+   code itself in a one-line block. */
+.vp-doc [class*='language-'] > span.lang {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.vp-doc [class*='language-'] > button.copy {
+  border-radius: 8px;
+}
+
+.vp-doc [class*='language-'] .line-numbers-wrapper {
+  border-right: 1px solid var(--vp-code-block-divider-color);
+}
+
+/* Inline code as a chip, distinct from a link at a glance. */
+.vp-doc :not(pre) > code {
+  padding: 3px 6px;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 6px;
+  background: var(--vp-c-bg-soft);
+  font-size: 0.86em;
+  font-weight: 500;
+}
+
+.vp-doc a > code {
+  border-color: var(--tpm-border-strong);
+  color: var(--vp-c-brand-1);
+}
+
+/* ------------------------------------------------------------------ *
+ * Callouts
+ * ------------------------------------------------------------------ */
+
+.vp-doc .custom-block {
+  padding: 16px 18px 14px;
+  border: 1px solid var(--vp-c-divider);
+  border-left-width: 3px;
+  border-radius: 10px;
+  font-size: 14.5px;
+  line-height: 1.68;
+}
+
+.vp-doc .custom-block .custom-block-title {
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 680;
+  letter-spacing: -0.005em;
+}
+
+.vp-doc .custom-block p:not(.custom-block-title):last-child {
+  margin-bottom: 0;
+}
+
+.vp-doc .custom-block.tip {
+  border-color: var(--vp-c-divider);
+  border-left-color: var(--vp-c-tip-3);
+}
+
+.vp-doc .custom-block.warning {
+  border-color: var(--vp-c-divider);
+  border-left-color: var(--vp-c-warning-3);
+}
+
+.vp-doc .custom-block.danger {
+  border-color: var(--vp-c-divider);
+  border-left-color: var(--vp-c-danger-3);
+}
+
+.vp-doc .custom-block.info {
+  border-color: var(--vp-c-divider);
+  border-left-color: var(--vp-c-brand-3);
+}
+
+/* ------------------------------------------------------------------ *
+ * Tables
+ * ------------------------------------------------------------------ */
+
+.vp-doc table {
+  display: table;
+  width: 100%;
+  overflow: hidden;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 10px;
+  font-size: 14.5px;
+}
+
+.vp-doc tr {
+  background: transparent;
+  border-top: 0;
+}
+
+.vp-doc th,
+.vp-doc td {
+  border: 0;
+  border-bottom: 1px solid var(--vp-c-divider);
+  padding: 11px 14px;
+}
+
+.vp-doc th {
+  background: var(--vp-c-bg-soft);
+  color: var(--vp-c-text-2);
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.vp-doc tr:last-child td {
+  border-bottom: 0;
+}
+
+/* A table wide enough to scroll must say so by scrolling itself, never by
+   widening the page. */
+.vp-doc .table-wrapper {
+  overflow-x: auto;
+}
+
+/* ------------------------------------------------------------------ *
+ * Page furniture
+ * ------------------------------------------------------------------ */
+
+.VPDocFooter .edit-info .edit-link-button {
+  font-weight: 550;
+}
+
+.VPDocFooter .pager-link {
+  border-radius: 12px;
+  border-color: var(--vp-c-divider);
+  transition:
+    border-color 0.22s ease,
+    transform 0.22s ease;
+}
+
+.VPDocFooter .pager-link:hover {
+  border-color: var(--tpm-border-strong);
+  transform: translateY(-2px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .VPDocFooter .pager-link:hover {
+    transform: none;
+  }
+}
+
+.VPFooter {
+  border-top: 1px solid var(--vp-c-divider);
+  background: var(--vp-c-bg-alt);
+}
+
+.VPFooter .message,
+.VPFooter .copyright {
+  font-size: 13.5px;
+}
+
+/* The local search dialog, matched to the cards. */
+.VPLocalSearchBox .shell {
+  border-radius: 14px;
+}
+
+::selection {
+  background: var(--vp-c-brand-soft);
+}
