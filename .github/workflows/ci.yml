@@ -462,7 +462,7 @@ jobs:
       # `cargo install cargo-audit` compiles the tool from source on every
       # run — measured at 5m24s, against 4s for the check itself. This pulls a
       # prebuilt binary instead.
-      - uses: taiki-e/install-action@7f4eb899022d8fe70b20c4f3de697aa85c309026 # v2
+      - uses: taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf # v2
         with:
           tool: cargo-audit
       # A known-vulnerable dependency in a program that holds an OAuth refresh
