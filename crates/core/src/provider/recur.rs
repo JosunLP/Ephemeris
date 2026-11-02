@@ -57,6 +57,11 @@ pub struct Rule {
     pub by_month: Vec<u32>,
     pub by_set_pos: Vec<i32>,
     pub week_start: Weekday,
+    /// A single `BYHOUR`, `BYMINUTE` or `BYSECOND`. Expansion keeps the time
+    /// of `DTSTART`, so the caller must refuse a rule whose value differs.
+    pub by_hour: Option<u32>,
+    pub by_minute: Option<u32>,
+    pub by_second: Option<u32>,
 }
 
 /// `UNTIL` as written: a date, or a timestamp that still has to be put into
@@ -100,6 +105,9 @@ impl Rule {
             by_month: Vec::new(),
             by_set_pos: Vec::new(),
             week_start: Weekday::Mon,
+            by_hour: None,
+            by_minute: None,
+            by_second: None,
         };
 
         for part in value.split(';').filter(|p| !p.trim().is_empty()) {
@@ -158,8 +166,25 @@ impl Rule {
                 // Selecting hours, minutes or seconds within a day only means
                 // something to a sub-daily rule, and those are rejected above.
                 // A value that merely repeats DTSTART's own time changes
-                // nothing; anything else would, so it is refused.
-                "BYHOUR" | "BYMINUTE" | "BYSECOND" if val.split(',').count() <= 1 => {}
+                // nothing; anything else would, so the caller, which knows
+                // DTSTART, refuses it (see `Rule::matches_time`).
+                key @ ("BYHOUR" | "BYMINUTE" | "BYSECOND") if !val.contains(',') => {
+                    let max = match key {
+                        "BYHOUR" => 23,
+                        "BYMINUTE" => 59,
+                        _ => 60,
+                    };
+                    let n = val
+                        .parse::<u32>()
+                        .ok()
+                        .filter(|n| *n <= max)
+                        .ok_or_else(|| Unsupported(format!("{key}={val}")))?;
+                    match key {
+                        "BYHOUR" => rule.by_hour = Some(n),
+                        "BYMINUTE" => rule.by_minute = Some(n),
+                        _ => rule.by_second = Some(n),
+                    }
+                }
                 other @ ("BYYEARDAY" | "BYWEEKNO" | "BYHOUR" | "BYMINUTE" | "BYSECOND") => {
                     return Err(Unsupported(format!("{other} is not supported")));
                 }
@@ -184,6 +209,16 @@ impl Rule {
     /// Every date the rule produces from `start` up to and including `last`,
     /// in order, with `start` itself always first.
     ///
+    /// Whether a single `BYHOUR`/`BYMINUTE`/`BYSECOND` only restates `time`,
+    /// the time of `DTSTART`. Every occurrence keeps that time, so a rule
+    /// that names another one would be expanded wrongly and must be refused.
+    pub fn matches_time(&self, time: chrono::NaiveTime) -> bool {
+        use chrono::Timelike;
+        self.by_hour.is_none_or(|h| h == time.hour())
+            && self.by_minute.is_none_or(|m| m == time.minute())
+            && self.by_second.is_none_or(|s| s == time.second())
+    }
+
     /// `until` is the already-converted inclusive end, if any; see
     /// [`Rule::until`]. `COUNT` counts from `start`, so dates before the
     /// window the caller cares about still have to be walked.
@@ -753,8 +788,15 @@ mod tests {
         ] {
             assert!(Rule::parse(rule).is_err(), "{rule} should be refused");
         }
-        // A single BYHOUR merely restates DTSTART's time, as Outlook writes it.
-        assert!(Rule::parse("FREQ=DAILY;BYHOUR=9").is_ok());
+        // A single BYHOUR is parsed; whether it restates DTSTART's time, as
+        // Outlook writes it, is for the caller to check.
+        let rule = Rule::parse("FREQ=DAILY;BYHOUR=9;BYMINUTE=30").unwrap();
+        let at = |h, m| chrono::NaiveTime::from_hms_opt(h, m, 0).unwrap();
+        assert!(rule.matches_time(at(9, 30)));
+        assert!(!rule.matches_time(at(17, 30)));
+        assert!(!rule.matches_time(at(9, 0)));
+        assert!(Rule::parse("FREQ=DAILY").unwrap().matches_time(at(17, 0)));
+        assert!(Rule::parse("FREQ=DAILY;BYHOUR=24").is_err());
     }
 
     #[test]

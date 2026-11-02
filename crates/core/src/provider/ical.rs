@@ -25,7 +25,7 @@
 //! timestamp, and an alarm inside an event has a `DESCRIPTION` of its own
 //! that must not replace the event's.
 
-use super::recur::{Rule, Until};
+use super::recur::{Rule, Unsupported, Until};
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use std::collections::{HashMap, HashSet};
 
@@ -159,6 +159,9 @@ struct Zone {
     transitions: Vec<(NaiveDateTime, i32)>,
     /// The offset before the first transition.
     initial: i32,
+    /// Every distinct offset the zone uses, sorted. Worked out once, since a
+    /// zone defined from 1601 has hundreds of transitions but two offsets.
+    offsets: Vec<i32>,
 }
 
 /// How far ahead the daylight saving transitions of a zone are worked out.
@@ -213,9 +216,14 @@ impl Zone {
             .min_by_key(|o| o.start)
             .map(|o| o.offset_from)
             .unwrap_or(0);
+        let mut offsets: Vec<i32> = transitions.iter().map(|t| t.1).collect();
+        offsets.push(initial);
+        offsets.sort_unstable();
+        offsets.dedup();
         Zone {
             transitions,
             initial,
+            offsets,
         }
     }
 
@@ -233,11 +241,7 @@ impl Zone {
     /// is read with the offset from before the change. Both are what RFC 5545
     /// section 3.3.5 prescribes.
     fn to_utc(&self, local: NaiveDateTime) -> NaiveDateTime {
-        let mut offsets: Vec<i32> = self.transitions.iter().map(|t| t.1).collect();
-        offsets.push(self.initial);
-        offsets.sort_unstable();
-        offsets.dedup();
-        offsets
+        self.offsets
             .iter()
             .map(|&o| local - Duration::seconds(i64::from(o)))
             .filter(|&u| {
@@ -456,7 +460,17 @@ impl Calendar {
     fn series(&self, e: &RawEvent, start: &RawStamp, to_utc: NaiveDateTime) -> Vec<RawStamp> {
         let mut starts = vec![start.clone()];
         if let Some(text) = &e.rrule {
-            match Rule::parse(text) {
+            let base_time = start.naive().time();
+            let parsed = Rule::parse(text).and_then(|rule| {
+                if rule.matches_time(base_time) {
+                    Ok(rule)
+                } else {
+                    Err(Unsupported(
+                        "its BYHOUR/BYMINUTE/BYSECOND names a time other than its start".into(),
+                    ))
+                }
+            });
+            match parsed {
                 Ok(rule) => {
                     let base = start.naive();
                     // Generous by two days either side of the zone offsets.
@@ -584,6 +598,9 @@ impl Calendar {
         static UTC: Zone = Zone {
             transitions: Vec::new(),
             initial: 0,
+            // Empty because a static cannot allocate; `to_utc` then falls
+            // back to the offset in force, which is 0 here too.
+            offsets: Vec::new(),
         };
         if matches!(
             id.to_ascii_uppercase().as_str(),

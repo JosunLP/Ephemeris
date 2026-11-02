@@ -22,7 +22,7 @@
 //!   whole every half hour would be pure waste on both ends.
 
 use super::ical::{self, Calendar, Stamp};
-use super::{CalendarProvider, CalendarRef, Error, Result, api_error, http};
+use super::{CalendarProvider, CalendarRef, Error, Result, http};
 use crate::model::Event;
 use chrono::{DateTime, Local};
 use serde::Deserialize;
@@ -377,7 +377,9 @@ fn fetch_web(url: &str, previous: Option<&Cached>) -> Result<Fetched> {
                 "{host} has no calendar at that address (HTTP {status})"
             )));
         }
-        _ => return Err(api_error(status, &body)),
+        // Not `api_error`: it quotes the body, and an error page may echo
+        // the private feed address back.
+        _ => return Err(Error::Other(format!("{host}: HTTP {status}"))),
     }
 
     Ok(Fetched::New(Cached {
@@ -416,12 +418,20 @@ fn read_file(path: &Path, previous: Option<&Cached>) -> Result<Fetched> {
 /// address goes wrong; say that instead of showing an empty day.
 fn parse_checked(body: &str, origin: &str) -> Result<Calendar> {
     let body = body.trim_start_matches('\u{feff}');
-    if !body
+    let head = body
         .get(..body.len().min(4096))
         .unwrap_or(body)
-        .to_ascii_uppercase()
-        .contains("BEGIN:VCALENDAR")
-    {
+        .to_ascii_uppercase();
+    if !head.contains("BEGIN:VCALENDAR") {
+        // A private address that has been reset, or one copied from the
+        // browser rather than the export dialog, usually answers with the
+        // provider's sign-in page.
+        if head.trim_start().starts_with('<') || head.contains("<HTML") {
+            return Err(Error::NeedsSetup(format!(
+                "{origin} returned a web page, not a calendar — usually a sign-in page. \
+                 Use the calendar's iCal/ICS address, which works without signing in"
+            )));
+        }
         return Err(Error::Other(format!(
             "{origin} did not return a calendar — is the address the iCal/ICS one?"
         )));
@@ -597,7 +607,14 @@ mod tests {
     #[test]
     fn a_login_page_is_reported_as_such() {
         let html = "<!doctype html><html><body>Sign in</body></html>";
-        assert!(parse_checked(html, "host").is_err());
+        assert!(matches!(
+            parse_checked(html, "host"),
+            Err(Error::NeedsSetup(m)) if m.contains("sign-in page")
+        ));
+        assert!(matches!(
+            parse_checked("Not found", "host"),
+            Err(Error::Other(m)) if m.contains("did not return a calendar")
+        ));
         assert!(parse_checked("\u{feff}BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n", "host").is_ok());
     }
 

@@ -30,8 +30,9 @@ All notable changes to this project are documented here. The format follows
   An unchanged feed is not downloaded again — its `ETag` and `Last-Modified`
   go back to the server — and a private feed address is treated as the
   credential it is: it stays in the account file, the calendar id written to
-  `config.json` is a hash of it, and the log names only its host. An HTML
-  sign-in page served in place of a calendar is reported as exactly that.
+  `config.json` is a hash of it, and the log names only its host, error
+  responses included. A web page served in place of a calendar, usually a
+  sign-in page, is reported as one.
 
 ### Changed
 
