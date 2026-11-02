@@ -9,20 +9,20 @@ license = "GPL-3.0-or-later"
 description = "A desktop widget showing today's calendar events and due tasks"
 repository = "https://github.com/JosunLP/Ephemeris"
 readme = "README.md"
-rust-version = "1.90"
+rust-version = "1.99"
 
 [dependencies]
 ephemeris-core = { path = "crates/core" }
 base64 = "0.23.1"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std", "serde"] }
-quick-xml = "0.41.0"
+quick-xml = "0.42.0"
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.151"
-sha2 = "0.11.0"
+serde_json = "1.0.154"
+sha2 = "0.11.1"
 # `win-system-proxy` picks the proxy settings up from the Windows internet
 # options — without it every request fails on a network that only gets out
 # through a corporate proxy.
-ureq = { version = "3.3.0", default-features = false, features = [
+ureq = { version = "3.5.0", default-features = false, features = [
     "rustls",
     "json",
     "win-system-proxy",
@@ -45,7 +45,7 @@ strip = true
 # macOS is deliberately not in this list: it uses Core Foundation, which is a
 # plain C API declared inline, so it needs no crate at all.
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
-libc = "0.2.189"
+libc = "0.2.191"
 
 # The Win32 bindings are only ever used by `src/win`, which is itself behind
 # `#[cfg(windows)]`. Declaring them per target keeps them off the macOS and
@@ -91,4 +91,4 @@ windows-numerics = "0.3.1"
 # is gone — and `cfg(windows)` here is the machine doing the building, so a
 # Linux or macOS build never fetches it. See `build.rs`.
 [target.'cfg(windows)'.build-dependencies]
-winresource = "0.1.31"
+winresource = "0.1.34"

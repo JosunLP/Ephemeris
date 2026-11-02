@@ -362,18 +362,25 @@ struct DavResponse {
 ///
 /// Namespace prefixes differ between servers (`d:`, `D:`, none at all), so
 /// everything is matched on local names.
+///
+/// An element's text arrives in pieces: the reader hands over every entity
+/// reference — the `&amp;` of an escaped `&` in a summary — as an event of its
+/// own between two runs of text. So the pieces are gathered per element and
+/// stored when it closes. Keeping only the last piece, as this once did, turned
+/// "R&D sync" into "D sync".
 fn parse_responses(xml: &str) -> Vec<DavResponse> {
     let mut reader = Reader::from_str(xml);
-    reader.config_mut().trim_text(true);
 
     let mut out: Vec<DavResponse> = Vec::new();
     let mut stack: Vec<String> = Vec::new();
     let mut current: Option<DavResponse> = None;
+    let mut text = String::new();
     let mut buf = Vec::new();
 
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(XmlEvent::Start(e)) => {
+                text.clear();
                 let name = local_name(e.name().as_ref());
                 match name.as_str() {
                     "response" => current = Some(DavResponse::default()),
@@ -405,41 +412,49 @@ fn parse_responses(xml: &str) -> Vec<DavResponse> {
                     }
                 }
             }
-            Ok(XmlEvent::Text(t)) => {
-                let text = t.decode().map(|c| c.into_owned()).unwrap_or_default();
-                if text.is_empty() {
-                    buf.clear();
-                    continue;
-                }
-                if let Some(c) = current.as_mut() {
-                    match stack.last().map(String::as_str) {
+            Ok(XmlEvent::Text(t)) => text.push_str(&t.xml10_content()),
+            // Some servers wrap calendar-data in CDATA.
+            Ok(XmlEvent::CData(t)) => text.push_str(&t),
+            Ok(XmlEvent::GeneralRef(r)) => match r.resolve_char_ref() {
+                Ok(Some(c)) => text.push(c),
+                _ => match &*r {
+                    "amp" => text.push('&'),
+                    "lt" => text.push('<'),
+                    "gt" => text.push('>'),
+                    "quot" => text.push('"'),
+                    "apos" => text.push('\''),
+                    // An entity no DTD defines here: keep it visible rather
+                    // than silently dropping a piece of the text.
+                    other => {
+                        text.push('&');
+                        text.push_str(other);
+                        text.push(';');
+                    }
+                },
+            },
+            Ok(XmlEvent::End(e)) => {
+                let name = local_name(e.name().as_ref());
+                let value = text.trim();
+                if !value.is_empty()
+                    && let Some(c) = current.as_mut()
+                    && stack.last() == Some(&name)
+                {
+                    match name.as_str() {
                         // The first href belongs to the response itself;
                         // later ones sit inside a property.
-                        Some("href") => match stack.iter().rev().nth(1).map(String::as_str) {
-                            Some("response") => c.href = text,
+                        "href" => match stack.iter().rev().nth(1).map(String::as_str) {
+                            Some("response") => c.href = value.to_string(),
                             Some(parent) => {
-                                c.nested_href.insert(parent.to_string(), text);
+                                c.nested_href.insert(parent.to_string(), value.to_string());
                             }
                             None => {}
                         },
-                        Some(other) => {
-                            c.props.insert(other.to_string(), text);
+                        other => {
+                            c.props.insert(other.to_string(), value.to_string());
                         }
-                        None => {}
                     }
                 }
-            }
-            Ok(XmlEvent::CData(t)) => {
-                // Some servers wrap calendar-data in CDATA.
-                if let Some(c) = current.as_mut()
-                    && let Some(name) = stack.last()
-                {
-                    let text = String::from_utf8_lossy(&t).into_owned();
-                    c.props.insert(name.clone(), text);
-                }
-            }
-            Ok(XmlEvent::End(e)) => {
-                let name = local_name(e.name().as_ref());
+                text.clear();
                 stack.pop();
                 if name == "response"
                     && let Some(done) = current.take()
@@ -459,19 +474,14 @@ fn parse_responses(xml: &str) -> Vec<DavResponse> {
     out
 }
 
-fn local_name(raw: &[u8]) -> String {
-    let name = String::from_utf8_lossy(raw);
-    name.rsplit(':')
-        .next()
-        .unwrap_or(&name)
-        .to_ascii_lowercase()
+fn local_name(raw: &str) -> String {
+    raw.rsplit(':').next().unwrap_or(raw).to_ascii_lowercase()
 }
 
 fn attr_value(e: &quick_xml::events::BytesStart, wanted: &str) -> Option<String> {
-    e.attributes().flatten().find_map(|a| {
-        (local_name(a.key.as_ref()) == wanted)
-            .then(|| String::from_utf8_lossy(&a.value).into_owned())
-    })
+    e.attributes()
+        .flatten()
+        .find_map(|a| (local_name(a.key.as_ref()) == wanted).then(|| a.value.into_owned()))
 }
 
 /// Apple's `calendar-color` is `#RRGGBB` or `#RRGGBBAA`.
@@ -603,6 +613,27 @@ mod tests {
         assert_eq!(
             self_absolute("https://dav.example.org/cal", "https://other.example/x/"),
             "https://other.example/x"
+        );
+    }
+
+    #[test]
+    fn escaped_characters_survive_in_calendar_data() {
+        let xml = r#"<d:multistatus xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
+  <d:response>
+    <d:href>/cal/1.ics</d:href>
+    <d:propstat><d:prop><c:calendar-data>BEGIN:VCALENDAR
+BEGIN:VEVENT
+SUMMARY:R&amp;D sync &lt;weekly&gt; &#8211; room &quot;4&quot;
+END:VEVENT
+END:VCALENDAR</c:calendar-data></d:prop></d:propstat>
+  </d:response>
+</d:multistatus>"#;
+        let responses = parse_responses(xml);
+        let data = &responses[0].props["calendar-data"];
+        let events = ical::parse_events(data);
+        assert_eq!(
+            events[0].summary.as_deref(),
+            Some("R&D sync <weekly> \u{2013} room \"4\"")
         );
     }
 

@@ -627,8 +627,10 @@ mod tests {
                 .is_ok();
                 ok.then(|| {
                     let units: Vec<u16> = buf
-                        .chunks_exact(2)
-                        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .map(|&pair| u16::from_le_bytes(pair))
                         .take_while(|&u| u != 0)
                         .collect();
                     String::from_utf16_lossy(&units)
