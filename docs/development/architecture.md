@@ -5,7 +5,8 @@
 ```text
 crates/core/          ephemeris-core   — portable, no operating system calls
   model.rs            events, tasks, filtering, sorting, conflict detection
-  provider/           Google, Microsoft Graph, CalDAV, iCalendar
+  provider/           Google, Microsoft Graph, CalDAV, .ics feeds, iCalendar,
+                      recurrence rules
   sync.rs             schedule, backoff, parallel fetch, cache
   i18n.rs             catalogues, relative times, bidi handling
   layout.rs           where everything goes, and what a click landed on
@@ -160,7 +161,14 @@ exists to save bandwidth, not to be exact.
 **Recurring events must be expanded by the server.** Google needs
 `singleEvents=true`, Graph needs `calendarView` rather than `events`, CalDAV
 needs `<C:expand>`. Without them you get the recurrence rule instead of today's
-occurrence.
+occurrence. A subscribed `.ics` feed is the one exception, because nobody is on
+the other end: `provider::recur` expands it, and refuses the rule forms it would
+get wrong rather than approximating them.
+
+**All-day entries have no start time.** The sync fetches two days at once, and
+for a long time sorted the result into today and tomorrow by start time alone —
+so every all-day entry, tomorrow's included, landed on today. They carry their
+covered days in `Event::days` now, and `sync::split_days` uses those.
 
 **Graph timestamps carry no offset.** The zone sits in a sibling field. The
 request asks for UTC through a `Prefer` header and checks the reply.

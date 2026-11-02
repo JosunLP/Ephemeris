@@ -198,6 +198,12 @@ fn build_providers(accounts: &[AccountConfig]) -> Vec<Box<dyn CalendarProvider>>
                     config::data_dir().join(format!("token-{}.bin", account.id)),
                 )
                 .map(|p| Box::new(p) as Box<dyn CalendarProvider>),
+                Kind::Ics => provider::ics::IcsProvider::new(
+                    &account.id,
+                    account.display(),
+                    &config::data_dir().join(format!("ics-{}.json", account.id)),
+                )
+                .map(|p| Box::new(p) as Box<dyn CalendarProvider>),
             };
             match built {
                 Ok(p) => p,

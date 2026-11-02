@@ -28,9 +28,9 @@ features:
   - icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="14" height="14" rx="3"/><path d="M7 3v3M13 3v3M3 10.5h14"/><path d="M17 7h1.5A2.5 2.5 0 0 1 21 9.5V17"/></svg>'
     title: Every calendar at once
     details: >
-      Google, Microsoft (Outlook, Teams and To Do) and any CalDAV server —
-      iCloud, Nextcloud, Fastmail — queried in parallel. One account failing
-      never blanks the rest.
+      Google, Microsoft (Outlook, Teams and To Do), any CalDAV server —
+      iCloud, Nextcloud, Fastmail — and any subscribed .ics feed, queried in
+      parallel. One account failing never blanks the rest.
   - icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3.5" width="13" height="11" rx="2.5"/><path d="M8.5 20.5h10a2 2 0 0 0 2-2v-10"/></svg>'
     title: Out of the way by design
     details: >

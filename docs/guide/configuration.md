@@ -246,6 +246,7 @@ falls back to the system one, and the log names it.
 | `client_secret.json` | Your Google OAuth client |
 | `microsoft_client.json` | Your Azure application id |
 | `caldav-<id>.json` | CalDAV server and user name |
+| `ics-<id>.json` | Subscribed feed addresses |
 | `token-<id>.bin` | Your credentials, or a reference to them — see below |
 | `cache.json` | Last synced day, so something shows at start-up |
 | `ephemeris.log` | Log, rotated at 256 KB |

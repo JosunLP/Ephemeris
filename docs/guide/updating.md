@@ -66,6 +66,7 @@ Without `-Purge`, the data directory survives:
   client_secret.json   your Google OAuth client
   microsoft_client.json
   caldav-*.json
+  ics-*.json
 ```
 
 Deleting that folder removes every trace. Revoking the widget's access at the
