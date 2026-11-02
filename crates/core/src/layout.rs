@@ -821,6 +821,7 @@ mod tests {
             start: Some(at(from.0, from.1)),
             end: Some(at(to.0, to.1)),
             all_day: false,
+            days: None,
             location: None,
             html_link: None,
             join_url: None,

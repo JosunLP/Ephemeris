@@ -329,6 +329,11 @@ impl CalendarProvider for GraphProvider {
                         convert(e.end.as_ref())
                     },
                     all_day: e.is_all_day,
+                    days: if e.is_all_day {
+                        graph_day_span(e.start.as_ref(), e.end.as_ref())
+                    } else {
+                        None
+                    },
                     location: e
                         .location
                         .and_then(|l| l.display_name)
@@ -443,6 +448,27 @@ fn convert(t: Option<&GraphTime>) -> Option<DateTime<Local>> {
     let trimmed = raw.split('.').next().unwrap_or(raw);
     let naive = NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%dT%H:%M:%S").ok()?;
     Some(Utc.from_utc_datetime(&naive).with_timezone(&Local))
+}
+
+/// The days an all-day entry covers.
+///
+/// Graph writes an all-day entry as midnight to midnight, and with an
+/// all-day entry the date is the whole of the information: converting that
+/// midnight to another zone would move the entry to the wrong day. So only
+/// the date part is read. The end is exclusive, as it is everywhere else.
+fn graph_day_span(
+    start: Option<&GraphTime>,
+    end: Option<&GraphTime>,
+) -> Option<(NaiveDate, NaiveDate)> {
+    let day = |t: Option<&GraphTime>| {
+        let raw = t?.date_time.as_deref()?;
+        NaiveDate::parse_from_str(raw.get(..10)?, "%Y-%m-%d").ok()
+    };
+    let first = day(start)?;
+    let after = day(end)
+        .filter(|e| *e > first)
+        .unwrap_or(first + chrono::Duration::days(1));
+    Some((first, after))
 }
 
 fn parse_hex(s: Option<&str>) -> Option<u32> {

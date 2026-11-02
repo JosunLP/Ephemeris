@@ -5,7 +5,7 @@
 use super::auth::Auth;
 use super::{Result, agent, api_error, urlencode};
 use crate::model::Event;
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Local, NaiveDate};
 use serde::Deserialize;
 
 const BASE: &str = "https://www.googleapis.com/calendar/v3";
@@ -163,6 +163,7 @@ pub fn list_events(
                 start,
                 end,
                 all_day,
+                days: all_day_span(item.start.as_ref(), item.end.as_ref()),
                 location: item.location.filter(|s| !s.trim().is_empty()),
                 html_link: item.html_link,
                 join_url: None,
@@ -199,6 +200,24 @@ fn convert_time(t: Option<&EventTime>) -> (Option<DateTime<Local>>, bool) {
     } else {
         (None, t.date.is_some())
     }
+}
+
+/// The days an all-day entry covers, from Google's plain `date` fields.
+///
+/// The end is exclusive, as it is in iCalendar. A missing end means one day.
+fn all_day_span(
+    start: Option<&EventTime>,
+    end: Option<&EventTime>,
+) -> Option<(NaiveDate, NaiveDate)> {
+    let day = |t: Option<&EventTime>| {
+        t.and_then(|t| t.date.as_deref())
+            .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
+    };
+    let first = day(start)?;
+    let after = day(end)
+        .filter(|e| *e > first)
+        .unwrap_or(first + chrono::Duration::days(1));
+    Some((first, after))
 }
 
 /// `"#a4bdfc"` -> `0x00A4BDFC`.

@@ -16,7 +16,7 @@ use crate::model::{
 use crate::provider::{
     self, AccountConfig, CalendarProvider, CalendarRef, Error, FetchRequest, Kind, TaskListRef,
 };
-use chrono::{Duration as ChronoDuration, Local, NaiveDate};
+use chrono::{DateTime, Duration as ChronoDuration, Local, NaiveDate};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -547,10 +547,7 @@ fn run_sync(
         at: keep_timestamp.unwrap_or_else(Instant::now),
     });
 
-    // Split by day. All-day events have no start time and stay with today.
-    let (mut events, mut next_day): (Vec<Event>, Vec<Event>) = events
-        .into_iter()
-        .partition(|e| e.start.map(|s| s < midnight).unwrap_or(true));
+    let (mut events, mut next_day) = split_days(events, today, midnight);
     completed.drop_completed(today, &mut events);
     completed.drop_completed(today, &mut next_day);
     sort_events(&mut events);
@@ -585,6 +582,42 @@ fn run_sync(
         // Partial failure is worth showing, but not worth blanking the widget.
         last_error: provider::summarize_errors(&results),
     })
+}
+
+/// Sorts what two days of fetching returned into today and tomorrow.
+///
+/// A timed entry goes by its start. An all-day entry goes by the days it
+/// covers: today if it covers today — a holiday week shows on every day of
+/// it — otherwise tomorrow if it covers tomorrow. One that covers neither is
+/// dropped; a service whose window test treats an exclusive end as inclusive
+/// hands back yesterday's all-day entries, and those belong nowhere.
+///
+/// An all-day entry without its days — a cache written by an older version —
+/// stays with today, which is what every version before this one did.
+fn split_days(
+    events: Vec<Event>,
+    today: NaiveDate,
+    midnight: DateTime<Local>,
+) -> (Vec<Event>, Vec<Event>) {
+    let tomorrow = today + ChronoDuration::days(1);
+    let covers =
+        |(first, after): (NaiveDate, NaiveDate), day: NaiveDate| first <= day && day < after;
+    let mut today_list = Vec::new();
+    let mut tomorrow_list = Vec::new();
+    for event in events {
+        match (event.days, event.start) {
+            (Some(span), _) if event.all_day => {
+                if covers(span, today) {
+                    today_list.push(event);
+                } else if covers(span, tomorrow) {
+                    tomorrow_list.push(event);
+                }
+            }
+            (_, Some(start)) if start >= midnight => tomorrow_list.push(event),
+            _ => today_list.push(event),
+        }
+    }
+    (today_list, tomorrow_list)
 }
 
 fn apply_sync_result(
@@ -755,6 +788,7 @@ mod tests {
             start: None,
             end: None,
             all_day: true,
+            days: None,
             location: None,
             html_link: None,
             join_url: None,
@@ -765,6 +799,63 @@ mod tests {
             task_id: None,
             task_list_id: None,
         }
+    }
+
+    fn titles(events: &[Event]) -> Vec<&str> {
+        events.iter().map(|e| e.title.as_str()).collect()
+    }
+
+    #[test]
+    fn an_all_day_entry_tomorrow_is_not_shown_today() {
+        // The fetch covers two days; before the day range existed, every
+        // all-day entry landed on today because it has no start time.
+        let today = NaiveDate::from_ymd_opt(2026, 8, 8).unwrap();
+        let day = |d: u32| NaiveDate::from_ymd_opt(2026, 8, d).unwrap();
+        let midnight = local_day_start(day(9));
+        let with = |title: &str, first: u32, after: u32| {
+            let mut e = event("a", title);
+            e.days = Some((day(first), day(after)));
+            e
+        };
+        let (on_today, on_tomorrow) = split_days(
+            vec![
+                with("today only", 8, 9),
+                with("tomorrow only", 9, 10),
+                with("holiday week", 6, 13),
+                with("ended yesterday", 7, 8),
+                event("old cache", "no range"),
+            ],
+            today,
+            midnight,
+        );
+        assert_eq!(
+            titles(&on_today),
+            ["today only", "holiday week", "no range"]
+        );
+        assert_eq!(titles(&on_tomorrow), ["tomorrow only"]);
+    }
+
+    #[test]
+    fn timed_entries_still_go_by_their_start() {
+        let today = NaiveDate::from_ymd_opt(2026, 8, 8).unwrap();
+        let midnight = local_day_start(today + ChronoDuration::days(1));
+        let at = |e: &str, t: DateTime<Local>| {
+            let mut ev = event("a", e);
+            ev.all_day = false;
+            ev.start = Some(t);
+            ev.end = Some(t + ChronoDuration::hours(1));
+            ev
+        };
+        let (on_today, on_tomorrow) = split_days(
+            vec![
+                at("late", midnight - ChronoDuration::hours(1)),
+                at("early", midnight + ChronoDuration::hours(8)),
+            ],
+            today,
+            midnight,
+        );
+        assert_eq!(titles(&on_today), ["late"]);
+        assert_eq!(titles(&on_tomorrow), ["early"]);
     }
 
     #[test]

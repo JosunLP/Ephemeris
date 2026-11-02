@@ -50,6 +50,21 @@ impl Stamp {
     }
 }
 
+/// The days an all-day entry covers, end exclusive.
+///
+/// `None` unless the start is a plain date. RFC 5545 makes a missing `DTEND`
+/// on a date-valued start a one-day entry.
+pub fn day_span(start: Option<Stamp>, end: Option<Stamp>) -> Option<(NaiveDate, NaiveDate)> {
+    let Some(Stamp::Date(first)) = start else {
+        return None;
+    };
+    let after = match end {
+        Some(Stamp::Date(e)) if e > first => e,
+        _ => first + chrono::Duration::days(1),
+    };
+    Some((first, after))
+}
+
 /// Reads every `VEVENT` in an iCalendar document.
 ///
 /// Anything that is not understood is skipped rather than rejected: a single

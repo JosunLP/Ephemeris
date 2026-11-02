@@ -322,6 +322,7 @@ impl CalendarProvider for CalDavProvider {
                     start: vevent.start.and_then(Stamp::as_local),
                     end: vevent.end.and_then(Stamp::as_local),
                     all_day,
+                    days: ical::day_span(vevent.start, vevent.end),
                     location: vevent.location.filter(|s| !s.trim().is_empty()),
                     html_link: None,
                     join_url: vevent.url,

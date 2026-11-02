@@ -434,6 +434,7 @@ mod tests {
                     start: None,
                     end: None,
                     all_day: true,
+                    days: None,
                     location: None,
                     html_link: None,
                     join_url: None,
