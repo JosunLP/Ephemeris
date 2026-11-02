@@ -23,7 +23,9 @@ pub mod caldav;
 pub mod google;
 pub mod graph;
 pub mod ical;
+pub mod ics;
 pub mod oauth;
+pub mod recur;
 
 use crate::model::{Event, Task};
 use chrono::{DateTime, Local, NaiveDate};
@@ -127,6 +129,11 @@ pub enum Kind {
     /// Teams meetings are ordinary Outlook events carrying a join link, so
     /// they need no separate back end.
     Microsoft,
+    /// A subscribed `.ics` feed — a web address or a file. Read-only, and no
+    /// sign-in: holidays, shared team calendars, the private iCal address
+    /// every major calendar service offers.
+    #[serde(alias = "webcal", alias = "ical")]
+    Ics,
 }
 
 /// One configured account.
@@ -434,6 +441,7 @@ mod tests {
                     start: None,
                     end: None,
                     all_day: true,
+                    days: None,
                     location: None,
                     html_link: None,
                     join_url: None,

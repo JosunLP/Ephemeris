@@ -16,6 +16,17 @@ pub struct Event {
     pub start: Option<DateTime<Local>>,
     pub end: Option<DateTime<Local>>,
     pub all_day: bool,
+    /// The calendar days an all-day entry covers: first day, and the day
+    /// after the last one — the exclusive end every one of the services uses.
+    ///
+    /// `None` for a timed entry, which places itself by its start. An all-day
+    /// entry has no start time, and before this existed one that began
+    /// tomorrow was shown today: the sync asks for two days at once to get the
+    /// tomorrow preview, and the only thing that told the two apart was the
+    /// start time an all-day entry does not have. Defaulted on read so an old
+    /// cache still loads.
+    #[serde(default)]
+    pub days: Option<(NaiveDate, NaiveDate)>,
     pub location: Option<String>,
     /// Link into the web calendar, opened on click.
     pub html_link: Option<String>,
@@ -632,6 +643,7 @@ mod tests {
             start: Some(at(from.0, from.1)),
             end: Some(at(to.0, to.1)),
             all_day: false,
+            days: None,
             location: None,
             html_link: None,
             join_url: None,

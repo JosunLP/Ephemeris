@@ -72,6 +72,26 @@
   </recommends>
 
   <releases>
+    <release version="1.2.0" date="2026-11-02">
+      <description>
+        <p>Calendars from a link, and all-day entries on the right day.</p>
+        <ul>
+          <li>
+            Subscribe to any .ics or webcal feed — public holidays, a shared
+            team calendar, or the private iCal address of any calendar
+            service — or read a calendar file from disk. Recurring entries
+            and time zones are worked out by the widget itself.
+          </li>
+          <li>
+            An all-day entry that starts tomorrow is no longer shown today.
+          </li>
+          <li>
+            CalDAV entries keep an ampersand or angle bracket in their title,
+            and an alarm no longer replaces an entry's description.
+          </li>
+        </ul>
+      </description>
+    </release>
     <release version="1.1.0" date="2026-08-17">
       <description>
         <p>The first release that runs on this desktop at all.</p>

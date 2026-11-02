@@ -1,20 +1,20 @@
 [package]
 name = "ephemeris-core"
-version = "1.1.0"
+version = "1.2.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
 description = "Portable core of Ephemeris: calendar providers, sync, model, localisation"
 repository = "https://github.com/JosunLP/Ephemeris"
-rust-version = "1.90"
+rust-version = "1.98"
 
 [dependencies]
 base64 = "0.23.1"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std", "serde"] }
-quick-xml = "0.41.0"
+quick-xml = "0.42.0"
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.151"
-sha2 = "0.11.0"
-ureq = { version = "3.3.0", default-features = false, features = [
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+ureq = { version = "3.5.0", default-features = false, features = [
     "rustls",
     "json",
     "win-system-proxy",

@@ -1,6 +1,7 @@
 # Connecting accounts
 
-Ephemeris talks to three kinds of service. You can use several at once, and of
+Ephemeris talks to three kinds of service, and reads subscribed calendar feeds
+as a fourth. You can use several at once, and of
 the same kind more than once — a work Google account and a private one, for
 instance. All configured accounts are queried **in parallel**, and one of them
 failing never hides the others.
@@ -17,11 +18,12 @@ list:
 "accounts": [
   { "kind": "google",    "id": "private", "label": "Private" },
   { "kind": "microsoft", "id": "work",    "label": "Work" },
-  { "kind": "caldav",    "id": "icloud",  "label": "iCloud" }
+  { "kind": "caldav",    "id": "icloud",  "label": "iCloud" },
+  { "kind": "ics",       "id": "holidays", "label": "Holidays" }
 ]
 ```
 
-- **`kind`** — `google`, `microsoft` or `caldav`
+- **`kind`** — `google`, `microsoft`, `caldav` or `ics`
 - **`id`** — free text, used for the credential file name. Keep it stable.
 - **`label`** — shown in the widget when more than one account is configured
 - **`enabled`** — set to `false` to switch an account off without deleting it
@@ -175,6 +177,73 @@ home, or of a single calendar, that works too.
 Expanded by the server, through the standard `<C:expand>` request. Reimplementing
 recurrence rules on the client is where hand-written CalDAV clients usually go
 wrong, and every server already has that code.
+
+---
+
+## Subscribed calendars — `.ics` and `webcal://`
+
+A calendar published as a file: public holidays, school terms, a sports
+fixture list, a team calendar someone shared as a link — or any of your own
+calendars, through the private iCal address Google, Outlook, iCloud and
+Proton all offer. Read-only, and no sign-in.
+
+Create `%APPDATA%\Ephemeris\ics-<id>.json`, where `<id>` matches the `id` in
+your `accounts` entry:
+
+```json
+{ "url": "webcal://example.org/holidays.ics" }
+```
+
+Several feeds can share one account, each with an optional name and colour:
+
+```json
+{
+  "feeds": [
+    { "url": "https://example.org/holidays.ics", "name": "Holidays", "color": "#33b679" },
+    { "url": "https://calendar.google.com/calendar/ical/…/basic.ics" },
+    { "url": "exported.ics" }
+  ]
+}
+```
+
+- **`url`** — `https://`, `http://` or `webcal://` (read as `https://`, which is
+  what every service handing one out serves). A path, absolute or relative to
+  the data folder, or a `file://` address reads a file instead — an export, or a
+  calendar some other program keeps up to date on disk.
+- **`name`** — optional. Otherwise the name the publisher gave the feed, and
+  failing that its host name.
+- **`color`** — optional, `#RRGGBB`. Otherwise the publisher's colour, and
+  failing that one from a fixed set.
+
+Each feed appears under **Calendars** in the right-click menu like any other
+calendar. One feed failing fails its account, so a feed you do not trust to
+stay up is better off in an account of its own.
+
+::: warning A private address is a password
+Anyone holding the private iCal address of your calendar can read it. That is
+why it goes in this file and not in `config.json`, why the calendar id the menu
+writes to `config.json` is a hash of the address, and why the log names only
+its host. If one leaks, reset it at the service; the old one stops working.
+:::
+
+### Recurring events
+
+Expanded by the widget itself — a feed is a file, so there is no server to ask.
+Daily, weekly, monthly and yearly rules with their intervals, counts and end
+dates are all understood, as are "the last Friday of the month", "every
+weekday", excluded dates, and single occurrences that were moved or cancelled.
+
+Time zones come from the feed's own `VTIMEZONE` definitions, so a 09:00 meeting
+in Berlin stays at 09:00 Berlin time across a daylight saving change wherever
+you are. The few rule forms nobody writes by hand — by week number, by day of
+the year, several times a day — are not guessed at: the entry shows its first
+occurrence and the log says which rule it was.
+
+### How often
+
+With every sync, but a feed that has not changed is not downloaded again: the
+server's `ETag` and `Last-Modified` are sent back, and an unchanged feed costs
+one short reply. A file on disk is re-read when its modification time changes.
 
 ---
 

@@ -48,6 +48,11 @@ Then connect a calendar — see [connecting accounts](https://josunlp.github.io/
   (Outlook, Teams and To Do) and any CalDAV server — iCloud, Nextcloud,
   Fastmail, Synology, mailbox.org. Several accounts queried in parallel; one
   failing never blanks the others.
+- **Any calendar with a link.** Subscribe to an `.ics` or `webcal://` feed —
+  public holidays, a shared team calendar, the private iCal address of any
+  calendar service — or point it at a file. Recurring entries and time zones
+  are worked out by the widget itself, and an unchanged feed is not downloaded
+  again.
 - **Stays out of the way.** Below every normal window but above the desktop. No
   taskbar entry, no Alt-Tab entry, and clicking it never steals focus. One
   shortcut brings it forward for a few seconds.
@@ -119,7 +124,7 @@ cargo test --workspace
 cargo run --release
 ```
 
-Rust 1.90 or newer, and MSVC build tools on Windows. Nothing else on macOS or
+Rust 1.98 or newer, and MSVC build tools on Windows. Nothing else on macOS or
 Linux: Xlib, Cairo and Pango are opened at run time, so there is no development
 package to install to build it. To see the interface without connecting an
 account:
@@ -133,7 +138,7 @@ EPHEMERIS_DEMO=1 cargo run --release        # PowerShell: $env:EPHEMERIS_DEMO = 
 | | |
 |---|---|
 | [Getting started](https://josunlp.github.io/Ephemeris/guide/getting-started) | Install and first run |
-| [Connecting accounts](https://josunlp.github.io/Ephemeris/guide/accounts) | Google, Microsoft and CalDAV setup |
+| [Connecting accounts](https://josunlp.github.io/Ephemeris/guide/accounts) | Google, Microsoft, CalDAV and `.ics` feeds |
 | [Using the widget](https://josunlp.github.io/Ephemeris/guide/using) | What the panel shows and how to drive it |
 | [Configuration](https://josunlp.github.io/Ephemeris/guide/configuration) | Every setting |
 | [Troubleshooting](https://josunlp.github.io/Ephemeris/guide/troubleshooting) | When something is wrong |

@@ -18,7 +18,7 @@ To see the interface without connecting a calendar account:
 EPHEMERIS_DEMO=1 cargo run --release      # PowerShell: $env:EPHEMERIS_DEMO=1
 ```
 
-Rust 1.90 or newer. On Windows you also need the MSVC build tools; on macOS and
+Rust 1.98 or newer. On Windows you also need the MSVC build tools; on macOS and
 Linux nothing beyond a C toolchain, because Xlib, Cairo and Pango are opened at
 run time rather than linked.
 
