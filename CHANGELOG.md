@@ -38,7 +38,9 @@ All notable changes to this project are documented here. The format follows
 - **Building needs Rust 1.99 or newer**, up from 1.90. 1.99.1 is the current
   stable release and the one everything was built and checked with.
 - **Every dependency is up to date.** `quick-xml` moves to 0.42, `ureq` to
-  3.5, and the lockfile is refreshed throughout, `rustls` included. The one
+  3.5, the lockfile is refreshed throughout, `rustls` included, and so are
+  the documentation site's packages and the GitHub Actions the build and
+  release run on. The one
   newer version deliberately not taken is `windows-numerics` 0.100: the
   newest `windows` crate still takes its matrix type from 0.3, and two
   versions would be two incompatible types.
