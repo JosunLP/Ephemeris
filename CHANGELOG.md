@@ -4,6 +4,68 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-11-02
+
+### Added
+
+- **Subscribed calendars: any `.ics` or `webcal://` feed.** Public holidays,
+  school terms, a fixture list, a team calendar shared as a link, or the private
+  iCal address Google, Outlook, iCloud and Proton offer for every calendar — a
+  new account kind, `ics`, with no sign-in. A file on disk works too. Several
+  feeds can share one account, and each appears in the *Calendars* menu with
+  the name and colour its publisher gave it unless the account file says
+  otherwise.
+
+  A feed is a file, so nobody on the other end expands its recurring entries.
+  The widget does: daily to yearly rules with intervals, counts and end dates,
+  ordinal weekdays ("the last Friday"), month days counted from either end,
+  `BYSETPOS`, `WKST`, excluded and added dates, and single occurrences that
+  were moved or cancelled. Time zones come from the feed's own `VTIMEZONE`
+  definitions, daylight saving rules included, so no time zone database is
+  shipped and a Windows zone name from Outlook works as well as an IANA one.
+  The rule forms nobody writes by hand — by week number, by day of the year,
+  several times a day — are refused rather than approximated: the entry shows
+  its first occurrence and the log names the rule.
+
+  An unchanged feed is not downloaded again — its `ETag` and `Last-Modified`
+  go back to the server — and a private feed address is treated as the
+  credential it is: it stays in the account file, the calendar id written to
+  `config.json` is a hash of it, and the log names only its host. An HTML
+  sign-in page served in place of a calendar is reported as exactly that.
+
+### Changed
+
+- **Building needs Rust 1.99 or newer**, up from 1.90. 1.99.1 is the current
+  stable release and the one everything was built and checked with.
+- **Every dependency is up to date.** `quick-xml` moves to 0.42, `ureq` to
+  3.5, and the lockfile is refreshed throughout, `rustls` included. The one
+  newer version deliberately not taken is `windows-numerics` 0.100: the
+  newest `windows` crate still takes its matrix type from 0.3, and two
+  versions would be two incompatible types.
+
+### Fixed
+
+- **An all-day entry that starts tomorrow no longer shows up today.** The sync
+  asks for two days at once so the tomorrow preview costs nothing, and the only
+  thing that sorted the answer into the two days was the start time — which an
+  all-day entry does not have, so every one of them landed on today: tomorrow's
+  public holiday, tomorrow's birthday, and from Outlook even yesterday's, since
+  its window test lets an exclusive end touch the start of the range. Every
+  provider now hands over the days an all-day entry covers, and it is shown on
+  today if it covers today, on tomorrow if it covers only tomorrow, and not at
+  all otherwise. A holiday week still shows on each day of it.
+- **A CalDAV entry with `&`, `<` or `>` in its text keeps all of it.** The
+  server escapes those inside the XML reply, and the reader treated each
+  escape as the end of the text before it: "R&D sync" arrived as "D sync".
+  Text is now gathered per element and every escape resolved.
+- **An alarm inside an event no longer overwrites the event's description.**
+  The iCalendar reader took the innermost `DESCRIPTION` it saw, and a
+  `VALARM`'s reminder text is one. Components are now tracked as the nesting
+  they are.
+- **An online meeting link in a CalDAV entry's location or description** —
+  where Outlook puts Teams and where Zoom puts its own — now makes the row a
+  *join* link, as it already did for Google and Microsoft.
+
 ## [1.1.0] - 2026-08-17
 
 ### Added
@@ -697,6 +759,7 @@ First public release.
 - File log with rotation; panics are recorded before the process ends.
 - Settings are reloaded without a restart.
 
+[1.2.0]: https://github.com/JosunLP/Ephemeris/releases/tag/v1.2.0
 [1.1.0]: https://github.com/JosunLP/Ephemeris/releases/tag/v1.1.0
 [1.0.2]: https://github.com/JosunLP/Ephemeris/releases/tag/v1.0.2
 [1.0.1]: https://github.com/JosunLP/Ephemeris/releases/tag/v1.0.1

@@ -170,7 +170,7 @@ dependencies = [
 
 [[package]]
 name = "ephemeris"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "base64",
  "chrono",
@@ -188,7 +188,7 @@ dependencies = [
 
 [[package]]
 name = "ephemeris-core"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "base64",
  "chrono",
