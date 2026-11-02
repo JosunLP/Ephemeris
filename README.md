@@ -124,7 +124,7 @@ cargo test --workspace
 cargo run --release
 ```
 
-Rust 1.99 or newer, and MSVC build tools on Windows. Nothing else on macOS or
+Rust 1.98 or newer, and MSVC build tools on Windows. Nothing else on macOS or
 Linux: Xlib, Cairo and Pango are opened at run time, so there is no development
 package to install to build it. To see the interface without connecting an
 account:

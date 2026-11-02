@@ -453,10 +453,11 @@ fn weekday(s: &str) -> Option<Weekday> {
 }
 
 fn parse_by_day(s: &str) -> Option<ByDay> {
-    if s.len() < 2 {
-        return None;
-    }
-    let (num, day) = s.split_at(s.len() - 2);
+    // The weekday is the last two bytes. Splitting by byte offset with
+    // `split_at` panics when that lands inside a multi-byte character, and a
+    // feed is untrusted text: `get` turns that into a refused rule instead.
+    let at = s.len().checked_sub(2)?;
+    let (num, day) = (s.get(..at)?, s.get(at..)?);
     let ordinal = match num.trim_start_matches('+') {
         "" => None,
         n => Some(n.parse::<i32>().ok().filter(|n| *n != 0 && n.abs() <= 53)?),
@@ -745,6 +746,10 @@ mod tests {
             "INTERVAL=2",
             "FREQ=DAILY;INTERVAL=0",
             "FREQ=YEARLY;RSCALE=HEBREW",
+            // Malformed text must be refused, not panic: the split for the
+            // weekday would fall inside the `Ö`.
+            "FREQ=WEEKLY;BYDAY=aÖb",
+            "FREQ=WEEKLY;BYDAY=Ö",
         ] {
             assert!(Rule::parse(rule).is_err(), "{rule} should be refused");
         }

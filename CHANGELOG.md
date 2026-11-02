@@ -35,8 +35,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
-- **Building needs Rust 1.99 or newer**, up from 1.90. 1.99.1 is the current
-  stable release and the one everything was built and checked with.
+- **Building needs Rust 1.98 or newer**, up from 1.90. Not the current 1.99:
+  the Flatpak builds with the Rust extension of its SDK, and for the 25.08
+  runtime that is 1.98.1, which a higher minimum would turn away before the
+  build began. Built and tested with both 1.98.1 and 1.99.1.
 - **Every dependency is up to date.** `quick-xml` moves to 0.42, `ureq` to
   3.5, the lockfile is refreshed throughout, `rustls` included, and so are
   the documentation site's packages and the GitHub Actions the build and

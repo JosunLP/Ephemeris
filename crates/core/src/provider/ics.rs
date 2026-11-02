@@ -95,6 +95,21 @@ pub struct IcsProvider {
     display_name: String,
     feeds: Vec<Feed>,
     cache: HashMap<String, Cached>,
+    /// The last failure per feed, and when it happened.
+    ///
+    /// `calendars` and `events` both read every feed in one sync. Without
+    /// this, a host that does not answer would be asked twice per run, each
+    /// time waiting out the full timeout, and the second answer would be the
+    /// same as the first.
+    failures: HashMap<String, (Error, Instant)>,
+}
+
+/// What a fetch found.
+enum Fetched {
+    /// The server answered `304`, or the file's modification time is the
+    /// one already read: the cached document is still the document.
+    Unchanged,
+    New(Cached),
 }
 
 impl IcsProvider {
@@ -113,24 +128,55 @@ impl IcsProvider {
             display_name: display_name.to_string(),
             feeds,
             cache: HashMap::new(),
+            failures: HashMap::new(),
         })
     }
 
     /// The feed's document, from the cache when that is still good.
+    ///
+    /// A failed read leaves the cached entry where it is, validators and all,
+    /// so the next successful request can still be a cheap `304`; and the
+    /// failure itself is remembered for [`REUSE_FOR`], so the rest of this
+    /// sync gets the same answer without asking again.
     fn read(&mut self, feed: &Feed) -> Result<&Calendar> {
+        if let Some((error, at)) = self.failures.get(&feed.id)
+            && at.elapsed() < REUSE_FOR
+        {
+            return Err(error.clone());
+        }
         let fresh = self
             .cache
             .get(&feed.id)
             .is_some_and(|c| c.read_at.elapsed() < REUSE_FOR);
         if !fresh {
-            let previous = self.cache.remove(&feed.id);
-            let next = match &feed.source {
-                Source::Web(url) => fetch_web(url, previous)?,
-                Source::File(path) => read_file(path, previous)?,
+            let previous = self.cache.get(&feed.id);
+            let outcome = match &feed.source {
+                Source::Web(url) => fetch_web(url, previous),
+                Source::File(path) => read_file(path, previous),
             };
-            self.cache.insert(feed.id.clone(), next);
+            match outcome {
+                Ok(Fetched::New(next)) => {
+                    self.cache.insert(feed.id.clone(), next);
+                }
+                Ok(Fetched::Unchanged) => {
+                    if let Some(c) = self.cache.get_mut(&feed.id) {
+                        c.read_at = Instant::now();
+                    }
+                }
+                Err(e) => {
+                    self.failures
+                        .insert(feed.id.clone(), (e.clone(), Instant::now()));
+                    return Err(e);
+                }
+            }
+            self.failures.remove(&feed.id);
         }
-        Ok(&self.cache.get(&feed.id).expect("inserted above").calendar)
+        self.cache
+            .get(&feed.id)
+            .map(|c| &c.calendar)
+            // Unchanged is only ever answered to validators taken from a
+            // cached entry, so this is unreachable; an error beats a panic.
+            .ok_or_else(|| Error::Other(format!("{}: feed lost from the cache", self.account_id)))
     }
 }
 
@@ -258,10 +304,32 @@ fn fallback_name(source: &Source) -> String {
     }
 }
 
-fn fetch_web(url: &str, previous: Option<Cached>) -> Result<Cached> {
+/// A transport error, in words that cannot contain the feed address.
+///
+/// Several of `ureq`'s errors print what they were given — `BadUri` the
+/// whole address, `Http` and `RequireHttpsOnly` parts of it — and a private
+/// feed address is a credential. So only the variants known to carry nothing
+/// of the request are described; the rest get a generic phrase.
+fn describe(e: &ureq::Error) -> String {
+    use ureq::Error as E;
+    match e {
+        E::Timeout(kind) => format!("timed out ({kind})"),
+        E::HostNotFound => "host not found".into(),
+        E::ConnectionFailed => "connection failed".into(),
+        E::Io(io) => format!("connection error ({})", io.kind()),
+        E::TooManyRedirects => "too many redirects".into(),
+        E::RedirectFailed => "redirect failed".into(),
+        E::BodyExceedsLimit(_) => "the feed is too large to be a calendar".into(),
+        E::Tls(_) | E::Rustls(_) => "secure connection failed".into(),
+        E::BadUri(_) => "the address is not valid".into(),
+        _ => "request failed".into(),
+    }
+}
+
+fn fetch_web(url: &str, previous: Option<&Cached>) -> Result<Fetched> {
     let host = redact(url);
     let mut request = http().get(url).header("Accept", "text/calendar, */*;q=0.5");
-    if let Some(prev) = &previous {
+    if let Some(prev) = previous {
         if let Some(etag) = &prev.etag {
             request = request.header("If-None-Match", etag);
         }
@@ -271,14 +339,11 @@ fn fetch_web(url: &str, previous: Option<Cached>) -> Result<Cached> {
     }
     let response = request
         .call()
-        .map_err(|e| Error::Other(format!("{host}: network error: {e}")))?;
+        .map_err(|e| Error::Other(format!("{host}: {}", describe(&e))))?;
     let status = response.status().as_u16();
 
-    if status == 304
-        && let Some(mut prev) = previous
-    {
-        prev.read_at = Instant::now();
-        return Ok(prev);
+    if status == 304 && previous.is_some() {
+        return Ok(Fetched::Unchanged);
     }
 
     let header = |name: &str| {
@@ -296,7 +361,7 @@ fn fetch_web(url: &str, previous: Option<Cached>) -> Result<Cached> {
         .into_with_config()
         .limit(MAX_FEED_BYTES)
         .read_to_string()
-        .map_err(|e| Error::Other(format!("{host}: unreadable feed: {e}")))?;
+        .map_err(|e| Error::Other(format!("{host}: unreadable feed: {}", describe(&e))))?;
 
     match status {
         200..=299 => {}
@@ -315,24 +380,20 @@ fn fetch_web(url: &str, previous: Option<Cached>) -> Result<Cached> {
         _ => return Err(api_error(status, &body)),
     }
 
-    Ok(Cached {
+    Ok(Fetched::New(Cached {
         calendar: parse_checked(&body, &host)?,
         etag,
         last_modified,
         file_stamp: None,
         read_at: Instant::now(),
-    })
+    }))
 }
 
-fn read_file(path: &Path, previous: Option<Cached>) -> Result<Cached> {
+fn read_file(path: &Path, previous: Option<&Cached>) -> Result<Fetched> {
     let name = path.display().to_string();
     let stamp = std::fs::metadata(path).and_then(|m| m.modified()).ok();
-    if let Some(mut prev) = previous
-        && stamp.is_some()
-        && prev.file_stamp == stamp
-    {
-        prev.read_at = Instant::now();
-        return Ok(prev);
+    if previous.is_some_and(|prev| stamp.is_some() && prev.file_stamp == stamp) {
+        return Ok(Fetched::Unchanged);
     }
     let meta = std::fs::metadata(path).map_err(|e| Error::NeedsSetup(format!("{name}: {e}")))?;
     if meta.len() > MAX_FEED_BYTES {
@@ -342,13 +403,13 @@ fn read_file(path: &Path, previous: Option<Cached>) -> Result<Cached> {
     }
     let bytes = std::fs::read(path).map_err(|e| Error::NeedsSetup(format!("{name}: {e}")))?;
     let body = String::from_utf8_lossy(&bytes);
-    Ok(Cached {
+    Ok(Fetched::New(Cached {
         calendar: parse_checked(&body, &name)?,
         etag: None,
         last_modified: None,
         file_stamp: stamp,
         read_at: Instant::now(),
-    })
+    }))
 }
 
 /// An HTML sign-in page served with status 200 is the usual way a feed
@@ -383,6 +444,7 @@ impl CalendarProvider for IcsProvider {
 
     fn forget(&mut self) {
         self.cache.clear();
+        self.failures.clear();
     }
 
     /// Reads each feed once to learn the name and colour its publisher gave
@@ -588,6 +650,52 @@ END:VCALENDAR\r\n",
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_read_keeps_the_cache_and_is_not_repeated_in_the_same_sync() {
+        let dir = std::env::temp_dir().join(format!("ephemeris-ics-fail-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("feed.ics");
+        std::fs::write(
+            &file,
+            "BEGIN:VCALENDAR\r\nX-WR-CALNAME:Kept\r\nEND:VCALENDAR\r\n",
+        )
+        .unwrap();
+        let account = dir.join("ics-x.json");
+        std::fs::write(&account, r#"{ "url": "feed.ics" }"#).unwrap();
+
+        let mut provider = IcsProvider::new("x", "X", &account).unwrap();
+        let feed = provider.feeds[0].clone();
+        assert!(provider.read(&feed).is_ok());
+
+        // Age the entry past reuse, then make the source fail.
+        let old = Instant::now().checked_sub(REUSE_FOR * 2).unwrap();
+        provider.cache.get_mut(&feed.id).unwrap().read_at = old;
+        std::fs::remove_file(&file).unwrap();
+        assert!(provider.read(&feed).is_err());
+        assert!(
+            provider.cache.contains_key(&feed.id),
+            "the previous entry and its validators survive a failure"
+        );
+
+        // Within the same sync the failure is answered from memory: even
+        // with the file back, nothing is read until the failure ages out.
+        std::fs::write(&file, "BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n").unwrap();
+        assert!(provider.read(&feed).is_err());
+        provider.failures.get_mut(&feed.id).unwrap().1 = old;
+        assert!(provider.read(&feed).is_ok());
+        assert!(provider.failures.is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn transport_errors_never_repeat_the_address() {
+        let secret = "https://example.org/private-0123abcd/basic.ics";
+        let message = describe(&ureq::Error::BadUri(secret.into()));
+        assert!(!message.contains("private"), "{message}");
+        assert_eq!(describe(&ureq::Error::HostNotFound), "host not found");
     }
 
     use chrono::Utc;

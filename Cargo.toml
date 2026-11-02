@@ -9,7 +9,7 @@ license = "GPL-3.0-or-later"
 description = "A desktop widget showing today's calendar events and due tasks"
 repository = "https://github.com/JosunLP/Ephemeris"
 readme = "README.md"
-rust-version = "1.99"
+rust-version = "1.98"
 
 [dependencies]
 ephemeris-core = { path = "crates/core" }

@@ -13,7 +13,7 @@ cargo test --workspace
 cargo run --release
 ```
 
-Rust 1.99 or newer, plus the MSVC build tools on Windows. Nothing beyond a C
+Rust 1.98 or newer, plus the MSVC build tools on Windows. Nothing beyond a C
 toolchain on macOS or Linux: Xlib, Cairo and Pango are opened at run time
 rather than linked.
 
