@@ -81,7 +81,7 @@ windows = { version = "0.62.2", features = [
     "Win32_System_Power",
     "Win32_System_Threading",
 ] }
-windows-numerics = "0.3.1"
+windows-numerics = "0.100.0"
 
 # The icon has to be in the executable's resource section for Windows to find
 # it, and putting it there means driving the resource compiler: writing an
