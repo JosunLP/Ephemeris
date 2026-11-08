@@ -4,6 +4,26 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **A week view.** Right-click → *View* → *Week* or *Work week (Mon–Fri)* lays
+  the days out side by side on a time grid, the way Google Calendar and Outlook
+  draw a week: a column per day, all-day entries as bars across the top, and
+  timed entries as blocks in their calendar colour with title, start time and
+  room. Entries that overlap share the column side by side, back-to-back ones
+  keep the full width, past ones are dimmed and a line marks right now.
+  Hovering a block shows everything about it; a click opens it. The work week
+  moves on to the coming week on Saturday.
+
+  *Calendars in the week view* picks which calendars the grid shows — only the
+  timetable, for instance. A calendar picked there alone is fetched for the
+  week and stays out of today's agenda. The week view keeps a window size of
+  its own (`week_width`, `week_height`), so switching back to the day brings
+  the narrow column back as it was; the switch keeps the right edge in place.
+  New settings: `view`, `week_width`, `week_height` and `week_calendar_ids`.
+
 ## [1.2.0] - 2026-11-02
 
 ### Added

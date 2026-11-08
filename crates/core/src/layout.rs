@@ -25,8 +25,9 @@
 //! [`Panel::mirror_axis`]. Everything in this module goes on computing left to
 //! right, which is what keeps one set of arithmetic serving both directions.
 
+use crate::config::View;
 use crate::i18n::Locale;
-use crate::model::{Agenda, Event, Task, TaskKey};
+use crate::model::{Agenda, Event, Task, TaskKey, local_day_start};
 use crate::theme::Metrics;
 use chrono::{DateTime, Local, NaiveDate, Timelike};
 
@@ -116,8 +117,24 @@ pub enum Hit {
     Hero(usize),
     /// An event from tomorrow's preview.
     Tomorrow(usize),
+    /// An entry on the week grid, by its index into [`Agenda::week`].
+    WeekEvent(usize),
     /// A status line that needs action (setup, sign-in or configuration).
     StatusAction,
+}
+
+/// The calendar entry a click landed on, if it landed on one.
+///
+/// Each kind of hit addresses its own list — today, tomorrow's preview or the
+/// week — and every front end has to pick the same one, so the choice is made
+/// here once.
+pub fn event_for_hit(agenda: &Agenda, hit: Hit) -> Option<&Event> {
+    match hit {
+        Hit::Event(i) | Hit::Hero(i) => agenda.events.get(i),
+        Hit::Tomorrow(i) => agenda.tomorrow.get(i),
+        Hit::WeekEvent(i) => agenda.week.get(i),
+        Hit::Refresh | Hit::TaskCheck(_) | Hit::Task(_) | Hit::Undo(_) | Hit::StatusAction => None,
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -177,6 +194,9 @@ pub struct Frame<'a> {
     pub sync_minutes: u32,
     pub opacity: f32,
     pub show_past_events: bool,
+    /// Day or week. Taken from the settings at draw time, so a switch shows at
+    /// once even before the sync has fetched the rest of the week.
+    pub view: View,
     pub undo: Option<UndoView>,
     /// A syntax error in `config.json`; outranks the sync status line.
     pub config_error: Option<&'a str>,
@@ -452,6 +472,340 @@ pub fn hero_progress(ev: &Event, now: DateTime<Local>) -> Option<f32> {
     let (s, e) = (ev.start?, ev.end?);
     let total = (e - s).num_seconds().max(1) as f32;
     Some(((now - s).num_seconds().max(0) as f32 / total).clamp(0.0, 1.0))
+}
+
+// --- The week view ------------------------------------------------------------
+//
+// Days side by side on a time grid, as every calendar application draws a
+// week. The arithmetic lives here like the rest of the layout: which day an
+// entry lands on, how two that overlap share a column, which hours the grid
+// spans. A renderer only turns the answers into rectangles of colour.
+
+/// The days across the top of the week grid, first to last.
+///
+/// Empty for the day view, which has no grid.
+pub fn week_days(today: NaiveDate, view: View) -> Vec<NaiveDate> {
+    let Some(days) = view.week_days() else {
+        return Vec::new();
+    };
+    let first = crate::model::week_start(today, days);
+    (0..days as i64)
+        .map(|d| first + chrono::Duration::days(d))
+        .collect()
+}
+
+/// The shortest an entry is drawn, in minutes.
+///
+/// A calendar is full of entries that end where they start, and a reminder
+/// drawn at its true height is a hairline nobody can read or click. Overlaps
+/// are worked out with the same floor, so an entry is never drawn on top of a
+/// neighbour it was told it did not touch.
+const MIN_BLOCK_MINUTES: f32 = 20.0;
+
+/// One timed entry's piece within one day column.
+///
+/// An entry that runs past midnight is one piece per day it touches, each cut
+/// to its own day — which is how a night shift or a conference across two days
+/// shows up on both.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WeekBlock {
+    /// Index into the list the blocks were built from — [`Agenda::week`] for
+    /// the widget.
+    pub index: usize,
+    /// Which column, counting from the first day of [`week_days`].
+    pub day: usize,
+    /// Minutes since that day's midnight.
+    pub start: f32,
+    pub end: f32,
+    /// Which of the side-by-side slots the piece takes, and how many the
+    /// entries it overlaps share between them.
+    pub lane: usize,
+    pub lanes: usize,
+}
+
+impl WeekBlock {
+    fn visual_end(&self) -> f32 {
+        self.end.max(self.start + MIN_BLOCK_MINUTES)
+    }
+}
+
+/// The timed entries of a week, cut into days and laid out side by side where
+/// they overlap.
+///
+/// Overlapping entries are gathered into clusters — a run of entries each of
+/// which overlaps the run so far — and every cluster is split into as many
+/// lanes as it needs at its busiest. Each entry takes the first lane that is
+/// free when it starts. That is the layout Google and Outlook draw, and it
+/// keeps an entry the same width from top to bottom.
+///
+/// Back to back is not an overlap: two lessons at 08:00–08:45 and 08:45–09:30
+/// both get the full width.
+pub fn week_blocks(events: &[Event], days: &[NaiveDate]) -> Vec<WeekBlock> {
+    let mut out = Vec::new();
+    for (day, &date) in days.iter().enumerate() {
+        let lo = local_day_start(date);
+        let hi = local_day_start(date + chrono::Duration::days(1));
+
+        let mut pieces: Vec<WeekBlock> = events
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| !e.all_day)
+            .filter_map(|(index, e)| {
+                let start = e.start?;
+                let end = e
+                    .end
+                    .unwrap_or(start + chrono::Duration::hours(1))
+                    .max(start);
+                if !(start < hi && (end > lo || start >= lo)) {
+                    return None;
+                }
+                // Clock minutes, not minutes elapsed since midnight: on the
+                // day the clocks change the two differ by an hour, and the
+                // hour labels, the now line and the start time in the block
+                // all go by the clock.
+                let from = if start >= lo {
+                    minutes_of_day(start)
+                } else {
+                    0.0
+                };
+                let to = if end < hi {
+                    minutes_of_day(end)
+                } else {
+                    DAY_MINUTES
+                }
+                .max(from);
+                Some(WeekBlock {
+                    index,
+                    day,
+                    start: from,
+                    end: to,
+                    lane: 0,
+                    lanes: 1,
+                })
+            })
+            .collect();
+
+        // Earliest first, and the longer of two that start together first, so
+        // the long one takes the left-hand lane all the way down.
+        pieces.sort_by(|a, b| {
+            a.start
+                .total_cmp(&b.start)
+                .then(b.visual_end().total_cmp(&a.visual_end()))
+        });
+
+        let mut cluster_from = 0;
+        let mut cluster_end = f32::MIN;
+        let mut lane_ends: Vec<f32> = Vec::new();
+        for i in 0..pieces.len() {
+            let piece = pieces[i];
+            if i > 0 && piece.start >= cluster_end {
+                for p in &mut pieces[cluster_from..i] {
+                    p.lanes = lane_ends.len().max(1);
+                }
+                lane_ends.clear();
+                cluster_from = i;
+            }
+            let lane = match lane_ends.iter().position(|&end| end <= piece.start) {
+                Some(free) => free,
+                None => {
+                    lane_ends.push(0.0);
+                    lane_ends.len() - 1
+                }
+            };
+            lane_ends[lane] = piece.visual_end();
+            pieces[i].lane = lane;
+            cluster_end = if i == cluster_from {
+                piece.visual_end()
+            } else {
+                cluster_end.max(piece.visual_end())
+            };
+        }
+        let lanes = lane_ends.len().max(1);
+        for p in &mut pieces[cluster_from..] {
+            p.lanes = lanes;
+        }
+        out.extend(pieces);
+    }
+    out
+}
+
+/// An all-day entry across the top of the grid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AllDayBar {
+    /// Index into the list the bars were built from.
+    pub index: usize,
+    /// First and last column it covers, both inclusive and both inside the
+    /// week — a holiday that began last Friday starts at Monday's column.
+    pub first: usize,
+    pub last: usize,
+    /// Which line of the all-day band it sits on.
+    pub row: usize,
+}
+
+/// The all-day entries of a week, stacked so no two share a line where they
+/// share a day.
+///
+/// Longest first among those starting on the same day, so a week-long
+/// holiday sits on the top line rather than being pushed down by a birthday.
+/// An entry without its days — a cache from before they were recorded — has
+/// nowhere to go on a grid and is left out.
+pub fn week_all_day(events: &[Event], days: &[NaiveDate]) -> Vec<AllDayBar> {
+    let mut bars: Vec<AllDayBar> = events
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| e.all_day)
+        .filter_map(|(index, e)| {
+            let (from, until) = e.days?;
+            let covered = |d: &NaiveDate| from <= *d && *d < until;
+            let first = days.iter().position(covered)?;
+            let last = days.iter().rposition(covered)?;
+            Some(AllDayBar {
+                index,
+                first,
+                last,
+                row: 0,
+            })
+        })
+        .collect();
+    bars.sort_by_key(|b| (b.first, std::cmp::Reverse(b.last)));
+
+    // The last column each line is taken up to.
+    let mut rows: Vec<usize> = Vec::new();
+    for bar in &mut bars {
+        let row = match rows.iter().position(|&taken| taken < bar.first) {
+            Some(free) => free,
+            None => {
+                rows.push(0);
+                rows.len() - 1
+            }
+        };
+        rows[row] = bar.last;
+        bar.row = row;
+    }
+    bars
+}
+
+/// How many lines the all-day band needs.
+pub fn all_day_rows(bars: &[AllDayBar]) -> usize {
+    bars.iter().map(|b| b.row + 1).max().unwrap_or(0)
+}
+
+/// The hours the week grid spans, in minutes since midnight, on whole hours.
+///
+/// A school day by default — eight to five — stretched to whatever is on, for
+/// the same reason the day rail stretches: the early train and the late
+/// parents' evening are exactly the entries that must not fall off the edge.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WeekHours {
+    pub lo: f32,
+    pub hi: f32,
+}
+
+/// Never fewer hours than this, or an empty week is a grid of two huge cells.
+const MIN_WEEK_HOURS: f32 = 6.0;
+
+impl WeekHours {
+    pub fn of(blocks: &[WeekBlock]) -> Self {
+        let (mut lo, mut hi) = (8.0 * 60.0_f32, 17.0 * 60.0_f32);
+        for b in blocks {
+            lo = lo.min((b.start / 60.0).floor() * 60.0);
+            hi = hi.max((b.visual_end() / 60.0).ceil() * 60.0);
+        }
+        let lo = lo.max(0.0);
+        let mut hi = hi.min(DAY_MINUTES);
+        if hi - lo < MIN_WEEK_HOURS * 60.0 {
+            hi = (lo + MIN_WEEK_HOURS * 60.0).min(DAY_MINUTES);
+        }
+        Self { lo, hi }
+    }
+
+    pub fn hours(&self) -> f32 {
+        ((self.hi - self.lo) / 60.0).max(1.0)
+    }
+
+    /// Every full hour on the grid, the first and the last line included.
+    pub fn marks(&self) -> impl Iterator<Item = f32> + '_ {
+        let first = (self.lo / 60.0).ceil() as u32;
+        let last = (self.hi / 60.0).floor() as u32;
+        (first..=last).map(|h| h as f32 * 60.0)
+    }
+
+    /// y for a time of day, on a grid whose first hour starts at `top`.
+    pub fn y(&self, minutes: f32, top: f32, hour_h: f32) -> f32 {
+        top + (minutes.clamp(self.lo, self.hi) - self.lo) / 60.0 * hour_h
+    }
+
+    pub fn contains(&self, minutes: f32) -> bool {
+        (self.lo..=self.hi).contains(&minutes)
+    }
+}
+
+/// How tall one hour is drawn.
+///
+/// The whole span fits the panel where it can, so the week reads at a glance
+/// without scrolling. Below a floor it scrolls instead, rather than squashing
+/// a lesson into a strip too thin to hold its title.
+pub fn week_hour_height(viewport: f32, hours: &WeekHours, m: &Metrics) -> f32 {
+    (viewport / hours.hours()).max(m.event_row_h * 1.25)
+}
+
+/// The columns of the week grid: a gutter for the hour labels at the reading
+/// edge, then one column per day.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WeekGrid {
+    /// Left edge of the hour gutter.
+    pub gutter_left: f32,
+    /// Left edge of the first day's column, which is where the gutter ends.
+    pub left: f32,
+    pub right: f32,
+    pub days: usize,
+}
+
+impl WeekGrid {
+    /// `gutter` is the measured width of the widest hour label.
+    pub fn new(panel: &Panel, gutter: f32, days: usize) -> Self {
+        let left = (panel.content_left + gutter).min(panel.content_right - 1.0);
+        Self {
+            gutter_left: panel.content_left,
+            left,
+            right: panel.content_right,
+            days: days.max(1),
+        }
+    }
+
+    pub fn column_width(&self) -> f32 {
+        (self.right - self.left) / self.days as f32
+    }
+
+    /// Left and right edge of a day's column.
+    pub fn column(&self, day: usize) -> (f32, f32) {
+        let w = self.column_width();
+        let x0 = self.left + w * day as f32;
+        (x0, x0 + w)
+    }
+
+    /// An all-day bar on its line of the band starting at `top`.
+    pub fn all_day_rect(&self, bar: &AllDayBar, top: f32, line_h: f32) -> Rect {
+        let (x0, _) = self.column(bar.first);
+        let (_, x1) = self.column(bar.last);
+        let y = top + bar.row as f32 * line_h;
+        Rect::new(x0 + 1.5, y + 1.0, x1 - 1.5, y + line_h - 1.0)
+    }
+
+    /// A timed block on the grid whose first hour starts at `top`.
+    ///
+    /// Inset a little on every side, so two neighbours — side by side or one
+    /// after the other — never merge into one shape.
+    pub fn block_rect(&self, hours: &WeekHours, b: &WeekBlock, top: f32, hour_h: f32) -> Rect {
+        let (c0, c1) = self.column(b.day);
+        let (c0, c1) = (c0 + 1.5, c1 - 1.5);
+        let lane_w = (c1 - c0) / b.lanes.max(1) as f32;
+        let x0 = c0 + lane_w * b.lane as f32;
+        let x1 = x0 + lane_w - if b.lane + 1 < b.lanes { 1.5 } else { 0.0 };
+        let y0 = hours.y(b.start, top, hour_h);
+        let y1 = hours.y(b.visual_end(), top, hour_h);
+        Rect::new(x0, y0 + 0.5, x1.max(x0 + 1.0), (y1 - 1.0).max(y0 + 2.0))
+    }
 }
 
 // --- Rows --------------------------------------------------------------------
@@ -1306,5 +1660,191 @@ mod tests {
         // Overrunning does not push the line past the end of the card.
         assert_eq!(hero_progress(&ev, at(13, 0)), Some(1.0));
         assert_eq!(hero_progress(&all_day("holiday"), at(10, 0)), None);
+    }
+
+    // --- The week view ---------------------------------------------------
+
+    fn on(day: u32, from: (u32, u32), to: (u32, u32), title: &str) -> Event {
+        Event {
+            start: Some(
+                Local
+                    .with_ymd_and_hms(2026, 11, day, from.0, from.1, 0)
+                    .unwrap(),
+            ),
+            end: Some(
+                Local
+                    .with_ymd_and_hms(2026, 11, day, to.0, to.1, 0)
+                    .unwrap(),
+            ),
+            ..timed(title, (0, 0), (0, 0))
+        }
+    }
+
+    /// Monday 2 to Sunday 8 November 2026.
+    fn november_week(view: View) -> Vec<NaiveDate> {
+        week_days(NaiveDate::from_ymd_opt(2026, 11, 4).unwrap(), view)
+    }
+
+    #[test]
+    fn the_week_runs_from_monday_and_a_finished_work_week_moves_on() {
+        let d = |day| NaiveDate::from_ymd_opt(2026, 11, day).unwrap();
+        assert_eq!(week_days(d(4), View::Day), Vec::<NaiveDate>::new());
+        assert_eq!(week_days(d(4), View::Week).first(), Some(&d(2)));
+        assert_eq!(week_days(d(4), View::Week).len(), 7);
+        assert_eq!(
+            week_days(d(2), View::WorkWeek),
+            (2..=6).map(d).collect::<Vec<_>>()
+        );
+        // Friday still shows its own week, Saturday the coming one.
+        assert_eq!(week_days(d(6), View::WorkWeek).first(), Some(&d(2)));
+        assert_eq!(week_days(d(7), View::WorkWeek).first(), Some(&d(9)));
+        assert_eq!(week_days(d(8), View::WorkWeek).first(), Some(&d(9)));
+        // A full week keeps its Sunday.
+        assert_eq!(week_days(d(8), View::Week).first(), Some(&d(2)));
+    }
+
+    #[test]
+    fn entries_land_in_the_column_of_their_day() {
+        let days = november_week(View::Week);
+        let blocks = week_blocks(
+            &[
+                on(2, (8, 0), (8, 45), "mon"),
+                on(6, (10, 0), (11, 0), "fri"),
+            ],
+            &days,
+        );
+        assert_eq!(blocks.len(), 2);
+        assert_eq!((blocks[0].index, blocks[0].day), (0, 0));
+        assert_eq!((blocks[1].index, blocks[1].day), (1, 4));
+        assert_eq!((blocks[0].start, blocks[0].end), (480.0, 525.0));
+        assert!(blocks.iter().all(|b| b.lanes == 1));
+
+        // Outside the week is nowhere.
+        assert!(week_blocks(&[on(9, (8, 0), (9, 0), "next")], &days).is_empty());
+    }
+
+    #[test]
+    fn back_to_back_lessons_keep_the_full_width() {
+        let days = november_week(View::WorkWeek);
+        let blocks = week_blocks(
+            &[
+                on(3, (8, 0), (8, 45), "first"),
+                on(3, (8, 45), (9, 30), "second"),
+            ],
+            &days,
+        );
+        assert!(
+            blocks.iter().all(|b| b.lane == 0 && b.lanes == 1),
+            "{blocks:?}"
+        );
+    }
+
+    #[test]
+    fn overlapping_entries_share_the_column() {
+        let days = november_week(View::Week);
+        let events = [
+            on(3, (14, 0), (15, 30), "conference"),
+            on(3, (15, 0), (15, 45), "parents"),
+            on(3, (15, 30), (16, 0), "after the conference"),
+            // Later and alone: its own cluster, full width again.
+            on(3, (17, 0), (18, 0), "alone"),
+        ];
+        let blocks = week_blocks(&events, &days);
+        let by = |i: usize| *blocks.iter().find(|b| b.index == i).unwrap();
+        assert_eq!((by(0).lane, by(0).lanes), (0, 2));
+        assert_eq!((by(1).lane, by(1).lanes), (1, 2));
+        // Starts where the conference ends, so it reuses the first lane.
+        assert_eq!((by(2).lane, by(2).lanes), (0, 2));
+        assert_eq!((by(3).lane, by(3).lanes), (0, 1));
+
+        // Side by side on screen, and not on top of each other.
+        let grid = WeekGrid {
+            gutter_left: 0.0,
+            left: 40.0,
+            right: 740.0,
+            days: 7,
+        };
+        let hours = WeekHours::of(&blocks);
+        let (a, b) = (
+            grid.block_rect(&hours, &by(0), 0.0, 40.0),
+            grid.block_rect(&hours, &by(1), 0.0, 40.0),
+        );
+        assert!(a.right <= b.left, "{a:?} {b:?}");
+        let (c0, c1) = grid.column(1);
+        assert!(a.left >= c0 && b.right <= c1);
+    }
+
+    #[test]
+    fn an_entry_past_midnight_shows_on_both_days() {
+        let days = november_week(View::Week);
+        let night = Event {
+            end: Some(Local.with_ymd_and_hms(2026, 11, 5, 2, 0, 0).unwrap()),
+            ..on(4, (22, 0), (22, 0), "night shift")
+        };
+        let blocks = week_blocks(&[night], &days);
+        assert_eq!(blocks.len(), 2, "{blocks:?}");
+        assert_eq!(
+            (blocks[0].day, blocks[0].start, blocks[0].end),
+            (2, 1320.0, 1440.0)
+        );
+        assert_eq!(
+            (blocks[1].day, blocks[1].start, blocks[1].end),
+            (3, 0.0, 120.0)
+        );
+    }
+
+    #[test]
+    fn the_hours_stretch_to_cover_the_week() {
+        let days = november_week(View::Week);
+        let quiet = WeekHours::of(&[]);
+        assert_eq!((quiet.lo, quiet.hi), (480.0, 1020.0));
+        assert_eq!(quiet.marks().count(), 10);
+
+        let early_and_late = week_blocks(
+            &[
+                on(2, (6, 30), (7, 15), "train"),
+                on(5, (19, 0), (20, 30), "parents' evening"),
+            ],
+            &days,
+        );
+        let hours = WeekHours::of(&early_and_late);
+        assert_eq!((hours.lo, hours.hi), (360.0, 1260.0));
+        // A grid that fits gets the panel's height, one that does not
+        // scrolls rather than shrinking past readable.
+        let m = Metrics::new(1.0);
+        assert_eq!(week_hour_height(600.0, &quiet, &m), 600.0 / 9.0);
+        assert_eq!(week_hour_height(100.0, &hours, &m), m.event_row_h * 1.25);
+    }
+
+    #[test]
+    fn all_day_entries_stack_where_they_share_a_day() {
+        let days = november_week(View::WorkWeek);
+        let d = |day| NaiveDate::from_ymd_opt(2026, 11, day).unwrap();
+        let all_day = |from: u32, until: u32| Event {
+            all_day: true,
+            start: None,
+            end: None,
+            days: Some((d(from), d(until))),
+            ..timed("all day", (0, 0), (0, 0))
+        };
+        let bars = week_all_day(
+            &[
+                all_day(4, 5),   // Wednesday
+                all_day(3, 6),   // Tuesday to Thursday
+                all_day(5, 6),   // Thursday, under the long one
+                all_day(6, 7),   // Friday, free again
+                all_day(28, 30), // October: not this week at all
+                all_day(1, 3),   // Sunday into Monday: clipped to Monday
+            ],
+            &days,
+        );
+        let by = |i: usize| *bars.iter().find(|b| b.index == i).unwrap();
+        assert_eq!(bars.len(), 5);
+        assert_eq!((by(1).first, by(1).last, by(1).row), (1, 3, 0));
+        assert_eq!(by(0).row, 1);
+        assert_eq!(by(2).row, 1);
+        assert_eq!((by(3).first, by(3).row), (4, 0));
+        assert_eq!((by(5).first, by(5).last, by(5).row), (0, 0, 0));
+        assert_eq!(all_day_rows(&bars), 2);
     }
 }

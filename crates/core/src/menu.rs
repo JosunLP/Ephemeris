@@ -20,6 +20,7 @@
 //! the same thing everywhere, and that a new entry cannot be added to one
 //! platform and forgotten on the other two.
 
+use crate::config::View;
 use crate::i18n::Catalog;
 
 /// What the user picked.
@@ -54,6 +55,11 @@ pub enum Command {
     /// Select or deselect the task list at this index in
     /// [`Inputs::tasklists`].
     Tasklist(usize),
+    /// Switch to this view.
+    View(View),
+    /// Show or hide the calendar at this index in [`Inputs::calendars`] in
+    /// the week view.
+    WeekCalendar(usize),
 }
 
 /// One clickable line.
@@ -125,6 +131,13 @@ pub struct Inputs<'a> {
     /// cannot simply be compared for membership.
     pub selected_calendars: &'a [String],
     pub selected_tasklists: &'a [String],
+    /// The view on screen, ticked in the view submenu.
+    pub view: View,
+    /// Which of [`Inputs::calendars`] the week view shows, one flag per
+    /// calendar. Worked out by [`crate::config::Config::week_calendar_checked`],
+    /// because an empty week selection follows the day selection and a plain
+    /// membership test would say the opposite.
+    pub week_calendars: &'a [bool],
     /// Did the daily check find a newer release?
     pub update_available: bool,
     /// Is a sign-in flow available? False in demo mode, where there is no sync
@@ -141,6 +154,38 @@ pub fn context_menu(inputs: &Inputs) -> Vec<Entry> {
     if inputs.can_autostart {
         entries.push(Entry::Item(
             Item::new(c.menu_autostart, Command::Autostart).checked(inputs.autostart),
+        ));
+    }
+
+    // The view comes first among the settings: it changes the whole panel,
+    // and it is the one people switch back and forth.
+    entries.push(Entry::Separator);
+    entries.push(Entry::Submenu(
+        c.menu_view.to_owned(),
+        [
+            (c.menu_view_day, View::Day),
+            (c.menu_view_week, View::Week),
+            (c.menu_view_work_week, View::WorkWeek),
+        ]
+        .into_iter()
+        .map(|(label, view)| Item::new(label, Command::View(view)).checked(inputs.view == view))
+        .collect(),
+    ));
+    // Only while a week is on screen: in the day view the choice would do
+    // nothing visible, and an entry whose effect cannot be seen reads as
+    // broken.
+    if inputs.view.is_week() && !inputs.calendars.is_empty() {
+        entries.push(Entry::Submenu(
+            c.menu_week_calendars.to_owned(),
+            inputs
+                .calendars
+                .iter()
+                .enumerate()
+                .map(|(i, (_, name))| {
+                    let checked = inputs.week_calendars.get(i).copied().unwrap_or(true);
+                    Item::new(name, Command::WeekCalendar(i)).checked(checked)
+                })
+                .collect(),
         ));
     }
 
@@ -161,14 +206,9 @@ pub fn context_menu(inputs: &Inputs) -> Vec<Entry> {
             Command::Tasklist as fn(usize) -> Command,
         ),
     ];
-    let mut any_source = false;
     for (label, entries_of, selected, command) in sources {
         if entries_of.is_empty() {
             continue;
-        }
-        if !any_source {
-            entries.push(Entry::Separator);
-            any_source = true;
         }
         let items = entries_of
             .iter()
@@ -256,6 +296,8 @@ mod tests {
             tasklists,
             selected_calendars: selected,
             selected_tasklists: &[],
+            view: View::Day,
+            week_calendars: &[],
             update_available: false,
             can_relogin: true,
         }
@@ -361,8 +403,10 @@ mod tests {
             "an empty submenu would be a dead end"
         );
         assert!(
-            !menu.iter().any(|e| matches!(e, Entry::Submenu(..))),
-            "no sources means no submenus"
+            !menu
+                .iter()
+                .any(|e| matches!(e, Entry::Submenu(label, _) if label != EN.menu_view)),
+            "no sources means no submenus beyond the view"
         );
         for command in [Command::Autostart, Command::Relogin] {
             assert!(
@@ -390,6 +434,7 @@ mod tests {
         let (cals, lists) = sources();
         let full = context_menu(&Inputs {
             update_available: true,
+            view: View::Week,
             ..inputs(&cals, &lists, &[])
         });
         let reached: Vec<Command> = items(&full).iter().map(|i| i.command).collect();
@@ -408,9 +453,55 @@ mod tests {
             Command::Quit,
             Command::Calendar(0),
             Command::Tasklist(0),
+            Command::View(View::Day),
+            Command::View(View::Week),
+            Command::View(View::WorkWeek),
+            Command::WeekCalendar(0),
         ] {
             assert!(reached.contains(&command), "{command:?} is unreachable");
         }
+    }
+
+    /// The view submenu ticks exactly the view on screen, and the week's own
+    /// calendar choice only turns up where a week is.
+    #[test]
+    fn the_view_is_ticked_and_the_week_calendars_follow_it() {
+        let (cals, lists) = sources();
+        let views = |menu: &[Entry]| -> Vec<(View, bool)> {
+            items(menu)
+                .iter()
+                .filter_map(|i| match i.command {
+                    Command::View(v) => Some((v, i.checked)),
+                    _ => None,
+                })
+                .collect()
+        };
+
+        let day = context_menu(&inputs(&cals, &lists, &[]));
+        assert_eq!(
+            views(&day),
+            [
+                (View::Day, true),
+                (View::Week, false),
+                (View::WorkWeek, false)
+            ]
+        );
+        assert!(
+            !items(&day)
+                .iter()
+                .any(|i| matches!(i.command, Command::WeekCalendar(_))),
+            "the week's calendars have nothing to show in the day view"
+        );
+
+        let flags = [false, true];
+        let week = context_menu(&Inputs {
+            view: View::WorkWeek,
+            week_calendars: &flags,
+            ..inputs(&cals, &lists, &[])
+        });
+        assert_eq!(views(&week)[2], (View::WorkWeek, true));
+        assert!(!find(&week, Command::WeekCalendar(0)).checked);
+        assert!(find(&week, Command::WeekCalendar(1)).checked);
     }
 
     /// An index in a command addresses [`Inputs::calendars`], so it has to
@@ -421,7 +512,7 @@ mod tests {
         let menu = context_menu(&inputs(&cals, &lists, &["home@example.com".into()]));
         for item in items(&menu) {
             match item.command {
-                Command::Calendar(i) => assert!(i < cals.len()),
+                Command::Calendar(i) | Command::WeekCalendar(i) => assert!(i < cals.len()),
                 Command::Tasklist(i) => assert!(i < lists.len()),
                 _ => {}
             }

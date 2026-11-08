@@ -23,6 +23,18 @@ which several Windows editors add — is tolerated.
   "width": 380.0,
   "height": 620.0,
 
+  // "day", "week" (Monday to Sunday) or "workweek" (Monday to Friday).
+  // Right-click -> View switches it.
+  "view": "day",
+  // The week view's own size, so switching back and forth does not resize
+  // the day column by hand every time.
+  "week_width": 760.0,
+  "week_height": 560.0,
+  // Which calendars the week view shows. Empty means the same ones as the
+  // day. A calendar listed here but not in "calendar_ids" is fetched for the
+  // week only — a timetable that stays out of today's agenda.
+  "week_calendar_ids": [],
+
   // Pin the widget where it is: no dragging, no resizing, and "Reset
   // position" greyed out. Everything else keeps working. The context menu
   // toggles this, which is the easier way.

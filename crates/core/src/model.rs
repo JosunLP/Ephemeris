@@ -100,6 +100,28 @@ impl Event {
         }
     }
 
+    /// Does the entry fall on any day from `first` up to, not including,
+    /// `after`?
+    ///
+    /// An all-day entry goes by the days it covers; a timed one by its span,
+    /// with an entry that has no end or ends where it starts counting as the
+    /// instant it starts. An all-day entry from a cache too old to carry its
+    /// days is kept — every version before them showed it.
+    pub fn touches_days(&self, first: NaiveDate, after: NaiveDate) -> bool {
+        if self.all_day {
+            return match self.days {
+                Some((from, until)) => from < after && first < until,
+                None => true,
+            };
+        }
+        let Some(start) = self.start else {
+            return false;
+        };
+        let (lo, hi) = (local_day_start(first), local_day_start(after));
+        let end = self.end.unwrap_or(start).max(start);
+        start < hi && (end > lo || start >= lo)
+    }
+
     /// Sort key: all-day events first, then by start time.
     fn sort_key(&self) -> (u8, i64) {
         if self.all_day {
@@ -187,6 +209,9 @@ pub struct Agenda {
     /// "what is first tomorrow?" becomes the interesting question.
     pub tomorrow: Vec<Event>,
     pub tasks: Vec<Task>,
+    /// The week the week view shows, every day of it. Empty in the day view,
+    /// which never asks for more than today and tomorrow.
+    pub week: Vec<Event>,
     pub fetched_at: Option<DateTime<Local>>,
     /// Error text of the last attempt; the previous data stays visible.
     /// Not cached — at start-up the state is simply "unknown".
@@ -453,6 +478,26 @@ fn overlaps(a: &Event, b: &Event) -> bool {
     a_start < b_end && b_start < a_end
 }
 
+/// The first day the week view shows.
+///
+/// The Monday of this week. A five-day week that is already over — Saturday
+/// and Sunday — moves on to the coming Monday instead: that is the week there
+/// is still something to plan for, and the one that has just ended would be
+/// looked at as an empty grid all weekend.
+///
+/// Monday rather than the locale's first weekday: the platforms disagree on
+/// how to ask for that one, and a timetable runs Monday to Friday almost
+/// everywhere it is used.
+pub fn week_start(today: NaiveDate, days: u32) -> NaiveDate {
+    use chrono::Datelike;
+    let monday = today - chrono::Duration::days(today.weekday().num_days_from_monday() as i64);
+    if days < 7 && today.weekday().num_days_from_monday() >= days {
+        monday + chrono::Duration::days(7)
+    } else {
+        monday
+    }
+}
+
 /// Start of the local day as a `DateTime<Local>`.
 ///
 /// On daylight saving transition days midnight can be ambiguous or simply not
@@ -690,6 +735,47 @@ mod tests {
         all_day.end = None;
         let events = vec![all_day, timed("meeting", (9, 0), (10, 0))];
         assert_eq!(mark_overlaps(&events).0, vec![false, false]);
+    }
+
+    /// The week view widens the fetch, and the day lists are cut back out of
+    /// it by this: a Wednesday lesson must not end up under "today" on a
+    /// Monday, and an entry running into today from last night must.
+    #[test]
+    fn an_entry_touches_the_days_it_runs_on_and_no_others() {
+        use chrono::TimeZone;
+        let d = |day| NaiveDate::from_ymd_opt(2026, 8, day).unwrap();
+        let at = |day, h| Local.with_ymd_and_hms(2026, 8, day, h, 0, 0).unwrap();
+        let span = |from, to| Event {
+            start: Some(from),
+            end: Some(to),
+            ..timed("x", (0, 0), (0, 0))
+        };
+
+        let wednesday = span(at(5, 9), at(5, 10));
+        assert!(!wednesday.touches_days(d(3), d(5)));
+        assert!(wednesday.touches_days(d(5), d(6)));
+        assert!(wednesday.touches_days(d(3), d(10)));
+
+        let overnight = span(at(4, 22), at(5, 2));
+        assert!(overnight.touches_days(d(5), d(6)));
+        assert!(overnight.touches_days(d(4), d(5)));
+        // Ending exactly at midnight is not on the next day.
+        assert!(!span(at(4, 22), at(5, 0)).touches_days(d(5), d(6)));
+        // A reminder with no length is on the day it is at.
+        assert!(span(at(5, 0), at(5, 0)).touches_days(d(5), d(6)));
+
+        let holiday = Event {
+            all_day: true,
+            start: None,
+            end: None,
+            days: Some((d(3), d(5))),
+            ..timed("holiday", (0, 0), (0, 0))
+        };
+        assert!(holiday.touches_days(d(4), d(5)));
+        assert!(
+            !holiday.touches_days(d(5), d(6)),
+            "the end day is exclusive"
+        );
     }
 
     #[test]
