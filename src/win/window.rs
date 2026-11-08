@@ -1205,6 +1205,12 @@ fn reload_config_if_changed(st: &mut State) {
     st.loc = new_loc;
 
     st.scale = cfg.scale;
+    // A view or week selection edited by hand needs days or calendars the last
+    // sync did not fetch, just as the same choice from the menu does.
+    let refetch = {
+        let old = &sync::lock(&st.shared).config;
+        cfg.view() != old.view() || cfg.week_calendar_ids != old.week_calendar_ids
+    };
     {
         let mut guard = sync::lock(&st.shared);
         guard.config = cfg.clone();
@@ -1237,6 +1243,9 @@ fn reload_config_if_changed(st: &mut State) {
         recreate_renderer(st, pw.max(1) as u32, ph.max(1) as u32, palette);
     } else if let Some(r) = st.renderer.as_mut() {
         r.set_palette(palette, &st.appearance);
+    }
+    if refetch {
+        request_sync(st);
     }
     redraw(st);
 }

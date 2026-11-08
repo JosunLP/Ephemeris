@@ -495,6 +495,10 @@ impl Config {
                 .cloned()
                 .collect();
         }
+        // Naming every calendar is only the same as naming none while the day
+        // view shows every calendar too; otherwise empty would mean "follow
+        // the day" and drop the calendars the week added.
+        let day_shows_all = self.calendar_ids.is_empty();
         let selected = &mut self.week_calendar_ids;
         if selected.iter().any(|s| s == id) {
             if selected.len() > 1 {
@@ -503,7 +507,7 @@ impl Config {
         } else {
             selected.push(id.to_owned());
         }
-        if all.iter().all(|a| selected.contains(a)) {
+        if day_shows_all && all.iter().all(|a| selected.contains(a)) {
             selected.clear();
         }
     }
@@ -746,11 +750,22 @@ mod tests {
         // Adding a calendar the day view does not show is the whole point.
         cfg.toggle_week_calendar(&all, "c");
         assert_eq!(cfg.week_calendar_ids, ["b", "c"]);
-        // Naming every calendar is the same as naming none.
+        // Every calendar ticked while the day view shows only some: kept as
+        // written, because empty would fall back to the day's two and lose
+        // "c" from the week.
         cfg.toggle_week_calendar(&all, "a");
-        assert!(cfg.week_calendar_ids.is_empty());
+        assert_eq!(cfg.week_calendar_ids, ["b", "c", "a"]);
+        assert!(cfg.week_calendar_checked("c"));
         // An id that is not on offer changes nothing.
         cfg.toggle_week_calendar(&all, "zzz");
+        assert_eq!(cfg.week_calendar_ids, ["b", "c", "a"]);
+
+        // With every calendar on the day side, naming them all is the same
+        // as naming none, so a calendar added later comes along.
+        let mut cfg = Config::default();
+        cfg.toggle_week_calendar(&all, "a");
+        assert_eq!(cfg.week_calendar_ids, ["b", "c"]);
+        cfg.toggle_week_calendar(&all, "a");
         assert!(cfg.week_calendar_ids.is_empty());
     }
 

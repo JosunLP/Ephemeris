@@ -1247,6 +1247,12 @@ impl App {
 
         let geometry_changed =
             cfg.size() != self.config().size() || metrics.shadow != self.metrics.shadow;
+        // A view or week selection edited by hand needs days or calendars the
+        // last sync did not fetch, just as the same choice from the menu does.
+        let refetch = {
+            let old = self.config();
+            cfg.view() != old.view() || cfg.week_calendar_ids != old.week_calendar_ids
+        };
 
         self.appearance = appearance;
         self.theme_file = cfg.appearance.file();
@@ -1264,6 +1270,9 @@ impl App {
         if geometry_changed {
             let rect = self.target_geometry(&cfg, shell);
             shell.set_window_rect(rect);
+        }
+        if refetch {
+            self.request_sync(shell);
         }
         log::info("Settings reloaded");
         self.kick(shell);

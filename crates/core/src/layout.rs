@@ -545,7 +545,6 @@ pub fn week_blocks(events: &[Event], days: &[NaiveDate]) -> Vec<WeekBlock> {
     for (day, &date) in days.iter().enumerate() {
         let lo = local_day_start(date);
         let hi = local_day_start(date + chrono::Duration::days(1));
-        let day_minutes = ((hi - lo).num_minutes() as f32).max(1.0);
 
         let mut pieces: Vec<WeekBlock> = events
             .iter()
@@ -560,8 +559,21 @@ pub fn week_blocks(events: &[Event], days: &[NaiveDate]) -> Vec<WeekBlock> {
                 if !(start < hi && (end > lo || start >= lo)) {
                     return None;
                 }
-                let from = ((start.max(lo) - lo).num_minutes() as f32).clamp(0.0, day_minutes);
-                let to = ((end.min(hi) - lo).num_minutes() as f32).clamp(from, day_minutes);
+                // Clock minutes, not minutes elapsed since midnight: on the
+                // day the clocks change the two differ by an hour, and the
+                // hour labels, the now line and the start time in the block
+                // all go by the clock.
+                let from = if start >= lo {
+                    minutes_of_day(start)
+                } else {
+                    0.0
+                };
+                let to = if end < hi {
+                    minutes_of_day(end)
+                } else {
+                    DAY_MINUTES
+                }
+                .max(from);
                 Some(WeekBlock {
                     index,
                     day,

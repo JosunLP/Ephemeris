@@ -1211,7 +1211,10 @@ impl<C: Canvas> Painter<'_, C> {
             self.line(c0 + 1.5, y, c1 - 1.0, y, p.accent, 0.95, 2.0, true);
         }
 
-        grid_bottom + pad
+        // `layout::content_height` adds `m.pad` of breathing room after the
+        // cursor; the label pad already is that room here, and counting both
+        // made a grid that fits scrollable by a few pixels.
+        grid_bottom + pad - m.pad
     }
 
     /// The coloured box an entry on the week grid sits in: a tint of the
