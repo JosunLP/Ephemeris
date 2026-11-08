@@ -22,7 +22,7 @@
 use crate::unix::autostart;
 use chrono::{DateTime, Duration as ChronoDuration, Local, Timelike};
 use ephemeris_core::anim::Animations;
-use ephemeris_core::config::{self, Config};
+use ephemeris_core::config::{self, Config, View};
 use ephemeris_core::i18n::Locale;
 use ephemeris_core::layout::{Frame, Hit, HitRegion, Panel, UndoView, hit_point};
 use ephemeris_core::menu;
@@ -330,8 +330,9 @@ impl App {
     pub fn target_geometry(&self, cfg: &Config, shell: &dyn Shell) -> WindowRect {
         let scale = shell.scale();
         let shadow_px = (self.metrics.shadow * scale).round() as i32;
-        let width = ((cfg.width + self.metrics.shadow * 2.0) * scale).round() as i32;
-        let height = ((cfg.height + self.metrics.shadow * 2.0) * scale).round() as i32;
+        let (w, h) = cfg.size();
+        let width = ((w + self.metrics.shadow * 2.0) * scale).round() as i32;
+        let height = ((h + self.metrics.shadow * 2.0) * scale).round() as i32;
 
         let (x, y) = match (cfg.x, cfg.y) {
             (Some(x), Some(y)) => (x, y),
@@ -385,6 +386,7 @@ impl App {
             sync_minutes: guard.config.sync_minutes,
             opacity: guard.config.opacity,
             show_past_events: guard.config.show_past_events,
+            view: guard.config.view(),
             undo,
             config_error: guard.config_error.as_deref(),
             update: guard.update.as_ref().map(|u| u.version.as_str()),
@@ -513,8 +515,9 @@ impl App {
 
             Some(Hit::TaskCheck(key)) => self.begin_pending(shell, key),
 
-            Some(Hit::Event(idx)) | Some(Hit::Hero(idx)) => self.open_event(idx, false),
-            Some(Hit::Tomorrow(idx)) => self.open_event(idx, true),
+            Some(hit @ (Hit::Event(_) | Hit::Hero(_) | Hit::Tomorrow(_) | Hit::WeekEvent(_))) => {
+                self.open_event(hit)
+            }
 
             Some(Hit::Task(_)) => {
                 ephemeris_core::host::host().open_url("https://tasks.google.com/")
@@ -848,14 +851,10 @@ impl App {
 
     // --- Actions ------------------------------------------------------------
 
-    fn open_event(&self, idx: usize, tomorrow: bool) {
+    fn open_event(&self, hit: Hit) {
         let guard = sync::lock(&self.shared);
-        let list = if tomorrow {
-            &guard.agenda.tomorrow
-        } else {
-            &guard.agenda.events
-        };
-        let link = list.get(idx).and_then(|e| e.html_link.clone());
+        let link = ephemeris_core::layout::event_for_hit(&guard.agenda, hit)
+            .and_then(|e| e.html_link.clone());
         drop(guard);
         if let Some(link) = link {
             ephemeris_core::host::host().open_url(&link);
@@ -985,6 +984,14 @@ impl App {
                 g.config.locked,
             )
         };
+        let (view, week_calendars) = {
+            let g = sync::lock(&self.shared);
+            let flags: Vec<bool> = calendars
+                .iter()
+                .map(|(id, _)| g.config.week_calendar_checked(id))
+                .collect();
+            (g.config.view(), flags)
+        };
         let entries = menu::context_menu(&menu::Inputs {
             cat: self.loc.cat,
             autostart,
@@ -994,6 +1001,8 @@ impl App {
             tasklists: &tasklists,
             selected_calendars: &selected_cal,
             selected_tasklists: &selected_list,
+            view,
+            week_calendars: &week_calendars,
             update_available,
             // No sync thread in demo mode, so nothing would receive it.
             can_relogin: self.sync.is_some(),
@@ -1038,7 +1047,57 @@ impl App {
             menu::Command::Quit => shell.quit(),
             menu::Command::Calendar(i) => self.toggle_source(shell, true, i),
             menu::Command::Tasklist(i) => self.toggle_source(shell, false, i),
+            menu::Command::View(view) => self.set_view(shell, view),
+            menu::Command::WeekCalendar(i) => self.toggle_week_calendar(shell, i),
         }
+    }
+
+    /// Switches between the day and the week view.
+    ///
+    /// The window takes the size the new view last had, and keeps its right
+    /// edge where it was: the widget sits in the top-right corner by default,
+    /// and a week grid that grew from the left edge of it would run off the
+    /// side of the screen.
+    fn set_view(&mut self, shell: &mut dyn Shell, view: View) {
+        let before = shell.window_rect();
+        let cfg = {
+            let mut guard = sync::lock(&self.shared);
+            if guard.config.view() == view {
+                return;
+            }
+            guard.config.set_view(view);
+            if guard.config.x.is_some() {
+                let scale = shell.scale();
+                let width =
+                    ((guard.config.size().0 + self.metrics.shadow * 2.0) * scale).round() as i32;
+                guard.config.x = Some(before.x + before.width - width);
+            }
+            guard.config.save();
+            guard.config.clone()
+        };
+        self.config_mtime = config_mtime(self.theme_file.as_deref());
+        log::info(&format!("View: {}", view.as_str()));
+        self.scroll_target = 0.0;
+        self.anim.scroll.jump(0.0);
+        let rect = self.target_geometry(&cfg, shell);
+        shell.set_window_rect(rect);
+        // The week needs days the last sync did not ask for.
+        self.request_sync(shell);
+    }
+
+    /// Shows or hides a calendar in the week view.
+    fn toggle_week_calendar(&mut self, shell: &mut dyn Shell, index: usize) {
+        {
+            let mut guard = sync::lock(&self.shared);
+            let all: Vec<String> = guard.calendars.iter().map(|(id, _)| id.clone()).collect();
+            let Some(id) = all.get(index).cloned() else {
+                return;
+            };
+            guard.config.toggle_week_calendar(&all, &id);
+            guard.config.save();
+        }
+        self.config_mtime = config_mtime(self.theme_file.as_deref());
+        self.request_sync(shell);
     }
 
     /// Pins the widget where it is, or lets it go again.
@@ -1088,8 +1147,10 @@ impl App {
         let mut guard = sync::lock(&self.shared);
         guard.config.x = Some(r.x);
         guard.config.y = Some(r.y);
-        guard.config.width = r.width as f32 / scale - self.metrics.shadow * 2.0;
-        guard.config.height = r.height as f32 / scale - self.metrics.shadow * 2.0;
+        guard.config.set_size(
+            r.width as f32 / scale - self.metrics.shadow * 2.0,
+            r.height as f32 / scale - self.metrics.shadow * 2.0,
+        );
         guard.config.save();
         drop(guard);
         // Do not mistake our own save for someone else's edit.
@@ -1184,9 +1245,8 @@ impl App {
             || loc.rtl != self.loc.rtl
             || loc.tag != self.loc.tag;
 
-        let geometry_changed = cfg.width != self.config().width
-            || cfg.height != self.config().height
-            || metrics.shadow != self.metrics.shadow;
+        let geometry_changed =
+            cfg.size() != self.config().size() || metrics.shadow != self.metrics.shadow;
 
         self.appearance = appearance;
         self.theme_file = cfg.appearance.file();

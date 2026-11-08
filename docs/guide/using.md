@@ -17,6 +17,41 @@ The day rail adapts: the default window is 06:00 to 22:00, but it stretches to
 cover an early flight or a late event rather than squashing them against the
 edge.
 
+## The week view
+
+Right-click → **View** → **Week** or **Work week (Mon–Fri)** swaps the day for
+a week laid out the way a calendar application draws one: a column per day, a
+time grid down the side, and every timed entry as a block in its calendar
+colour. Use it as a timetable — what you teach when, which room — or simply to
+see the week at a glance.
+
+| Area | What it tells you |
+|---|---|
+| **Header** | The ISO week number and the days it covers |
+| **Day names** | One per column; today's is highlighted, and stays visible while the grid scrolls |
+| **All-day band** | Holidays, trips and other all-day entries as bars across the days they cover |
+| **Grid** | Timed entries as blocks with their title, start time and location where there is room. Entries that overlap share the column side by side; back-to-back lessons keep the full width. Past entries are dimmed and a line marks right now |
+
+The grid covers 08:00 to 17:00 and stretches to whatever is on that week. It
+fits the panel where it can and scrolls where it cannot. Hovering a block shows
+everything about it — start and end, title, location and calendar — and a click
+opens it in the calendar.
+
+**Work week** shows Monday to Friday; on Saturday and Sunday it moves on to the
+coming week, which is the one there is still something to plan for. **Week**
+shows Monday to Sunday.
+
+**Which calendars:** while a week is on screen, the menu has a second entry,
+**Calendars in the week view**. It starts out following the *Calendars*
+selection; tick and untick there to show, say, only the timetable calendar in
+the week. A calendar ticked only for the week is still fetched, and stays out
+of today's agenda — so the timetable can live in the week grid without
+crowding the day.
+
+The week view has a size of its own. The window takes it at the switch and
+keeps its right edge where it was, and switching back to **Day** brings the
+narrow column back exactly as it was. Tasks are not shown in the week view.
+
 ## Mouse
 
 | Action | Result |
@@ -27,7 +62,9 @@ edge.
 | Click the circle before a task | Tick it off |
 | Click a task row | Open it in the web interface |
 | Click an event row | Open it in the calendar, or **join** if it is an online meeting |
+| Click a block in the week view | Open it in the calendar |
 | Hover a truncated title | See it in full |
+| Hover a block in the week view | Time, title, location and calendar |
 | Right-click | Context menu |
 
 ## Ticking off a task
@@ -97,6 +134,8 @@ text, ready for an email, a ticket, or a screen reader.
 |---|---|
 | Sync now | Fetch immediately |
 | Start at login | Toggle starting with the session |
+| View | Day, Week or Work week (Mon–Fri) — see [the week view](#the-week-view) |
+| Calendars in the week view | Which calendars the week grid shows. Only while a week is on screen |
 | Calendars / Task lists | Choose which sources to show |
 | Copy agenda | The day as text on the clipboard |
 | Lock / Unlock position and size | Pin the widget where it is, or let it go |

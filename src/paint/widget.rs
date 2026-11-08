@@ -15,6 +15,13 @@
 //!        ─► [clipped: events, tomorrow, tasks] ─► scrollbar ─► footer ─► tooltip
 //! ```
 //!
+//! The week view swaps the middle for a grid and keeps the frame around it:
+//!
+//! ```text
+//! shadow ─► glass ─► header ─► day names + all-day band
+//!        ─► [clipped: hour grid with the entries] ─► scrollbar ─► footer ─► tooltip
+//! ```
+//!
 //! Two things are folded in on the way past [`Painter`] rather than by the back
 //! ends. **Mirroring**: a right-to-left layout folds every x across the panel's
 //! centre, so the layout module goes on computing left to right and no renderer
@@ -29,10 +36,12 @@
 //! the two.
 
 use crate::paint::canvas::{Align, Canvas, Font, Stop};
+use chrono::{Datelike, NaiveDate};
 use ephemeris_core::layout::{
-    self, EventList, Frame, FrameResult, Hit, HitRegion, Panel, Rect, TaskList,
+    self, AllDayBar, EventList, Frame, FrameResult, Hit, HitRegion, Panel, Rect, TaskList,
+    WeekBlock, WeekGrid, WeekHours,
 };
-use ephemeris_core::model::{Event, Task};
+use ephemeris_core::model::{Event, Task, local_day_start};
 use ephemeris_core::sync::Status;
 use ephemeris_core::theme::{Appearance, Metrics, Palette, mix};
 use std::f32::consts::PI;
@@ -85,9 +94,16 @@ pub fn draw<C: Canvas>(
     p.draw_shadow(panel.rect);
     p.draw_panel(panel.rect, p.pal.opacity(frame.opacity));
 
+    let today = frame.agenda.day.unwrap_or_else(|| frame.now.date_naive());
+    let days = layout::week_days(today, frame.view);
+    let week = (!days.is_empty()).then(|| p.week_plan(&panel, frame, days));
+
     let mut y = panel.rect.top;
-    y = p.draw_header(&panel, y, frame, hits);
-    y = p.draw_hero(&panel, y, frame, hits);
+    y = p.draw_header(&panel, y, frame, week.as_ref(), hits);
+    y = match &week {
+        Some(plan) => p.draw_week_heads(plan, y, frame, hits),
+        None => p.draw_hero(&panel, y, frame, hits),
+    };
 
     let content_top = y;
     let content_bottom = panel.content_bottom(&metrics);
@@ -103,8 +119,15 @@ pub fn draw<C: Canvas>(
     let slide = layout::reveal_slide(reveal);
 
     let mut cy = content_top - frame.anim.scroll.value + slide;
-    cy = p.draw_events_section(&panel, cy, frame, hits);
-    cy = p.draw_tasks_section(&panel, cy, frame, hits);
+    match &week {
+        Some(plan) => {
+            cy = p.draw_week_grid(plan, cy, content_bottom - content_top, frame, hits);
+        }
+        None => {
+            cy = p.draw_events_section(&panel, cy, frame, hits);
+            cy = p.draw_tasks_section(&panel, cy, frame, hits);
+        }
+    }
 
     p.fade = 1.0;
     p.c.pop_clip();
@@ -138,6 +161,20 @@ pub fn draw<C: Canvas>(
         content_height,
         viewport_height,
     }
+}
+
+/// The week grid, worked out once per frame before any of it is drawn.
+///
+/// The header, the day names and the grid all need the same columns, and the
+/// gutter they start after is a measured width, so it is measured once.
+struct WeekPlan {
+    days: Vec<NaiveDate>,
+    grid: WeekGrid,
+    blocks: Vec<WeekBlock>,
+    bars: Vec<AllDayBar>,
+    hours: WeekHours,
+    /// The hour labels in the gutter, one per [`WeekHours::marks`].
+    labels: Vec<String>,
 }
 
 struct Painter<'a, C: Canvas> {
@@ -286,6 +323,7 @@ impl<C: Canvas> Painter<'_, C> {
         panel: &Panel,
         top: f32,
         frame: &Frame,
+        week: Option<&WeekPlan>,
         hits: &mut Vec<HitRegion>,
     ) -> f32 {
         let (m, p) = (self.m, self.pal);
@@ -316,10 +354,18 @@ impl<C: Canvas> Painter<'_, C> {
             hit: Hit::Refresh,
         });
 
-        // Weekday large, date small underneath.
+        // Weekday large, date small underneath — or for a week, its number
+        // and the days it runs from and to.
+        let (title, subtitle) = match week.and_then(|w| Some((*w.days.first()?, *w.days.last()?))) {
+            Some((first, last)) => (
+                loc.week_number(first.iso_week().week()),
+                format!("{} – {}", loc.day_month(first), loc.day_month(last)),
+            ),
+            None => (loc.weekday(today), loc.date_line(today)),
+        };
         let title_y = top + m.pad * 0.55;
         self.text(
-            &loc.weekday(today),
+            &title,
             Font::Title,
             Side::Start,
             rect(
@@ -332,7 +378,7 @@ impl<C: Canvas> Painter<'_, C> {
             1.0,
         );
         self.text(
-            &loc.date_line(today),
+            &subtitle,
             Font::Subtitle,
             Side::Start,
             rect(cx0, title_y + m.fs_title * 1.35, cx1, bottom),
@@ -356,7 +402,11 @@ impl<C: Canvas> Painter<'_, C> {
             0.9,
         );
 
-        self.draw_day_rail(cx0, cx1, layout::day_rail_top(bottom, &m), frame);
+        // The rail is today's shape, which the grid below already shows for
+        // every day of the week.
+        if week.is_none() {
+            self.draw_day_rail(cx0, cx1, layout::day_rail_top(bottom, &m), frame);
+        }
 
         let line_y = bottom - 1.0;
         self.line(cx0, line_y, cx1, line_y, p.rule, p.rule_alpha, 1.0, false);
@@ -903,6 +953,300 @@ impl<C: Canvas> Painter<'_, C> {
             y += m.event_row_h * 0.85;
         }
         y
+    }
+
+    // --- Week view ----------------------------------------------------------
+
+    /// Space above the first hour line and below the last one, so the labels
+    /// that sit centred on them are not cut in half by the clip.
+    fn week_label_pad(&self) -> f32 {
+        self.m.fs_meta * 0.8
+    }
+
+    fn week_plan(&mut self, panel: &Panel, frame: &Frame, days: Vec<NaiveDate>) -> WeekPlan {
+        let m = self.m;
+        let events = &frame.agenda.week;
+        let blocks = layout::week_blocks(events, &days);
+        let bars = layout::week_all_day(events, &days);
+        let hours = WeekHours::of(&blocks);
+        let midnight = local_day_start(days[0]);
+        let labels: Vec<String> = hours
+            .marks()
+            .map(|minutes| {
+                frame
+                    .loc
+                    .time(midnight + chrono::Duration::minutes(minutes as i64))
+            })
+            .collect();
+        let gutter = self.column_width(&labels, Font::Meta, m.time_col_w * 0.7, m.time_col_w * 1.6);
+        let grid = WeekGrid::new(panel, gutter, days.len());
+        WeekPlan {
+            days,
+            grid,
+            blocks,
+            bars,
+            hours,
+            labels,
+        }
+    }
+
+    /// The day names across the top, and the all-day entries under them.
+    ///
+    /// Outside the scrolled area, like the header: scrolling down to the
+    /// afternoon must not lose track of which column is Thursday.
+    fn draw_week_heads(
+        &mut self,
+        plan: &WeekPlan,
+        top: f32,
+        frame: &Frame,
+        hits: &mut Vec<HitRegion>,
+    ) -> f32 {
+        let (m, p) = (self.m, self.pal);
+        let loc = frame.loc;
+        let grid = &plan.grid;
+        let today = frame.now.date_naive();
+
+        let mut y = top + m.section_gap * 0.5;
+        let name_h = m.fs_meta * 1.5;
+        let date_h = m.fs_row * 1.45;
+        let head_h = name_h + date_h + 4.0;
+        for (i, day) in plan.days.iter().enumerate() {
+            let (c0, c1) = grid.column(i);
+            let is_today = *day == today;
+            if is_today {
+                self.fill_round(rect(c0 + 1.5, y, c1 - 1.5, y + head_h), 6.0, p.accent, 0.13);
+            }
+            self.text(
+                &loc.weekday(*day),
+                Font::Meta,
+                Side::Center,
+                rect(c0 + 3.0, y + 2.0, c1 - 3.0, y + 2.0 + name_h),
+                if is_today { p.accent } else { p.text_dim },
+                1.0,
+            );
+            self.text(
+                &loc.day_month(*day),
+                if is_today { Font::RowStrong } else { Font::Row },
+                Side::Center,
+                rect(c0 + 3.0, y + 2.0 + name_h, c1 - 3.0, y + head_h),
+                if is_today { p.accent } else { p.text_primary },
+                1.0,
+            );
+        }
+        y += head_h + 4.0;
+
+        let rows = layout::all_day_rows(&plan.bars);
+        let line_h = m.fs_meta * 1.95;
+        for bar in &plan.bars {
+            let ev = &frame.agenda.week[bar.index];
+            let r = grid.all_day_rect(bar, y, line_h);
+            let hovered = frame.hover == Some(Hit::WeekEvent(bar.index));
+            self.draw_week_entry_box(r, ev, 1.0, hovered, false);
+            self.text(
+                &ev.title,
+                Font::Meta,
+                Side::Start,
+                rect(r.left + 7.0, r.top, r.right - 3.0, r.bottom),
+                p.text_primary,
+                1.0,
+            );
+            if hovered {
+                self.tooltip = Some((week_tooltip(ev, frame), r.top, r.bottom));
+            }
+            hits.push(HitRegion {
+                rect: r,
+                hit: Hit::WeekEvent(bar.index),
+            });
+        }
+        y += rows as f32 * line_h;
+        if rows > 0 {
+            y += 3.0;
+        }
+
+        self.line(
+            grid.gutter_left,
+            y,
+            grid.right,
+            y,
+            p.rule,
+            p.rule_alpha,
+            1.0,
+            false,
+        );
+        y + 1.0
+    }
+
+    /// The hour grid and the timed entries on it. `top` already carries the
+    /// scroll offset; returns where the grid ended, for the scroll limit.
+    fn draw_week_grid(
+        &mut self,
+        plan: &WeekPlan,
+        top: f32,
+        viewport: f32,
+        frame: &Frame,
+        hits: &mut Vec<HitRegion>,
+    ) -> f32 {
+        let (m, p) = (self.m, self.pal);
+        let loc = frame.loc;
+        let (grid, hours) = (&plan.grid, &plan.hours);
+        let now = frame.now;
+        let pad = self.week_label_pad();
+        let hour_h = layout::week_hour_height(viewport - pad * 2.0, hours, &m);
+        let grid_top = top + pad;
+        let grid_bottom = grid_top + hours.hours() * hour_h;
+
+        // Today's column, faintly, so the eye finds it below the heading too.
+        if let Some(i) = plan.days.iter().position(|d| *d == now.date_naive()) {
+            let (c0, c1) = grid.column(i);
+            self.fill_round(rect(c0, grid_top, c1, grid_bottom), 0.0, p.accent, 0.045);
+        }
+
+        for (minutes, label) in hours.marks().zip(&plan.labels) {
+            let y = hours.y(minutes, grid_top, hour_h);
+            self.line(
+                grid.left,
+                y,
+                grid.right,
+                y,
+                p.rule,
+                p.rule_alpha * 0.7,
+                1.0,
+                false,
+            );
+            self.text(
+                label,
+                Font::Meta,
+                Side::End,
+                rect(
+                    grid.gutter_left,
+                    y - m.fs_meta,
+                    grid.left - 5.0,
+                    y + m.fs_meta,
+                ),
+                p.text_faint,
+                1.0,
+            );
+        }
+        for i in 0..=plan.days.len() {
+            let x = if i == plan.days.len() {
+                grid.right
+            } else {
+                grid.column(i).0
+            };
+            self.line(
+                x,
+                grid_top,
+                x,
+                grid_bottom,
+                p.rule,
+                p.rule_alpha * 0.55,
+                1.0,
+                false,
+            );
+        }
+
+        let title_h = m.fs_row * 1.4;
+        let meta_h = m.fs_meta * 1.4;
+        for block in &plan.blocks {
+            let ev = &frame.agenda.week[block.index];
+            let r = grid.block_rect(hours, block, grid_top, hour_h);
+            let running = ev.is_now(now);
+            let dim = if ev.is_past(now) && !running {
+                0.55
+            } else {
+                1.0
+            };
+            let hovered = frame.hover == Some(Hit::WeekEvent(block.index));
+            self.draw_week_entry_box(r, ev, dim, hovered, running);
+
+            // As much as fits: the title, then the time and the room. A block
+            // too short for even the title stays a coloured shape, and the
+            // tooltip says what it is.
+            let (tx0, tx1) = (r.left + 6.0, r.right - 3.0);
+            let mut ty = r.top + 1.5;
+            if ty + title_h <= r.bottom + 2.0 {
+                self.text(
+                    &ev.title,
+                    if running { Font::RowStrong } else { Font::Row },
+                    Side::Start,
+                    rect(tx0, ty, tx1, ty + title_h),
+                    p.text_primary,
+                    dim,
+                );
+                ty += title_h;
+            }
+            if ty + meta_h <= r.bottom {
+                let when = ev.start.map(|s| loc.time(s)).unwrap_or_default();
+                let meta = match &ev.location {
+                    Some(place) => format!("{when} · {place}"),
+                    None => when,
+                };
+                self.text(
+                    &meta,
+                    Font::Meta,
+                    Side::Start,
+                    rect(tx0, ty, tx1, ty + meta_h),
+                    if running { p.accent } else { p.text_dim },
+                    dim,
+                );
+            }
+
+            if hovered {
+                self.tooltip = Some((week_tooltip(ev, frame), r.top, r.bottom));
+            }
+            hits.push(HitRegion {
+                rect: r,
+                hit: Hit::WeekEvent(block.index),
+            });
+        }
+
+        // The now line across today's column, on top of everything in it.
+        let now_min = layout::minutes_of_day(now);
+        if let Some(i) = plan.days.iter().position(|d| *d == now.date_naive())
+            && hours.contains(now_min)
+        {
+            let (c0, c1) = grid.column(i);
+            let y = hours.y(now_min, grid_top, hour_h);
+            self.circle(c0 + 1.5, y, 3.0, p.accent, 1.0, None);
+            self.line(c0 + 1.5, y, c1 - 1.0, y, p.accent, 0.95, 2.0, true);
+        }
+
+        grid_bottom + pad
+    }
+
+    /// The coloured box an entry on the week grid sits in: a tint of the
+    /// calendar's colour with a solid edge at the reading start, which is how
+    /// the list rows mark their calendar too.
+    fn draw_week_entry_box(&mut self, r: Rect, ev: &Event, dim: f32, hovered: bool, running: bool) {
+        let p = self.pal;
+        let color = if p.high_contrast {
+            p.text_primary
+        } else {
+            self.calendar_color(ev)
+        };
+        let tint = if p.high_contrast {
+            0.0
+        } else if p.dark {
+            0.30
+        } else {
+            0.20
+        };
+        self.fill_round(r, 4.0, color, tint * dim);
+        if p.high_contrast {
+            self.stroke_round(r, 4.0, color, dim, 1.0);
+        }
+        if hovered {
+            self.fill_round(r, 4.0, p.hover, p.hover_alpha * 1.6);
+        }
+        if running {
+            self.stroke_round(r, 4.0, p.accent, 0.9, 1.5);
+        }
+        self.fill_round(
+            rect(r.left, r.top, r.left + 3.0, r.bottom),
+            1.5,
+            if running { p.accent } else { color },
+            dim,
+        );
     }
 
     /// A thin line with a time marker showing where in the day you are.
@@ -1483,6 +1827,31 @@ impl<C: Canvas> Painter<'_, C> {
         let r = self.mrect(r);
         self.c.text(s, font, align, r, color, a);
     }
+}
+
+/// What the tooltip of an entry on the week grid says.
+///
+/// Everything, always — not only when the title was cut off, as in the list.
+/// A block on the grid has room for a title and a time at best, and the room,
+/// the end time and the calendar are exactly what is left out.
+fn week_tooltip(ev: &Event, frame: &Frame) -> String {
+    let loc = frame.loc;
+    let when = if ev.all_day {
+        loc.label(loc.cat.all_day)
+    } else {
+        match (ev.start, ev.end) {
+            (Some(s), Some(e)) if e > s => format!("{}–{}", loc.time(s), loc.time(e)),
+            (Some(s), _) => loc.time(s),
+            _ => String::new(),
+        }
+    };
+    let mut parts = vec![when, ev.title.clone()];
+    parts.extend(ev.location.clone());
+    if !ev.calendar_name.is_empty() {
+        parts.push(ev.calendar_name.clone());
+    }
+    parts.retain(|s| !s.is_empty());
+    parts.join("  ·  ")
 }
 
 /// Trims the hit regions from `from` onwards to the scrolling band, dropping

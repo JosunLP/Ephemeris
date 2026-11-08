@@ -29,7 +29,7 @@ use crate::win::platform;
 use crate::win::render::{self, Frame, Hit, HitRegion, Renderer, UndoView};
 use chrono::{DateTime, Duration as ChronoDuration, Local, Timelike};
 use ephemeris_core::anim::Animations;
-use ephemeris_core::config::{self, Config};
+use ephemeris_core::config::{self, Config, View};
 use ephemeris_core::i18n::Locale;
 use ephemeris_core::layout::{Panel, hit_point};
 use ephemeris_core::log;
@@ -293,8 +293,8 @@ pub fn run() -> Result<()> {
             WS_POPUP,
             cfg.x.unwrap_or(0),
             cfg.y.unwrap_or(0),
-            cfg.width as i32,
-            cfg.height as i32,
+            cfg.size().0 as i32,
+            cfg.size().1 as i32,
             None,
             None,
             Some(instance.into()),
@@ -436,8 +436,9 @@ fn palette_for(cfg: &Config, custom: &Appearance, visuals: SystemVisuals, quiet:
 fn target_geometry(cfg: &Config, m: Metrics, dpi: f32) -> (i32, i32, i32, i32) {
     let scale = dpi / 96.0;
     let shadow_px = (m.shadow * scale).round() as i32;
-    let pw = ((cfg.width + m.shadow * 2.0) * scale).round() as i32;
-    let ph = ((cfg.height + m.shadow * 2.0) * scale).round() as i32;
+    let (w, h) = cfg.size();
+    let pw = ((w + m.shadow * 2.0) * scale).round() as i32;
+    let ph = ((h + m.shadow * 2.0) * scale).round() as i32;
 
     let (px, py) = match (cfg.x, cfg.y) {
         (Some(x), Some(y)) => (x, y),
@@ -1415,8 +1416,9 @@ fn on_left_down(st: &mut State, lparam: LPARAM) {
 
         Some(Hit::TaskCheck(key)) => begin_pending(st, key),
 
-        Some(Hit::Event(idx)) | Some(Hit::Hero(idx)) => open_event(st, idx, false),
-        Some(Hit::Tomorrow(idx)) => open_event(st, idx, true),
+        Some(hit @ (Hit::Event(_) | Hit::Hero(_) | Hit::Tomorrow(_) | Hit::WeekEvent(_))) => {
+            open_event(st, hit)
+        }
 
         Some(Hit::Task(_)) => platform::open_in_browser("https://tasks.google.com/"),
 
@@ -1470,14 +1472,10 @@ fn on_left_down(st: &mut State, lparam: LPARAM) {
 }
 
 /// Opens an event in its calendar.
-fn open_event(st: &State, idx: usize, tomorrow: bool) {
+fn open_event(st: &State, hit: Hit) {
     let guard = sync::lock(&st.shared);
-    let list = if tomorrow {
-        &guard.agenda.tomorrow
-    } else {
-        &guard.agenda.events
-    };
-    let link = list.get(idx).and_then(|e| e.html_link.clone());
+    let link =
+        ephemeris_core::layout::event_for_hit(&guard.agenda, hit).and_then(|e| e.html_link.clone());
     drop(guard);
     if let Some(link) = link {
         platform::open_in_browser(&link);
@@ -1574,8 +1572,10 @@ fn save_geometry(st: &mut State) {
         let mut guard = sync::lock(&st.shared);
         guard.config.x = Some(wr.left);
         guard.config.y = Some(wr.top);
-        guard.config.width = (wr.right - wr.left) as f32 / scale - st.metrics.shadow * 2.0;
-        guard.config.height = (wr.bottom - wr.top) as f32 / scale - st.metrics.shadow * 2.0;
+        guard.config.set_size(
+            (wr.right - wr.left) as f32 / scale - st.metrics.shadow * 2.0,
+            (wr.bottom - wr.top) as f32 / scale - st.metrics.shadow * 2.0,
+        );
         guard.config.save();
     }
     st.config_mtime = config_mtime(st.theme_file.as_deref());
@@ -1695,6 +1695,7 @@ fn redraw(st: &mut State) {
             sync_minutes: guard.config.sync_minutes,
             opacity: guard.config.opacity,
             show_past_events: guard.config.show_past_events,
+            view: guard.config.view(),
             undo,
             config_error: guard.config_error.as_deref(),
             update: guard.update.as_ref().map(|u| u.version.as_str()),
@@ -1789,6 +1790,14 @@ fn show_menu(st: &mut State) {
             g.config.locked,
         )
     };
+    let (view, week_calendars) = {
+        let g = sync::lock(&st.shared);
+        let flags: Vec<bool> = calendars
+            .iter()
+            .map(|(id, _)| g.config.week_calendar_checked(id))
+            .collect();
+        (g.config.view(), flags)
+    };
     let entries = menu::context_menu(&menu::Inputs {
         cat: st.loc.cat,
         autostart,
@@ -1799,6 +1808,8 @@ fn show_menu(st: &mut State) {
         tasklists: &tasklists,
         selected_calendars: &selected_cal,
         selected_tasklists: &selected_list,
+        view,
+        week_calendars: &week_calendars,
         update_available,
         // No sync thread in demo mode, so nothing would receive the command.
         can_relogin: st.sync.is_some(),
@@ -1924,7 +1935,67 @@ fn run_command(st: &mut State, command: menu::Command, autostart: bool) {
         },
         menu::Command::Calendar(i) => toggle_source(st, true, i),
         menu::Command::Tasklist(i) => toggle_source(st, false, i),
+        menu::Command::View(view) => set_view(st, view),
+        menu::Command::WeekCalendar(i) => toggle_week_calendar(st, i),
     }
+}
+
+/// Switches between the day and the week view.
+///
+/// The window takes the size the new view last had, and keeps its right edge
+/// where it was: the widget sits in the top-right corner by default, and a
+/// week grid that grew from the left edge of it would run off the side of the
+/// screen.
+fn set_view(st: &mut State, view: View) {
+    let mut before = RECT::default();
+    let have_rect = unsafe { GetWindowRect(st.hwnd, &mut before).is_ok() };
+    let cfg = {
+        let mut guard = sync::lock(&st.shared);
+        if guard.config.view() == view {
+            return;
+        }
+        guard.config.set_view(view);
+        if guard.config.x.is_some() && have_rect {
+            let scale = st.dpi / 96.0;
+            let width = ((guard.config.size().0 + st.metrics.shadow * 2.0) * scale).round() as i32;
+            guard.config.x = Some(before.right - width);
+        }
+        guard.config.save();
+        guard.config.clone()
+    };
+    st.config_mtime = config_mtime(st.theme_file.as_deref());
+    log::info(&format!("View: {}", view.as_str()));
+    st.scroll_target = 0.0;
+    st.anim.scroll.jump(0.0);
+    let (px, py, pw, ph) = target_geometry(&cfg, st.metrics, st.dpi);
+    unsafe {
+        let _ = SetWindowPos(
+            st.hwnd,
+            Some(HWND_BOTTOM),
+            px,
+            py,
+            pw,
+            ph,
+            SWP_NOACTIVATE | SWP_NOOWNERZORDER,
+        );
+    }
+    // The week needs days the last sync did not ask for.
+    request_sync(st);
+}
+
+/// Shows or hides a calendar in the week view.
+fn toggle_week_calendar(st: &mut State, index: usize) {
+    {
+        let mut guard = sync::lock(&st.shared);
+        let all: Vec<String> = guard.calendars.iter().map(|(id, _)| id.clone()).collect();
+        let Some(id) = all.get(index).cloned() else {
+            return;
+        };
+        guard.config.toggle_week_calendar(&all, &id);
+        guard.config.save();
+    }
+    st.config_mtime = config_mtime(st.theme_file.as_deref());
+    request_sync(st);
 }
 
 /// Pins the widget where it is, or lets it go again.

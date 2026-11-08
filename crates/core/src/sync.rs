@@ -11,7 +11,7 @@ use crate::host::Waker;
 use crate::log;
 use crate::model::{
     Agenda, Event, Task, filter_tasks_for_today, link_task_time_blocks, local_day_start,
-    sort_events, sort_tasks, title_key,
+    sort_events, sort_tasks, title_key, week_start,
 };
 use crate::provider::{
     self, AccountConfig, CalendarProvider, CalendarRef, Error, FetchRequest, Kind, TaskListRef,
@@ -480,15 +480,30 @@ fn run_sync(
     let midnight = local_day_start(tomorrow);
     // Two days in one request: the same call yields the tomorrow preview for
     // free, a second one would be pure waste.
-    let window_end = local_day_start(today + ChronoDuration::days(2));
+    let after_tomorrow = today + ChronoDuration::days(2);
+    let window_end = local_day_start(after_tomorrow);
+    // The week view widens the same request rather than adding one: the
+    // window is a single range either way, and every provider pages through
+    // it in one go.
+    let week = cfg.view().week_days().map(|days| {
+        let first = week_start(today, days);
+        (first, first + ChronoDuration::days(days as i64))
+    });
+    let (from, to) = match week {
+        Some((first, after)) => (
+            day_start.min(local_day_start(first)),
+            window_end.max(local_day_start(after)),
+        ),
+        None => (day_start, window_end),
+    };
 
     let request = FetchRequest {
-        from: day_start,
-        to: window_end,
+        from,
+        to,
         today,
         hide_declined: cfg.hide_declined,
         include_undated_tasks: cfg.show_undated_tasks,
-        calendar_ids: cfg.calendar_ids.clone(),
+        calendar_ids: cfg.fetch_calendar_ids(),
         tasklist_ids: cfg.tasklist_ids.clone(),
         cached_directory: match meta.as_ref() {
             Some(m) if m.fresh() => m.by_account.clone(),
@@ -553,11 +568,30 @@ fn run_sync(
         at: keep_timestamp.unwrap_or_else(Instant::now),
     });
 
+    // The week first, from everything that came back; then today and
+    // tomorrow, from what is left of the window they asked for. A wider
+    // request returns the rest of the week as well, and without this the
+    // split below would file all of it under today or tomorrow.
+    let mut week_events: Vec<Event> = match week {
+        Some((first, after)) => events
+            .iter()
+            .filter(|e| cfg.shows_in_week(&e.calendar_id) && e.touches_days(first, after))
+            .cloned()
+            .collect(),
+        None => Vec::new(),
+    };
+    let events: Vec<Event> = events
+        .into_iter()
+        .filter(|e| cfg.shows_in_day(&e.calendar_id) && e.touches_days(today, after_tomorrow))
+        .collect();
+
     let (mut events, mut next_day) = split_days(events, today, midnight);
     completed.drop_completed(today, &mut events);
     completed.drop_completed(today, &mut next_day);
+    completed.drop_completed(today, &mut week_events);
     sort_events(&mut events);
     sort_events(&mut next_day);
+    sort_events(&mut week_events);
 
     // Server side filtering only happened where the API supports it; this
     // drops everything still in the future for every provider alike.
@@ -570,9 +604,10 @@ fn run_sync(
     link_task_time_blocks(&mut next_day, &tasks);
 
     log::info(&format!(
-        "Sync ok: {} events today (+{} tomorrow), {} tasks, {}/{} accounts, {} ms",
+        "Sync ok: {} events today (+{} tomorrow, {} this week), {} tasks, {}/{} accounts, {} ms",
         events.len(),
         next_day.len(),
+        week_events.len(),
         tasks.len(),
         succeeded,
         results.len(),
@@ -584,6 +619,7 @@ fn run_sync(
         events,
         tomorrow: next_day,
         tasks,
+        week: week_events,
         fetched_at: Some(Local::now()),
         // Partial failure is worth showing, but not worth blanking the widget.
         last_error: provider::summarize_errors(&results),

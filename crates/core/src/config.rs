@@ -173,6 +173,57 @@ impl AppearanceRef {
     }
 }
 
+/// Which layout the panel shows.
+///
+/// Written in `config.json` as `"view": "day"`, `"week"` or `"workweek"`. An
+/// unknown value falls back to the day view rather than taking the whole file
+/// down with it: the view is a matter of taste, and a typo in it is no reason
+/// to lose every other setting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum View {
+    /// Today's agenda, the highlighted event and the tasks — the widget as it
+    /// has always been.
+    #[default]
+    Day,
+    /// Monday to Sunday side by side, on a time grid.
+    Week,
+    /// Monday to Friday side by side. Shows the coming week from Saturday
+    /// on, because the weekend's empty grid of a week that is over is the one
+    /// thing nobody wants to look at on a Sunday evening.
+    WorkWeek,
+}
+
+impl View {
+    pub fn parse(raw: &str) -> View {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "week" => View::Week,
+            "workweek" | "work-week" | "work_week" | "work week" => View::WorkWeek,
+            _ => View::Day,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            View::Day => "day",
+            View::Week => "week",
+            View::WorkWeek => "workweek",
+        }
+    }
+
+    /// How many days the week grid shows, or `None` for the day view.
+    pub fn week_days(self) -> Option<u32> {
+        match self {
+            View::Day => None,
+            View::Week => Some(7),
+            View::WorkWeek => Some(5),
+        }
+    }
+
+    pub fn is_week(self) -> bool {
+        self.week_days().is_some()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -192,6 +243,24 @@ pub struct Config {
     /// something on the desktop is easy to do and moves it by accident. This
     /// is the setting that stops that, and the right-click menu toggles it.
     pub locked: bool,
+
+    /// `"day"` (the default), `"week"` or `"workweek"`. See [`View`].
+    pub view: String,
+    /// Size of the week view, in the same units as `width` and `height`.
+    ///
+    /// A size of its own because the two views want very different windows:
+    /// a day is a narrow column, a week is a wide grid. One shared size would
+    /// mean resizing by hand at every switch, or a week squeezed into 380
+    /// pixels.
+    pub week_width: f32,
+    pub week_height: f32,
+    /// The calendars the week view shows. Empty means the same calendars as
+    /// the day view.
+    ///
+    /// A calendar listed here is fetched even when `calendar_ids` leaves it
+    /// out, and then appears in the week view only — so a timetable can live
+    /// in the week grid without crowding today's agenda.
+    pub week_calendar_ids: Vec<String>,
 
     /// Sync interval in minutes.
     pub sync_minutes: u32,
@@ -261,6 +330,10 @@ impl Default for Config {
             width: 380.0,
             height: 620.0,
             locked: false,
+            view: "day".into(),
+            week_width: 760.0,
+            week_height: 560.0,
+            week_calendar_ids: Vec::new(),
             sync_minutes: 30,
             accounts: Vec::new(),
             calendar_ids: Vec::new(),
@@ -313,12 +386,126 @@ impl Config {
     fn sanitized(mut self) -> Self {
         self.width = self.width.clamp(240.0, 1200.0);
         self.height = self.height.clamp(200.0, 2000.0);
+        self.week_width = self.week_width.clamp(420.0, 2400.0);
+        self.week_height = self.week_height.clamp(280.0, 2000.0);
         self.opacity = self.opacity.clamp(0.15, 1.0);
         self.scale = self.scale.clamp(0.6, 3.0);
         self.sync_minutes = self.sync_minutes.clamp(1, 24 * 60);
         self.undo_seconds = self.undo_seconds.min(30);
         self.peek_seconds = self.peek_seconds.clamp(1, 60);
         self
+    }
+
+    /// The view the settings ask for.
+    pub fn view(&self) -> View {
+        View::parse(&self.view)
+    }
+
+    /// Switches the view. The window size goes with it — see
+    /// [`Config::size`].
+    pub fn set_view(&mut self, view: View) {
+        self.view = view.as_str().to_owned();
+    }
+
+    /// The size of the glass body for the current view.
+    pub fn size(&self) -> (f32, f32) {
+        if self.view().is_week() {
+            (self.week_width, self.week_height)
+        } else {
+            (self.width, self.height)
+        }
+    }
+
+    /// Stores a size for the current view, leaving the other one alone.
+    pub fn set_size(&mut self, width: f32, height: f32) {
+        if self.view().is_week() {
+            self.week_width = width;
+            self.week_height = height;
+        } else {
+            self.width = width;
+            self.height = height;
+        }
+    }
+
+    /// The calendars to ask the providers for.
+    ///
+    /// The day selection, plus the week-only calendars while a week view is
+    /// up. Empty still means "every calendar": a selection that is empty on
+    /// the day side already includes whatever the week side wants.
+    pub fn fetch_calendar_ids(&self) -> Vec<String> {
+        let mut ids = self.calendar_ids.clone();
+        if ids.is_empty() || !self.view().is_week() {
+            return ids;
+        }
+        for id in &self.week_calendar_ids {
+            if !ids.contains(id) {
+                ids.push(id.clone());
+            }
+        }
+        ids
+    }
+
+    /// Does a calendar belong in the day view?
+    ///
+    /// Only the calendars fetched for the week view alone are turned away.
+    /// Everything else was asked for by the day selection — or by a provider
+    /// that hands out calendar ids of its own, which is no reason to hide what
+    /// it returned.
+    pub fn shows_in_day(&self, calendar_id: &str) -> bool {
+        let week_only = !self.calendar_ids.is_empty()
+            && self.week_calendar_ids.iter().any(|id| id == calendar_id)
+            && !self.calendar_ids.iter().any(|id| id == calendar_id);
+        !week_only
+    }
+
+    /// Does a calendar belong in the week view?
+    pub fn shows_in_week(&self, calendar_id: &str) -> bool {
+        self.week_calendar_ids.is_empty()
+            || self.week_calendar_ids.iter().any(|id| id == calendar_id)
+    }
+
+    /// Is this calendar ticked in the week view's menu?
+    ///
+    /// An empty week selection follows the day selection, so the ticks have
+    /// to say that rather than claiming every calendar.
+    pub fn week_calendar_checked(&self, calendar_id: &str) -> bool {
+        if self.week_calendar_ids.is_empty() {
+            self.calendar_ids.is_empty() || self.calendar_ids.iter().any(|id| id == calendar_id)
+        } else {
+            self.week_calendar_ids.iter().any(|id| id == calendar_id)
+        }
+    }
+
+    /// Ticks a calendar on or off for the week view.
+    ///
+    /// `all` is every calendar the accounts offer, in menu order. The same
+    /// rules as the day selection: starting from "follow the day view" the
+    /// selection is written out first, the last calendar cannot be taken
+    /// away — an empty list would mean all of them again — and a selection
+    /// that ends up naming every calendar goes back to empty, so a calendar
+    /// added later comes along.
+    pub fn toggle_week_calendar(&mut self, all: &[String], id: &str) {
+        if !all.iter().any(|a| a == id) {
+            return;
+        }
+        if self.week_calendar_ids.is_empty() {
+            self.week_calendar_ids = all
+                .iter()
+                .filter(|a| self.week_calendar_checked(a))
+                .cloned()
+                .collect();
+        }
+        let selected = &mut self.week_calendar_ids;
+        if selected.iter().any(|s| s == id) {
+            if selected.len() > 1 {
+                selected.retain(|s| s != id);
+            }
+        } else {
+            selected.push(id.to_owned());
+        }
+        if all.iter().all(|a| selected.contains(a)) {
+            selected.clear();
+        }
     }
 
     /// The accounts to actually query, with the legacy single-Google setup
@@ -469,6 +656,102 @@ mod tests {
         assert!(back.locked);
         // And it is not something `sanitized` can quietly undo.
         assert!(back.sanitized().locked);
+    }
+
+    /// The view is a matter of taste, so a typo in it must not cost every
+    /// other setting — and a file from before it existed opens on the day.
+    #[test]
+    fn an_unknown_view_falls_back_to_the_day() {
+        let older: Config = serde_json::from_str(r#"{"width":400.0}"#).expect("parse");
+        assert_eq!(older.view(), View::Day);
+        for (raw, view) in [
+            ("week", View::Week),
+            (" Week ", View::Week),
+            ("workweek", View::WorkWeek),
+            ("work-week", View::WorkWeek),
+            ("weeek", View::Day),
+            ("", View::Day),
+        ] {
+            assert_eq!(View::parse(raw), view, "{raw:?}");
+        }
+        for view in [View::Day, View::Week, View::WorkWeek] {
+            assert_eq!(View::parse(view.as_str()), view);
+        }
+    }
+
+    /// Each view keeps its own window, so switching back and forth does not
+    /// leave the day column as wide as the week grid.
+    #[test]
+    fn each_view_keeps_its_own_size() {
+        let mut cfg = Config::default();
+        cfg.set_size(400.0, 600.0);
+        cfg.set_view(View::Week);
+        assert_eq!(cfg.size(), (760.0, 560.0));
+        cfg.set_size(900.0, 500.0);
+        cfg.set_view(View::Day);
+        assert_eq!(cfg.size(), (400.0, 600.0));
+        cfg.set_view(View::WorkWeek);
+        assert_eq!(cfg.size(), (900.0, 500.0));
+
+        let written = serde_json::to_string(&cfg).expect("serialise");
+        let back: Config = serde_json::from_str(&written).expect("re-read");
+        assert_eq!(back.view(), View::WorkWeek);
+        assert_eq!(back.size(), (900.0, 500.0));
+    }
+
+    /// A timetable calendar can be in the week grid without being in today's
+    /// agenda: it is fetched for the week and turned away from the day.
+    #[test]
+    fn a_week_only_calendar_is_fetched_but_kept_out_of_the_day() {
+        let mut cfg = Config {
+            calendar_ids: vec!["work".into()],
+            week_calendar_ids: vec!["timetable".into()],
+            ..Config::default()
+        };
+        // The day view does not fetch what only the week view wants.
+        assert_eq!(cfg.fetch_calendar_ids(), ["work"]);
+
+        cfg.set_view(View::Week);
+        assert_eq!(cfg.fetch_calendar_ids(), ["work", "timetable"]);
+        assert!(cfg.shows_in_week("timetable"));
+        assert!(!cfg.shows_in_week("work"));
+        assert!(!cfg.shows_in_day("timetable"));
+        assert!(cfg.shows_in_day("work"));
+        // An id nobody configured is not hidden on suspicion.
+        assert!(cfg.shows_in_day("something-else"));
+
+        // With every calendar selected for the day, nothing is week-only.
+        cfg.calendar_ids.clear();
+        assert!(cfg.fetch_calendar_ids().is_empty());
+        assert!(cfg.shows_in_day("timetable"));
+    }
+
+    #[test]
+    fn the_week_selection_follows_the_day_until_it_is_changed() {
+        let all: Vec<String> = ["a", "b", "c"].map(String::from).to_vec();
+        let mut cfg = Config {
+            calendar_ids: vec!["a".into(), "b".into()],
+            ..Config::default()
+        };
+        // Empty follows the day selection, and the ticks say so.
+        assert!(cfg.week_calendar_checked("a"));
+        assert!(!cfg.week_calendar_checked("c"));
+
+        // Taking one away writes out what was showing, minus that one.
+        cfg.toggle_week_calendar(&all, "a");
+        assert_eq!(cfg.week_calendar_ids, ["b"]);
+        // The last one stays: empty would mean "follow the day" again.
+        cfg.toggle_week_calendar(&all, "b");
+        assert_eq!(cfg.week_calendar_ids, ["b"]);
+        // Adding a calendar the day view does not show is the whole point.
+        cfg.toggle_week_calendar(&all, "c");
+        assert_eq!(cfg.week_calendar_ids, ["b", "c"]);
+        // Naming every calendar is the same as naming none.
+        cfg.toggle_week_calendar(&all, "a");
+        assert!(cfg.week_calendar_ids.is_empty());
+        // An id that is not on offer changes nothing.
+        cfg.toggle_week_calendar(&all, "zzz");
+        assert!(cfg.week_calendar_ids.is_empty());
     }
 
     /// A theme file that is not there must not look like a setting that had no

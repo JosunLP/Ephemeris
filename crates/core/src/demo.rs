@@ -128,9 +128,30 @@ pub fn agenda() -> Agenda {
             task("Backup-Protokoll verifizieren", 0, 0),
             task("Onboarding-Dokument aktualisieren", 0, 0),
         ],
+        week: Vec::new(),
         fetched_at: Some(now - Duration::minutes(4)),
         last_error: None,
     };
+
+    // The week view: a school timetable on a calendar of its own, which is the
+    // case the view was asked for, with the day's own entries on top of it.
+    // Both weeks the grid can show: on a weekend the five-day view has moved
+    // on to the coming one, and an empty preview would show nothing at all.
+    let this_week = crate::model::week_start(today, 7);
+    let work_week = crate::model::week_start(today, 5);
+    agenda.week = timetable(this_week);
+    if work_week != this_week {
+        agenda.week.extend(timetable(work_week));
+    }
+    agenda.week.extend(
+        agenda
+            .events
+            .iter()
+            .chain(agenda.tomorrow.iter())
+            .filter(|e| !e.all_day)
+            .cloned(),
+    );
+    crate::model::sort_events(&mut agenda.week);
 
     // The same pass the sync thread makes, so preview mode shows the pairing
     // rather than a case that cannot occur.
@@ -138,6 +159,117 @@ pub fn agenda() -> Agenda {
     crate::model::link_task_time_blocks(&mut agenda.events, &tasks);
     crate::model::link_task_time_blocks(&mut agenda.tomorrow, &tasks);
     agenda
+}
+
+/// A week of lessons from `monday` on, Monday to Friday, plus two entries from
+/// other calendars: an all-day one across two days, and a meeting that
+/// overlaps a lesson so the grid has to put them side by side.
+fn timetable(monday: chrono::NaiveDate) -> Vec<Event> {
+    use crate::model::local_day_start;
+    let at = |day: i64, h: i64, m: i64| {
+        local_day_start(monday + Duration::days(day)) + Duration::hours(h) + Duration::minutes(m)
+    };
+    let entry = |title: &str, room: Option<&str>, day: i64, from: (i64, i64), to: (i64, i64)| {
+        let (calendar_name, calendar_id, color) = if room.is_some() {
+            ("Stundenplan", "demo-timetable", 0x33_B679)
+        } else {
+            ("Schule", "demo-school", 0xE6_7C73)
+        };
+        Event {
+            title: title.into(),
+            start: Some(at(day, from.0, from.1)),
+            end: Some(at(day, to.0, to.1)),
+            all_day: false,
+            days: None,
+            location: room.map(str::to_owned),
+            html_link: None,
+            join_url: None,
+            color,
+            calendar_name: calendar_name.into(),
+            calendar_id: calendar_id.into(),
+            account_id: "demo".into(),
+            task_id: None,
+            task_list_id: None,
+        }
+    };
+
+    // Periods of 45 minutes with the breaks a German school day has.
+    const PERIODS: [((i64, i64), (i64, i64)); 6] = [
+        ((8, 0), (8, 45)),
+        ((8, 50), (9, 35)),
+        ((9, 55), (10, 40)),
+        ((10, 45), (11, 30)),
+        ((11, 50), (12, 35)),
+        ((12, 40), (13, 25)),
+    ];
+    const PLAN: [[Option<(&str, &str)>; 6]; 5] = [
+        [
+            Some(("Mathe 7b", "R 112")),
+            Some(("Mathe 7b", "R 112")),
+            Some(("Physik 9a", "PH 2")),
+            None,
+            Some(("Mathe 10c", "R 204")),
+            None,
+        ],
+        [
+            None,
+            Some(("Physik 9a", "PH 2")),
+            Some(("Mathe 10c", "R 204")),
+            Some(("Mathe 10c", "R 204")),
+            Some(("AG Robotik", "PH 1")),
+            Some(("AG Robotik", "PH 1")),
+        ],
+        [
+            Some(("Mathe 7b", "R 112")),
+            Some(("Physik 11", "PH 2")),
+            Some(("Physik 11", "PH 2")),
+            Some(("Mathe 7b", "R 112")),
+            None,
+            None,
+        ],
+        [
+            Some(("Mathe 10c", "R 204")),
+            None,
+            Some(("Physik 9a", "PH 2")),
+            Some(("Mathe 7b", "R 112")),
+            Some(("Physik 11", "PH 2")),
+            None,
+        ],
+        [
+            Some(("Physik 11", "PH 2")),
+            Some(("Physik 11", "PH 2")),
+            None,
+            Some(("Mathe 10c", "R 204")),
+            Some(("Mathe 7b", "R 112")),
+            None,
+        ],
+    ];
+
+    let mut week = Vec::new();
+    for (day, lessons) in PLAN.iter().enumerate() {
+        for (period, lesson) in lessons.iter().enumerate() {
+            if let Some((title, room)) = lesson {
+                let (from, to) = PERIODS[period];
+                week.push(entry(title, Some(room), day as i64, from, to));
+            }
+        }
+    }
+    week.push(entry(
+        "Fachkonferenz Mathematik",
+        None,
+        1,
+        (14, 0),
+        (15, 30),
+    ));
+    week.push(entry("Elterngespräch Müller", None, 1, (15, 0), (15, 45)));
+    week.push(Event {
+        all_day: true,
+        start: None,
+        end: None,
+        days: Some((monday + Duration::days(2), monday + Duration::days(4))),
+        ..entry("Klassenfahrt 10c", None, 2, (0, 0), (0, 0))
+    });
+    week
 }
 
 #[cfg(test)]
