@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.3.0] - 2026-11-08
 
 ### Added
 
@@ -784,6 +784,7 @@ First public release.
 - File log with rotation; panics are recorded before the process ends.
 - Settings are reloaded without a restart.
 
+[1.3.0]: https://github.com/JosunLP/Ephemeris/releases/tag/v1.3.0
 [1.2.0]: https://github.com/JosunLP/Ephemeris/releases/tag/v1.2.0
 [1.1.0]: https://github.com/JosunLP/Ephemeris/releases/tag/v1.1.0
 [1.0.2]: https://github.com/JosunLP/Ephemeris/releases/tag/v1.0.2
